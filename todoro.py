@@ -833,62 +833,300 @@ class TaskDialog(tk.Toplevel):
 
 
 class HelpWindow(tk.Toplevel):
-    """Окно справки: оформленный текст из help_text.py."""
+    """Справка: слева — поиск и темы по разделам, справа — выбранная тема (текст из help_text.py)."""
 
     MARKUP = re.compile(r"(\*\*.+?\*\*|\[[^\]]+\]|\{p[123]\}|\{github\})")
+    ICON_FONT = ("Segoe MDL2 Assets", 11)
+    SEARCH_HINT = "Поиск по справке"
 
     def __init__(self, parent):
         super().__init__(parent)
         self.title(f"Справка — {APP_NAME}")
-        self.configure(bg=SURFACE)
-        self.minsize(520, 400)
+        self.configure(bg=BG)
+        self.minsize(780, 480)
+        self.topics = self.parse(HELP)
+        self.current = 0
+        self.query = ""
 
-        text = tk.Text(
-            self, wrap="word", bg=SURFACE, fg=TEXT, font=FONT, relief="flat",
-            borderwidth=0, highlightthickness=0, padx=32, pady=24, cursor="arrow",
-            spacing1=2, spacing3=2,
-        )
-        scrollbar = ttk.Scrollbar(self, orient="vertical", command=text.yview)
+        # --- левая колонка: поиск и темы ---
+        nav = tk.Frame(self, bg=BG, width=270)
+        nav.pack(side="left", fill="y", padx=(14, 0), pady=16)
+        nav.pack_propagate(False)
+        tk.Label(nav, text="Справка", bg=BG, fg=TEXT, font=("Segoe UI Semibold", 15)).pack(
+            anchor="w", padx=8, pady=(0, 10))
+        search = tk.Frame(nav, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER,
+                          highlightcolor=ACCENT)
+        search.pack(fill="x", padx=(4, 8), pady=(0, 10))
+        tk.Label(search, text="", bg=SURFACE, fg=MUTED, font=self.ICON_FONT).pack(
+            side="left", padx=(8, 4))
+        self.search = tk.Entry(search, relief="flat", bg=SURFACE, fg=MUTED, font=FONT_SMALL,
+                               insertbackground=TEXT, highlightthickness=0, borderwidth=0)
+        self.search.pack(side="left", fill="x", expand=True, ipady=6)
+        self.search.insert(0, self.SEARCH_HINT)
+        self.search.bind("<FocusIn>", self.search_focus)
+        self.search.bind("<FocusOut>", self.search_blur)
+        self.search.bind("<KeyRelease>", lambda e: self.after_idle(self.run_search))
+        self.search.bind("<Escape>", lambda e: (self.clear_search(), "break")[1])
+        self.search.bind("<Return>", lambda e: self.open_first_match())
+
+        self.nav_area = ScrollArea(nav, BG)
+        self.nav_area.pack(fill="both", expand=True)
+        self.nav_rows = []  # (рамка, номер темы или None для заголовка раздела, виджеты)
+        self.build_nav()
+        tk.Label(nav, text=f"{COPYRIGHT} · MIT", bg=BG, fg=DONE, font=("Segoe UI", 9)).pack(
+            anchor="w", padx=8, pady=(8, 0))
+
+        # --- справа: выбранная тема ---
+        page = tk.Frame(self, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
+        page.pack(side="left", fill="both", expand=True, padx=(10, 16), pady=16)
+        bottom = tk.Frame(page, bg=SURFACE)
+        bottom.pack(side="bottom", fill="x", padx=24, pady=(4, 14))
+        self.prev_link = self.nav_link(bottom, "left")
+        self.next_link = self.nav_link(bottom, "right")
+        tk.Frame(page, bg=BORDER, height=1).pack(side="bottom", fill="x", padx=24)
+
+        text = tk.Text(page, wrap="word", bg=SURFACE, fg=TEXT, font=FONT, relief="flat",
+                       borderwidth=0, highlightthickness=0, padx=34, pady=26, cursor="arrow",
+                       spacing1=2, spacing3=2, tabs=("230",))
+        scrollbar = ttk.Scrollbar(page, orient="vertical", command=text.yview)
         text.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y", padx=(0, 4), pady=4)
         text.pack(side="left", fill="both", expand=True)
-
-        text.tag_configure("h1", font=("Segoe UI Semibold", 18), spacing3=6)
-        text.tag_configure("h2", font=("Segoe UI Semibold", 13), foreground=ACCENT,
-                           spacing1=16, spacing3=4)
-        text.tag_configure("p", spacing3=4)
-        text.tag_configure("li", lmargin1=8, lmargin2=26, spacing3=3)
+        self.text = text
+        text.tag_configure("group", font=("Segoe UI Semibold", 9), foreground=MUTED, spacing3=2)
+        text.tag_configure("h1", font=("Segoe UI Semibold", 18), spacing3=12)
+        text.tag_configure("p", spacing1=4, spacing3=6)
+        text.tag_configure("li", lmargin1=6, lmargin2=24, spacing3=5)
+        text.tag_configure("step", lmargin1=6, lmargin2=32, spacing3=6)
+        text.tag_configure("num", font=("Segoe UI Semibold", 10), foreground=ACCENT)
+        text.tag_configure("tip", lmargin1=16, lmargin2=16, rmargin=16, spacing1=14, spacing3=14,
+                           background=ACCENT_SOFT, foreground=TEXT)
+        text.tag_configure("keyrow", lmargin1=6, lmargin2=230, spacing3=7)
+        text.tag_configure("links", spacing1=18, foreground=MUTED, font=FONT_SMALL)
         text.tag_configure("b", font=FONT_BOLD)
         text.tag_configure("key", font=("Segoe UI Semibold", 10), background=SEGMENT_BG)
-
-        if "totoro_small" in IMAGES:
-            text.image_create("end", image=IMAGES["totoro_small"], padx=0)
-            text.insert("end", "\n")
-        folder = str(db.DATA_DIR)
-        for kind, line in HELP:
-            line = line.replace("{folder}", folder)
-            if kind == "li":
-                text.insert("end", "•  ", "li")
-            self.insert_marked(text, line, kind)
-            text.insert("end", "\n", kind)
-
-        # ссылка на страницу проекта: синяя, подчёркнутая, открывается в браузере
         text.tag_configure("link", foreground=ACCENT, underline=True)
+        text.tag_configure("found", background="#fff1a8")
         text.tag_bind("link", "<Button-1>", lambda e: webbrowser.open(PROJECT_URL))
-        text.tag_bind("link", "<Enter>", lambda e: text.configure(cursor="hand2"))
-        text.tag_bind("link", "<Leave>", lambda e: text.configure(cursor=""))
-        text.tag_configure("copyright", foreground=MUTED, font=FONT_SMALL, spacing1=24)
-        text.insert("end", f"{COPYRIGHT}. Лицензия MIT (☰ Меню → О программе → Лицензия).\n"
-                           f"{GHIBLI_NOTE}", "copyright")
+        for tag in ("link", "goto"):
+            text.tag_bind(tag, "<Enter>", lambda e: text.configure(cursor="hand2"))
+            text.tag_bind(tag, "<Leave>", lambda e: text.configure(cursor="arrow"))
+        text.tag_configure("goto", foreground=ACCENT, font=FONT_SMALL)
 
-        text.configure(state="disabled")  # только для чтения
         self.bind("<Escape>", lambda e: self.destroy())
-        center_on_screen(self, 680, 640)
+        self.bind("<Control-f>", lambda e: self.search.focus_set())
+        self.bind("<Control-F>", lambda e: self.search.focus_set())
+        self.nav_area.bind_wheel()
+        center_on_screen(self, 1020, 700)
+        self.show_topic(0)
         text.focus_set()
+
+    # --- данные ---
+
+    @staticmethod
+    def parse(help_rows):
+        """Строки help_text.HELP -> темы: [dict(group, icon, title, rows)]."""
+        topics, group, icon = [], "", ""
+        for kind, line in help_rows:
+            if kind == "group":
+                icon, group = line.split("|", 1)
+            elif kind == "h2":
+                topics.append(dict(group=group, icon=icon, title=line, rows=[]))
+            elif topics:
+                topics[-1]["rows"].append((kind, line))
+        return topics
+
+    @staticmethod
+    def plain(line):
+        """Текст без разметки — для поиска."""
+        return re.sub(r"\*\*|\[|\]|\{p[123]\}", "", line).replace("{github}", "github")
+
+    def stems(self):
+        """Слова поиска без окончаний: «исполнитель» найдёт и «исполнителя», «исполнителю»."""
+        return [w[:max(4, len(w) - 2)] if len(w) >= 5 else w for w in self.query.split()]
+
+    def matches(self, topic):
+        if not self.query:
+            return True
+        haystack = " ".join([topic["title"]] + [self.plain(line) for _, line in topic["rows"]]).lower()
+        return all(stem in haystack for stem in self.stems())
+
+    # --- левая колонка ---
+
+    def build_nav(self):
+        inner = self.nav_area.inner
+        group = None
+        for index, topic in enumerate(self.topics):
+            if topic["group"] != group:
+                group = topic["group"]
+                head = tk.Frame(inner, bg=BG)
+                mark = tk.Label(head, text=topic["icon"], bg=BG, fg=MUTED, font=self.ICON_FONT)
+                mark.pack(side="left", padx=(8, 6))
+                tk.Label(head, text=group.upper(), bg=BG, fg=MUTED,
+                         font=("Segoe UI Semibold", 8)).pack(side="left")
+                self.nav_rows.append((head, None, group))
+            row = tk.Label(inner, text=topic["title"], bg=BG, fg=TEXT, font=FONT_SMALL, anchor="w",
+                           padx=34, pady=5, cursor="hand2")
+            row.bind("<Button-1>", lambda e, i=index: self.show_topic(i))
+            row.bind("<Enter>", lambda e, i=index: self.paint_row(i, hover=True))
+            row.bind("<Leave>", lambda e, i=index: self.paint_row(i))
+            self.nav_rows.append((row, index, group))
+        self.empty = tk.Label(inner, text="Ничего не найдено.\nПопробуйте другое слово.", bg=BG,
+                              fg=MUTED, font=FONT_SMALL, justify="left")
+        self.layout_nav()
+
+    def layout_nav(self):
+        visible = {i for i, t in enumerate(self.topics) if self.matches(t)}
+        groups = {self.topics[i]["group"] for i in visible}
+        for widget, index, group in self.nav_rows:
+            widget.pack_forget()
+        self.empty.pack_forget()
+        for widget, index, group in self.nav_rows:
+            if index is None and group in groups:
+                widget.pack(fill="x", pady=(10, 2))
+            elif index is not None and index in visible:
+                widget.pack(fill="x")
+        if not visible:
+            self.empty.pack(anchor="w", padx=8, pady=10)
+        for i in range(len(self.topics)):
+            self.paint_row(i)
+
+    def row_widget(self, index):
+        return next(w for w, i, _ in self.nav_rows if i == index)
+
+    def paint_row(self, index, hover=False):
+        row = self.row_widget(index)
+        if index == self.current:
+            row.configure(bg=ACCENT_SOFT, fg=ACCENT, font=("Segoe UI Semibold", 10))
+        else:
+            row.configure(bg="#e9edf4" if hover else BG, fg=TEXT, font=FONT_SMALL)
+
+    # --- поиск ---
+
+    def search_focus(self, event=None):
+        if self.search.get() == self.SEARCH_HINT:
+            self.search.delete(0, "end")
+        self.search.configure(fg=TEXT)
+
+    def search_blur(self, event=None):
+        if not self.search.get():
+            self.search.insert(0, self.SEARCH_HINT)
+            self.search.configure(fg=MUTED)
+
+    def run_search(self):
+        text = self.search.get()
+        query = "" if text == self.SEARCH_HINT else " ".join(text.lower().split())
+        if query == self.query:
+            return
+        self.query = query
+        self.layout_nav()
+        if not query:
+            self.show_topic(self.current)
+            return
+        # сначала — тема, в названии которой есть искомое слово; иначе первая подходящая
+        stems = self.stems()
+        best = next((i for i, t in enumerate(self.topics)
+                     if self.matches(t) and any(st in t["title"].lower() for st in stems)), None)
+        if best is not None:
+            self.show_topic(best)
+        elif self.matches(self.topics[self.current]):
+            self.show_topic(self.current)
+        elif not self.open_first_match():
+            self.highlight()  # ничего не найдено — убрать старую подсветку
+
+    def open_first_match(self):
+        first = next((i for i, t in enumerate(self.topics) if self.matches(t)), None)
+        if first is not None:
+            self.show_topic(first)
+        return first is not None
+
+    def clear_search(self):
+        self.search.delete(0, "end")
+        self.run_search()
+        self.text.focus_set()
+
+    # --- правая часть ---
+
+    def nav_link(self, parent, side):
+        link = tk.Label(parent, bg=SURFACE, fg=ACCENT, font=FONT_SMALL, cursor="hand2")
+        link.pack(side=side)
+        return link
+
+    def show_topic(self, index):
+        old, self.current = self.current, index
+        self.paint_row(old)
+        self.paint_row(index)
+        topic = self.topics[index]
+        text = self.text
+        text.configure(state="normal")
+        text.delete("1.0", "end")
+        for tag in text.tag_names():
+            if tag.startswith("goto") and tag != "goto":
+                text.tag_delete(tag)
+        text.insert("end", topic["group"].upper() + "\n", "group")
+        if index == 0 and "totoro_small" in IMAGES:
+            text.image_create("end", image=IMAGES["totoro_small"], padx=0)
+            text.insert("end", "  ", "h1")
+        text.insert("end", topic["title"] + "\n", "h1")
+        folder, step = str(db.DATA_DIR), 0
+        for kind, line in topic["rows"]:
+            line = line.replace("{folder}", folder)
+            if kind == "step":
+                step += 1
+                text.insert("end", f"{step}.  ", ("step", "num"))
+                self.insert_marked(text, line, "step")
+            elif kind == "li":
+                text.insert("end", "•   ", "li")
+                self.insert_marked(text, line, "li")
+            elif kind == "tip":
+                text.insert("end", "💡  ", "tip")
+                self.insert_marked(text, line, "tip")
+            elif kind == "key":
+                keys, what = line.split("|", 1)
+                self.insert_marked(text, keys, "keyrow")
+                text.insert("end", "\t" + what, "keyrow")
+            elif kind == "links":
+                text.insert("end", "Смотрите также:   ", "links")
+                for n, title in enumerate(line.split("|")):
+                    target = next((i for i, t in enumerate(self.topics) if t["title"] == title), None)
+                    if target is None:
+                        continue
+                    tag = f"goto{target}"
+                    text.tag_bind(tag, "<Button-1>", lambda e, i=target: self.show_topic(i))
+                    text.insert("end", ("   ·   " if n else "") , "links")
+                    text.insert("end", title, ("links", "goto", tag))
+            else:
+                self.insert_marked(text, line, kind)
+            text.insert("end", "\n", kind if kind != "key" else "keyrow")
+        self.highlight()
+        text.configure(state="disabled")
+        text.yview_moveto(0)
+        # «← Назад / Далее →»
+        for link, target in ((self.prev_link, index - 1), (self.next_link, index + 1)):
+            if 0 <= target < len(self.topics):
+                title = self.topics[target]["title"]
+                link.configure(text=f"← {title}" if link is self.prev_link else f"{title} →")
+                link.bind("<Button-1>", lambda e, i=target: self.show_topic(i))
+            else:
+                link.configure(text="")
+                link.unbind("<Button-1>")
+
+    def highlight(self):
+        """Подсвечивает найденные слова в открытой теме."""
+        self.text.tag_remove("found", "1.0", "end")
+        for stem in self.stems():
+            start = "1.0"
+            while True:
+                pos = self.text.search(stem, start, "end", nocase=True)
+                if not pos:
+                    break
+                end = self.text.index(f"{pos} wordend")  # подсвечиваем слово целиком
+                self.text.tag_add("found", pos, end)
+                start = end
 
     def insert_marked(self, text, line, kind):
         """Вставляет строку, превращая **…**, […] и {pN} в оформление."""
-        line = line.replace(" [", " [")  # клавиша переносится вместе с предыдущим словом
+        line = line.replace(" [", " [")  # клавиша переносится вместе с предыдущим словом
         for part in self.MARKUP.split(line):
             if not part:
                 continue
@@ -896,7 +1134,7 @@ class HelpWindow(tk.Toplevel):
                 text.insert("end", part[2:-2], (kind, "b"))
             elif part.startswith("["):
                 # неразрывные пробелы, чтобы клавиша не разрывалась переносом строки
-                text.insert("end", f" {part[1:-1]} ", (kind, "key"))
+                text.insert("end", f" {part[1:-1]} ", (kind, "key"))
             elif part.startswith("{p"):
                 image = IMAGES.get(f"priority_{part[2]}")
                 if image:
