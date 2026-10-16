@@ -30,8 +30,8 @@ Easiest: download the installer from [Releases](https://github.com/amfilippov/To
 python todoro.py
 ```
 
-Задачи хранятся в файле `%APPDATA%ToDoro	odoro.db`.
-Tasks are stored in `%APPDATA%ToDoro	odoro.db`.
+Задачи хранятся в файле `%APPDATA%\ToDoro\todoro.db`.
+Tasks are stored in `%APPDATA%\ToDoro\todoro.db`.
 
 ## Что нового / Release notes
 
