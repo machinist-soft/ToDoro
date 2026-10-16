@@ -68,12 +68,15 @@ FILTERS = {
     "Все": None,
     "Активные": False,
     "Выполненные": True,
+    "Просроченные": "overdue",  # невыполненные с прошедшим сроком
 }
 EMPTY_TEXT = {
     "Все": "Задач пока нет — добавьте первую в поле выше",
     "Активные": "Все задачи выполнены 🎉",
     "Выполненные": "Выполненных задач пока нет",
+    "Просроченные": "Просроченных задач нет — всё успеваете 🎉",
 }
+BUDDY_MAX_TASKS = 5  # сколько просроченных задач Тоторо называет в облачке
 
 # Варианты напоминания: подпись -> за сколько минут до срока напомнить
 REMIND_OPTIONS = {
@@ -946,16 +949,17 @@ class TotoroPanel(tk.Frame):
         self.canvas = tk.Canvas(self, width=PANEL_WIDTH, bg=SURFACE, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Configure>", lambda e: self.draw())
-        self.message = ("", None, None, "", "normal", "")
+        self.message = ("", (), "", "normal", "")
 
-    def show(self, lead, task_title=None, task_id=None, tail="", mood="normal", stats=""):
-        message = (lead, task_title, task_id, tail, mood, stats)
+    def show(self, lead, tasks=(), tail="", mood="normal", stats=""):
+        """tasks — задачи, которые назвать в облачке: [(заголовок, id), ...]; каждая кликается."""
+        message = (lead, tuple(tasks), tail, mood, stats)
         if message != self.message:
             self.message = message
             self.draw()
 
     def draw(self):
-        lead, task_title, task_id, tail, mood, stats = self.message
+        lead, tasks, tail, mood, stats = self.message
         c = self.canvas
         c.delete("all")
         width, height = c.winfo_width(), c.winfo_height()
@@ -969,18 +973,21 @@ class TotoroPanel(tk.Frame):
         # Тексты облачка (сначала рисуем их, чтобы узнать высоту)
         y = 0
         items = []
-        for text, font, color, tags in (
-            (lead, FONT_SMALL, MUTED, ()),
-            (f"«{short_text(task_title, 70)}»" if task_title else "", FONT_BOLD, task_color, ("task",)),
-            (tail, FONT_SMALL, TEXT, ()),
-        ):
+        limit = 70 if len(tasks) == 1 else 45  # несколько задач — названия короче
+        lines = [(lead, FONT_SMALL, MUTED, (), 6)]
+        lines += [(f"«{short_text(title, limit)}»", FONT_BOLD, task_color, ("task", f"task{tid}"), 3)
+                  for title, tid in tasks]
+        lines.append((tail, FONT_SMALL, TEXT, (), 6))
+        for text, font, color, tags, gap in lines:
             if not text:
                 continue
+            if tags and items and not c.gettags(items[-1]):
+                y += 3  # отступ перед списком задач
             item = c.create_text(cx, y, text=text, font=font, fill=color, width=text_width,
                                  justify="center", anchor="n", tags=tags)
             x1, y1, x2, y2 = c.bbox(item)
             items.append(item)
-            y = y2 + 6
+            y = y2 + gap
         bubble_h = y - 6 + 2 * inner
 
         totoro = IMAGES.get("totoro")
@@ -1006,10 +1013,10 @@ class TotoroPanel(tk.Frame):
             c.create_text(cx, y2 + 16 + totoro_h + 8, text=stats, font=FONT_SMALL,
                           fill=MUTED, anchor="n", width=width - 2 * pad, justify="center")
 
-        if task_id is not None:
-            c.tag_bind("task", "<Button-1>", lambda e: self.on_task_click(task_id))
-            c.tag_bind("task", "<Enter>", lambda e: c.configure(cursor="hand2"))
-            c.tag_bind("task", "<Leave>", lambda e: c.configure(cursor=""))
+        for _, tid in tasks:
+            c.tag_bind(f"task{tid}", "<Button-1>", lambda e, t=tid: self.on_task_click(t))
+        c.tag_bind("task", "<Enter>", lambda e: c.configure(cursor="hand2"))
+        c.tag_bind("task", "<Leave>", lambda e: c.configure(cursor=""))
 
 
 class TaskCard(tk.Frame):
@@ -2220,9 +2227,11 @@ class TodoApp:
         filters.pack(side="left", padx=(12, 0))
         self.filter = tk.StringVar(value="Все")
         for name in FILTERS:
-            ttk.Radiobutton(filters, text=name, value=name, variable=self.filter,
-                            style="Segment.TRadiobutton", command=self.refresh,
-                            cursor="hand2").pack(side="left")
+            button = ttk.Radiobutton(filters, text=name, value=name, variable=self.filter,
+                                     style="Segment.TRadiobutton", command=self.refresh,
+                                     cursor="hand2")
+            button.pack(side="left")
+        self.overdue_button = button  # последняя кнопка; на ней — число просроченных задач
         self.sort = ttk.Combobox(toolbar, values=SORTS, state="readonly", width=27, font=FONT_SMALL)
         self.sort.set(SORTS[0])
         self.sort.pack(side="right")
@@ -2606,18 +2615,28 @@ class TodoApp:
         if not rows:
             panel.show("Привет! Я Тоторо.", tail="Добавь первую задачу — я присмотрю за ней.")
         elif overdue:
-            task = most_important(overdue)
-            more = f" И ещё просрочено: {len(overdue) - 1}." if len(overdue) > 1 else ""
-            panel.show("Ой! Срок уже прошёл:", task[1], task[0],
-                       "Давай сделаем её первой?" + more, "alert", stats)
+            # все просроченные — самые важные сверху; если их много, показываем первые
+            overdue.sort(key=lambda r: (priority_level(r[6], r[7]), due[r[0]], r[0]))
+            shown = overdue[:BUDDY_MAX_TASKS]
+            if len(overdue) == 1:
+                tail = "Давай сделаем её первой?"
+            elif len(overdue) > len(shown):
+                tail = (f"И ещё {len(overdue) - len(shown)}. Все просроченные — "
+                        "кнопка «Просроченные» вверху.")
+            else:
+                tail = "Давай начнём с первой?"
+            n = len(overdue)
+            word = "задачи" if n % 10 == 1 and n % 100 != 11 else "задач"  # у 21 задачи, у 3 задач
+            panel.show("Ой! Срок уже прошёл:" if n == 1 else f"Ой! Срок прошёл у {n} {word}:",
+                       [(r[1], r[0]) for r in shown], tail, "alert", stats)
         elif today:
             task = min(today, key=lambda r: due[r[0]])
             more = f" Всего на сегодня: {len(today)}." if len(today) > 1 else ""
-            panel.show("Сегодня срок:", task[1], task[0],
+            panel.show("Сегодня срок:", [(task[1], task[0])],
                        f"до {due[task[0]].strftime('%H:%M')}." + more, "normal", stats)
         elif active:
             task = most_important(active)
-            panel.show("Начни с самого важного:", task[1], task[0],
+            panel.show("Начни с самого важного:", [(task[1], task[0])],
                        f"Активных задач: {len(active)}. Ты справишься!", "normal", stats)
         else:
             panel.show("Все задачи выполнены!",
@@ -2901,7 +2920,13 @@ class TodoApp:
         self.chips["today"].configure(text=f"✔ сегодня  {db.count_done_today(self.conn)}")
 
         wanted = FILTERS[self.filter.get()]
-        rows = [row for row in rows if wanted is None or bool(row[2]) == wanted]
+        now = datetime.now()
+        late = {r[0] for r in rows if r[4] and not r[2] and datetime.fromisoformat(r[4]) < now}
+        self.overdue_button.configure(text=f"Просроченные  {len(late)}" if late else "Просроченные")
+        if wanted == "overdue":
+            rows = [row for row in rows if row[0] in late]
+        elif wanted is not None:
+            rows = [row for row in rows if bool(row[2]) == wanted]
         rows = self.sort_rows(rows, statuses)
         now = datetime.now()
         overdue_ids = {r[0] for r in rows if r[4] and not r[2] and datetime.fromisoformat(r[4]) < now}
@@ -3042,8 +3067,8 @@ class TodoApp:
         task_id = db.add_task(self.conn, title)
         self.entry.delete(0, "end")
         self.show_placeholder()
-        if FILTERS[self.filter.get()] is True:
-            self.filter.set("Все")  # иначе новую задачу не будет видно
+        if FILTERS[self.filter.get()] not in (None, False):
+            self.filter.set("Все")  # иначе новую задачу (без срока) не будет видно
         self.refresh(select_id=task_id)
 
     def edit(self):
