@@ -424,7 +424,7 @@ def read_csv(path):
     fields = [CSV_ALIASES.get(h.strip().lower()) for h in header]
     if "title" not in fields:
         raise ValueError("В первой строке файла нет столбца «Заголовок».\n\n"
-                         "Скачайте шаблон (☰ Меню → Шаблон для импорта) и заполните его.")
+                         "Скачайте шаблон (☰ Меню → Экспорт и импорт → Шаблон для импорта) и заполните его.")
     result = []
     for line_no, cells in enumerate(reader, start=2):
         values = {}
@@ -834,7 +834,7 @@ class HelpWindow(tk.Toplevel):
             text.insert("end", "\n", kind)
 
         text.tag_configure("copyright", foreground=MUTED, font=FONT_SMALL, spacing1=24)
-        text.insert("end", f"{COPYRIGHT}. Лицензия MIT (меню «? Справка» → «Лицензия»).\n"
+        text.insert("end", f"{COPYRIGHT}. Лицензия MIT (☰ Меню → О программе → Лицензия).\n"
                            f"{GHIBLI_NOTE}", "copyright")
 
         text.configure(state="disabled")  # только для чтения
@@ -1564,7 +1564,7 @@ class SettingsDialog(ModernDialog):
             self.fields[key] = var
 
         self.section("Обновления", f"Установлена версия {APP_VERSION}. Проверить вручную: "
-                     "? Справка → Проверить обновления.")
+                     "☰ Меню → Проверить обновления.")
         self.update_auto = tk.BooleanVar(value=update_auto)
         ttk.Checkbutton(self.content, text="Проверять обновления автоматически (раз в день)",
                         variable=self.update_auto, style="Card.TCheckbutton").pack(anchor="w", pady=2)
@@ -1938,7 +1938,7 @@ class KanbanBoard(tk.Frame):
 
     def make_card(self, parent, row, lane_color, overdue):
         task_id, title, done, created, due_at, remind_before, urgent, important, body, _ = row
-        fields = self.app.card_fields  # что показывать на карточке (кнопка «⚙ Карточки»)
+        fields = self.app.card_fields  # что показывать на карточке (☰ Меню → Настройки)
         card = tk.Frame(parent, bg=SURFACE, highlightthickness=2, highlightbackground=CARD_BORDER,
                         cursor="hand2")
         card.pack(fill="x", pady=(0, 8))
@@ -2151,6 +2151,8 @@ class KanbanBoard(tk.Frame):
 class TodoApp:
     def __init__(self, root):
         self.root = root
+        # Окно прячем, пока всё не построено: иначе на секунду мелькает пустое чёрное окно
+        root.withdraw()
         self.conn = db.connect()
         self.due = {}         # id строки таблицы -> срок (для подсветки просроченных)
         self.row_status = {}  # id строки таблицы -> название статуса
@@ -2163,8 +2165,6 @@ class TodoApp:
         load_images()
         center_on_screen(root, 1290, 720)
         root.minsize(820, 480)
-        if db.get_setting(self.conn, "start_mode", "window") == "maximized":
-            root.state("zoomed")  # развёрнуто на весь экран; «восстановить» вернёт обычное окно
 
         page = ttk.Frame(root, padding=(24, 14, 24, 20))
         page.pack(fill="both", expand=True)
@@ -2181,10 +2181,7 @@ class TodoApp:
             chip = tk.Label(chips, bg=bg, fg=fg, font=FONT_SMALL, padx=10, pady=3)
             chip.pack(side="left", padx=(0, 6))
             self.chips[key] = chip
-        menu_button(header, "?  Справка", self.build_info_menu).pack(side="right")
-        ttk.Button(header, text="⚙  Настройки", style="TButton", cursor="hand2",
-                   command=self.show_settings).pack(side="right", padx=(0, 8))
-        menu_button(header, "☰  Меню", self.build_main_menu).pack(side="right", padx=(0, 8))
+        menu_button(header, "☰  Меню", self.build_main_menu).pack(side="right")
 
         # Поле ввода и кнопка «Добавить»
         add_row = ttk.Frame(page)
@@ -2316,6 +2313,12 @@ class TodoApp:
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.show_main_widget()
         self.refresh()
+        # Всё построено — показываем окно сразу готовым
+        root.update_idletasks()
+        if db.get_setting(self.conn, "start_mode", "window") == "maximized":
+            root.state("zoomed")  # развёрнуто на весь экран; «восстановить» вернёт обычное окно
+        else:
+            root.deiconify()
         root.after(200, self.repaint)  # ещё раз, когда окно уже показано
         self.show_placeholder()
         self.entry.focus()
@@ -2389,30 +2392,29 @@ class TodoApp:
             db.set_json_setting(self.conn, "card_fields", self.card_fields)
             self.refresh(select_id=self.current_id())
 
-    # Меню «☰ Меню» — действия с задачами и доской; «? Справка» — справка и сведения о программе
+    # Единственное меню «☰ Меню»: сверху действия, потом настройки, внизу справка и сведения
     def build_main_menu(self):
         examples = (PopupMenu()
                     .command("Добавить примеры задач", self.add_examples)
                     .command("Удалить примеры задач", self.delete_examples))
-        return (PopupMenu()
-                .command("Добавить колонку на доску…", self.add_lane)
-                .separator()
+        data = (PopupMenu()
                 .command("Экспорт задач в CSV…", self.export_csv)
                 .command("Импорт задач из CSV…", self.import_csv)
-                .command("Шаблон для импорта…", self.save_template)
-                .separator()
+                .command("Шаблон для импорта…", self.save_template))
+        about = (PopupMenu()
+                 .command("Что нового…", lambda: webbrowser.open(updater.RELEASES_LIST))
+                 .command("Лицензия (MIT)…", self.show_license)
+                 .command(f"О программе {APP_NAME}…", self.show_about))
+        return (PopupMenu()
+                .command("Добавить колонку на доску…", self.add_lane)
+                .submenu("Экспорт и импорт", data)
                 .submenu("Примеры задач", examples)
                 .separator()
-                .command("Настройки…", self.show_settings))
-
-    def build_info_menu(self):
-        return (PopupMenu()
-                .command("Справка", self.show_help, accel="F1")
-                .command("Что нового…", lambda: webbrowser.open(updater.RELEASES_LIST))
-                .command("Проверить обновления…", self.check_update_now)
+                .command("Настройки…", self.show_settings)
                 .separator()
-                .command("Лицензия (MIT)…", self.show_license)
-                .command(f"О программе {APP_NAME}…", self.show_about))
+                .command("Справка", self.show_help, accel="F1")
+                .command("Проверить обновления…", self.check_update_now)
+                .submenu("О программе", about))
 
     def celebrate(self, task_id):
         """Задача выполнена — Котобус проезжает по низу окна и увозит её."""
@@ -2711,7 +2713,7 @@ class TodoApp:
         messagebox.showinfo(
             APP_NAME,
             f"Добавлено примеров: {len(examples)}.\n\n"
-            "Убрать их можно в меню «☰ Ещё» → «Удалить примеры задач» — ваши задачи не пострадают.",
+            "Убрать их можно в меню «☰ Меню» → «Примеры задач» → «Удалить примеры задач» — ваши задачи не пострадают.",
             parent=self.root,
         )
 
@@ -2749,7 +2751,7 @@ class TodoApp:
                 APP_NAME,
                 f"Шаблон сохранён:\n{path}\n\n"
                 "Откройте его в Excel, замените строки-примеры своими задачами и сохраните "
-                "в том же формате (CSV). Затем: ☰ Меню → Импорт задач из CSV.\n\n"
+                "в том же формате (CSV). Затем: ☰ Меню → Экспорт и импорт → Импорт задач из CSV.\n\n"
                 "Обязателен только «Заголовок». Статус — название колонки доски. "
                 "Приоритет — «Срочно и важно», «Важно», «Срочно» или «Обычный». "
                 "Срок — «16.10.2026 18:00» или просто дата (тогда 09:00). "
