@@ -1,12 +1,14 @@
 """Окно приложения «Список дел»."""
 import calendar
 import ctypes
+import re
 import tkinter as tk
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from tkinter import messagebox, ttk
 
 import db
+from help_text import HELP
 
 ICON_PATH = Path(__file__).with_name("icon.ico")
 IMAGES_DIR = Path(__file__).with_name("images")
@@ -462,6 +464,70 @@ class TaskDialog(tk.Toplevel):
         self.destroy()
 
 
+class HelpWindow(tk.Toplevel):
+    """Окно справки: оформленный текст из help_text.py."""
+
+    MARKUP = re.compile(r"(\*\*.+?\*\*|\[[^\]]+\]|\{p[123]\})")
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Справка — Список дел")
+        self.configure(bg=SURFACE)
+        self.minsize(520, 400)
+
+        text = tk.Text(
+            self, wrap="word", bg=SURFACE, fg=TEXT, font=FONT, relief="flat",
+            borderwidth=0, highlightthickness=0, padx=32, pady=24, cursor="arrow",
+            spacing1=2, spacing3=2,
+        )
+        scrollbar = ttk.Scrollbar(self, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y", padx=(0, 4), pady=4)
+        text.pack(side="left", fill="both", expand=True)
+
+        text.tag_configure("h1", font=("Segoe UI Semibold", 18), spacing3=6)
+        text.tag_configure("h2", font=("Segoe UI Semibold", 13), foreground=ACCENT,
+                           spacing1=16, spacing3=4)
+        text.tag_configure("p", spacing3=4)
+        text.tag_configure("li", lmargin1=8, lmargin2=26, spacing3=3)
+        text.tag_configure("b", font=FONT_BOLD)
+        text.tag_configure("key", font=("Segoe UI Semibold", 10), background=SEGMENT_BG)
+
+        if "totoro_small" in IMAGES:
+            text.image_create("end", image=IMAGES["totoro_small"], padx=0)
+            text.insert("end", "\n")
+        folder = str(Path(__file__).parent)
+        for kind, line in HELP:
+            line = line.replace("{folder}", folder)
+            if kind == "li":
+                text.insert("end", "•  ", "li")
+            self.insert_marked(text, line, kind)
+            text.insert("end", "\n", kind)
+
+        text.configure(state="disabled")  # только для чтения
+        self.bind("<Escape>", lambda e: self.destroy())
+        center_on_screen(self, 680, 640)
+        text.focus_set()
+
+    def insert_marked(self, text, line, kind):
+        """Вставляет строку, превращая **…**, […] и {pN} в оформление."""
+        line = line.replace(" [", " [")  # клавиша переносится вместе с предыдущим словом
+        for part in self.MARKUP.split(line):
+            if not part:
+                continue
+            if part.startswith("**"):
+                text.insert("end", part[2:-2], (kind, "b"))
+            elif part.startswith("["):
+                # неразрывные пробелы, чтобы клавиша не разрывалась переносом строки
+                text.insert("end", f" {part[1:-1]} ", (kind, "key"))
+            elif part.startswith("{p"):
+                image = IMAGES.get(f"priority_{part[2]}")
+                if image:
+                    text.image_create("end", image=image, align="center")
+            else:
+                text.insert("end", part, kind)
+
+
 class TodoApp:
     def __init__(self, root):
         self.root = root
@@ -487,6 +553,8 @@ class TodoApp:
         self.counter.pack(side="left", padx=(14, 0), pady=(0, 6), anchor="s")
         if "totoro_small" in IMAGES:
             ttk.Label(header, image=IMAGES["totoro_small"]).pack(side="right")
+        ttk.Button(header, text="?  Справка", command=self.show_help).pack(
+            side="right", padx=(0, 14), anchor="s", pady=(0, 4))
 
         # Поле ввода и кнопка «Добавить»
         add_row = ttk.Frame(page)
@@ -525,7 +593,7 @@ class TodoApp:
         ttk.Button(bottom, text="✎  Изменить", command=self.edit).pack(side="left", padx=(8, 0))
         ttk.Button(bottom, text="Удалить", style="Danger.TButton",
                    command=self.delete).pack(side="right")
-        ttk.Label(bottom, text="Двойной щелчок — изменить · правая кнопка — меню",
+        ttk.Label(bottom, text="Двойной щелчок — изменить · правая кнопка — меню · F1 — справка",
                   style="Muted.TLabel").pack(side="right", padx=(0, 14))
 
         # Карточка с таблицей задач
@@ -564,11 +632,23 @@ class TodoApp:
         self.tree.bind("<Button-3>", self.show_menu)  # правая кнопка мыши
         self.tree.bind("<App>", self.show_menu_for_selected)  # клавиша контекстного меню
 
+        root.bind("<F1>", lambda e: self.show_help())
+        self.help_window = None
+
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh()
         self.show_placeholder()
         self.entry.focus()
         root.after(1000, self.check_reminders)
+
+    def show_help(self):
+        """Открывает справку (или поднимает уже открытое окно справки)."""
+        if self.help_window and self.help_window.winfo_exists():
+            self.help_window.deiconify()
+            self.help_window.lift()
+            self.help_window.focus_force()
+            return
+        self.help_window = HelpWindow(self.root)
 
     # --- подсказка в пустом поле ввода ---
 
