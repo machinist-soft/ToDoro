@@ -7,13 +7,23 @@ import tkinter as tk
 from urllib.parse import quote
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import colorchooser, messagebox, simpledialog, ttk
 
 import db
 from examples import make_examples
 from help_text import HELP
 
 APP_NAME = "ToDoro"  # ToDo + Totoro
+APP_YEAR = 2026
+COPYRIGHT_HOLDER = "amfil"  # правообладатель — имя меняется только здесь
+COPYRIGHT = f"© {APP_YEAR} {COPYRIGHT_HOLDER}"
+ABOUT_TEXT = (
+    f"{APP_NAME} — список дел с Тоторо.\n\n"
+    f"{COPYRIGHT}. Все права защищены.\n\n"
+    "Тоторо и Котобус — персонажи студии Ghibli (© Studio Ghibli). "
+    "Их изображения в программе — любительские рисунки; "
+    "программа не связана со студией Ghibli и не одобрена ею."
+)
 ICON_PATH = Path(__file__).with_name("icon.ico")
 IMAGES_DIR = Path(__file__).with_name("images")
 
@@ -39,12 +49,12 @@ SEGMENT_BG = "#e7ebf3"
 # Варианты фильтра: подпись кнопки -> какие задачи показывать
 FILTERS = {
     "Все": None,
-    "В работе": False,
+    "Активные": False,
     "Выполненные": True,
 }
 EMPTY_TEXT = {
     "Все": "Задач пока нет — добавьте первую в поле выше",
-    "В работе": "Все задачи выполнены 🎉",
+    "Активные": "Все задачи выполнены 🎉",
     "Выполненные": "Выполненных задач пока нет",
 }
 
@@ -219,6 +229,13 @@ def setup_style(root):
                     bordercolor=SURFACE, lightcolor="#d6dbe4", darkcolor="#d6dbe4",
                     gripcount=0, width=8)
     style.map("Vertical.TScrollbar", background=[("active", "#b8c0cc")])
+    style.layout("Horizontal.TScrollbar", [
+        ("Horizontal.Scrollbar.trough", {"sticky": "we", "children": [
+            ("Horizontal.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
+    style.configure("Horizontal.TScrollbar", troughcolor=BG, background="#d6dbe4",
+                    bordercolor=BG, lightcolor="#d6dbe4", darkcolor="#d6dbe4",
+                    gripcount=0, width=8)
+    style.map("Horizontal.TScrollbar", background=[("active", "#b8c0cc")])
 
 
 def center_on_screen(window, width=None, height=None):
@@ -266,10 +283,10 @@ def build_email(title, status, priority, due, remind, created, urgent, body=""):
     return subject, "\r\n".join(lines)
 
 
-def status_text(done, overdue=False):
-    if done:
-        return "✔  Выполнено"
-    return "⚠  Просрочено" if overdue else "○  В работе"
+def status_label(name, done, overdue=False):
+    """Название статуса (колонки доски) со значком: ✔ выполнено, ⚠ просрочено, ○ остальное."""
+    mark = "✔" if done else "⚠" if overdue else "○"
+    return f"{mark}  {name}"
 
 
 class DatePicker(ttk.Frame):
@@ -570,6 +587,9 @@ class HelpWindow(tk.Toplevel):
             self.insert_marked(text, line, kind)
             text.insert("end", "\n", kind)
 
+        text.tag_configure("copyright", foreground=MUTED, font=FONT_SMALL, spacing1=24)
+        text.insert("end", ABOUT_TEXT.split("\n\n", 1)[1].replace("\n\n", "\n"), "copyright")
+
         text.configure(state="disabled")  # только для чтения
         self.bind("<Escape>", lambda e: self.destroy())
         center_on_screen(self, 680, 640)
@@ -750,7 +770,7 @@ class TaskCard(tk.Frame):
             self.body_scroll.pack_forget()
         self.body_scroll.set(first, last)
 
-    def show(self, title, body, status, overdue, done, priority_level_, priority_name,
+    def show(self, title, body, status, status_color, overdue, done, priority_level_, priority_name,
              due, remind, created):
         self.priority.configure(
             image=IMAGES.get(f"priority_{priority_level_}", ""),
@@ -758,7 +778,6 @@ class TaskCard(tk.Frame):
         )
         color = DANGER if overdue else DONE if done else TEXT
         self.title.configure(text=title, fg=color)
-        status_color = DANGER if overdue else "#15803d" if done else ACCENT
         self.status.configure(text=status, fg=status_color)
         self.body.configure(state="normal")
         self.body.delete("1.0", "end")
@@ -847,24 +866,253 @@ class CatbusRoad(tk.Canvas):
         self.create_image(x, road_y + 2, image=bus, anchor="sw")
 
 
+LANE_WIDTH = 250
+# Готовые цвета для колонок доски
+LANE_COLORS = [
+    ("Синий", "#3b82f6"), ("Голубой", "#06b6d4"), ("Зелёный", "#22c55e"),
+    ("Жёлтый", "#eab308"), ("Оранжевый", "#f59e0b"), ("Красный", "#ef4444"),
+    ("Розовый", "#ec4899"), ("Фиолетовый", "#8b5cf6"), ("Серый", "#64748b"),
+]
+
+
+def tint(color, amount):
+    """Светлый оттенок цвета: amount=0 — сам цвет, 1 — белый."""
+    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+    return "#%02x%02x%02x" % tuple(round(c + (255 - c) * amount) for c in (r, g, b))
+
+
+def swatch(color):
+    """Квадратик цвета для меню."""
+    key = f"swatch_{color}"
+    if key not in IMAGES:
+        img = tk.PhotoImage(width=14, height=14)
+        img.put(color, to=(0, 0, 14, 14))
+        IMAGES[key] = img
+    return IMAGES[key]
+
+
+def bind_tree(widget, sequence, func):
+    """Привязывает событие к виджету и всем его вложенным элементам."""
+    widget.bind(sequence, func, add="+")
+    for child in widget.winfo_children():
+        bind_tree(child, sequence, func)
+
+
+class KanbanBoard(tk.Frame):
+    """Канбан-доска: колонки-статусы и карточки задач, которые можно перетаскивать."""
+
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=BG)
+        self.app = app
+        self.selected_id = None
+        self.drag = None
+        self.lanes = []   # [(status_id, рамка колонки, цвет фона колонки)]
+        self.cards = {}   # id задачи -> рамка карточки
+
+        self.hbar = ttk.Scrollbar(self, orient="horizontal")
+        self.canvas = tk.Canvas(self, bg=BG, highlightthickness=0, xscrollcommand=self.update_hbar)
+        self.hbar.configure(command=self.canvas.xview)
+        self.canvas.pack(fill="both", expand=True)
+        self.inner = tk.Frame(self.canvas, bg=BG)
+        self.window = self.canvas.create_window(0, 0, window=self.inner, anchor="nw")
+        self.inner.bind("<Configure>",
+                        lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>",
+                         lambda e: self.canvas.itemconfigure(self.window, height=e.height))
+        for widget in (self.canvas, self.inner):
+            widget.bind("<Button-1>", lambda e: self.app.clear_selection())
+            widget.bind("<Shift-MouseWheel>", self.scroll_x)
+
+    def update_hbar(self, first, last):
+        needed = not (float(first) <= 0 and float(last) >= 1)
+        if needed and not self.hbar.winfo_ismapped():
+            self.hbar.pack(side="bottom", fill="x", before=self.canvas)
+        elif not needed and self.hbar.winfo_ismapped():
+            self.hbar.pack_forget()
+        self.hbar.set(first, last)
+
+    def scroll_x(self, event):
+        self.canvas.xview_scroll(-1 if event.delta > 0 else 1, "units")
+
+    # --- построение доски ---
+
+    def render(self, statuses, rows, overdue_ids):
+        for child in self.inner.winfo_children():
+            child.destroy()
+        self.lanes, self.cards = [], {}
+        by_status = {}
+        for row in rows:
+            by_status.setdefault(row[9], []).append(row)
+        for status_id, name, color, is_done in statuses:
+            self.make_lane(status_id, name, color, is_done, by_status.get(status_id, []), overdue_ids)
+
+        add = tk.Label(self.inner, text="＋  Колонка", bg=BG, fg=MUTED, font=FONT_SMALL,
+                       cursor="hand2", padx=18, pady=10, highlightthickness=1,
+                       highlightbackground="#cfd5df")
+        add.pack(side="left", anchor="n", pady=(0, 4))
+        add.bind("<Button-1>", lambda e: self.app.add_lane())
+        add.bind("<Enter>", lambda e: add.configure(fg=ACCENT, highlightbackground=ACCENT))
+        add.bind("<Leave>", lambda e: add.configure(fg=MUTED, highlightbackground="#cfd5df"))
+
+        if self.selected_id not in self.cards:
+            self.selected_id = None
+        self.highlight_selected()
+
+    def make_lane(self, status_id, name, color, is_done, rows, overdue_ids):
+        lane_bg = tint(color, 0.9)
+        lane = tk.Frame(self.inner, bg=lane_bg, width=LANE_WIDTH,
+                        highlightthickness=1, highlightbackground=BORDER)
+        lane.pack(side="left", fill="y", padx=(0, 12), pady=(0, 4))
+        lane.pack_propagate(False)
+        tk.Frame(lane, bg=color, height=5).pack(fill="x")
+
+        head = tk.Frame(lane, bg=lane_bg)
+        head.pack(fill="x", padx=12, pady=(10, 8))
+        tk.Label(head, text=name, bg=lane_bg, fg=TEXT, font=FONT_BOLD).pack(side="left")
+        tk.Label(head, text=f" {len(rows)} ", bg=SURFACE, fg=MUTED, font=FONT_SMALL).pack(
+            side="left", padx=(8, 0))
+        if is_done:
+            tk.Label(head, text="✔", bg=lane_bg, fg="#15803d", font=FONT_SMALL).pack(
+                side="left", padx=(6, 0))
+        menu_btn = tk.Label(head, text="⋯", bg=lane_bg, fg=MUTED, font=("Segoe UI", 14),
+                            cursor="hand2")
+        menu_btn.pack(side="right")
+        menu_btn.bind("<Button-1>", lambda e: self.app.lane_menu(status_id, e.x_root, e.y_root))
+        menu_btn.bind("<Enter>", lambda e: menu_btn.configure(fg=TEXT))
+        menu_btn.bind("<Leave>", lambda e: menu_btn.configure(fg=MUTED))
+
+        # Карточки — в прокручиваемой области
+        area = tk.Canvas(lane, bg=lane_bg, highlightthickness=0)
+        area.pack(fill="both", expand=True, padx=(10, 6), pady=(0, 10))
+        cards = tk.Frame(area, bg=lane_bg)
+        area.create_window(0, 0, window=cards, anchor="nw", width=LANE_WIDTH - 20)
+        cards.bind("<Configure>", lambda e: area.configure(scrollregion=area.bbox("all")))
+        for row in rows:
+            self.make_card(cards, row, color, row[0] in overdue_ids)
+        if not rows:
+            tk.Label(cards, text="Перетащите сюда задачу", bg=lane_bg, fg=DONE,
+                     font=FONT_SMALL).pack(pady=24)
+
+        for widget in (lane, head, area, cards):
+            widget.bind("<Button-1>", lambda e: self.app.clear_selection())
+        bind_tree(lane, "<MouseWheel>",
+                  lambda e: area.yview_scroll(-1 if e.delta > 0 else 1, "units")
+                  if area.bbox("all") and area.bbox("all")[3] > area.winfo_height() else None)
+        bind_tree(lane, "<Shift-MouseWheel>", self.scroll_x)
+        self.lanes.append((status_id, lane, lane_bg))
+
+    def make_card(self, parent, row, lane_color, overdue):
+        task_id, title, done, _, due_at, remind_before, urgent, important, body, _ = row
+        card = tk.Frame(parent, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER,
+                        cursor="hand2")
+        card.pack(fill="x", pady=(0, 8))
+        tk.Frame(card, bg=lane_color, width=4).pack(side="left", fill="y")
+        content = tk.Frame(card, bg=SURFACE)
+        content.pack(side="left", fill="both", expand=True, padx=10, pady=8)
+
+        top = tk.Frame(content, bg=SURFACE)
+        top.pack(fill="x")
+        level = priority_level(urgent, important)
+        if level < 4:
+            tk.Label(top, image=IMAGES.get(f"priority_{level}", ""), bg=SURFACE).pack(
+                side="left", anchor="n", pady=(4, 0), padx=(0, 6))
+        color = DANGER if overdue else DONE if done else TEXT
+        tk.Label(top, text=title, bg=SURFACE, fg=color, font=FONT_BOLD, justify="left",
+                 anchor="w", wraplength=LANE_WIDTH - 80).pack(side="left", fill="x")
+        if body.strip():
+            tk.Label(content, text=short_text(body, 90), bg=SURFACE, fg=MUTED, font=FONT_SMALL,
+                     justify="left", anchor="w", wraplength=LANE_WIDTH - 60).pack(fill="x", pady=(4, 0))
+        if due_at:
+            due_text = datetime.fromisoformat(due_at).strftime("%d.%m %H:%M")
+            tk.Label(content, text=("⚠ срок " if overdue else "срок ") + due_text, bg=SURFACE,
+                     fg=DANGER if overdue else MUTED, font=FONT_SMALL, anchor="w").pack(
+                fill="x", pady=(4, 0))
+
+        bind_tree(card, "<ButtonPress-1>", lambda e: self.on_press(e, task_id))
+        bind_tree(card, "<B1-Motion>", self.on_motion)
+        bind_tree(card, "<ButtonRelease-1>", self.on_release)
+        bind_tree(card, "<Double-Button-1>", lambda e: self.app.edit())
+        bind_tree(card, "<Button-3>", lambda e: self.app.show_menu_for(task_id, e.x_root, e.y_root))
+        self.cards[task_id] = card
+
+    # --- выделение ---
+
+    def select(self, task_id):
+        self.selected_id = task_id
+        self.highlight_selected()
+
+    def highlight_selected(self):
+        for task_id, card in self.cards.items():
+            chosen = task_id == self.selected_id
+            card.configure(highlightbackground=ACCENT if chosen else BORDER,
+                           highlightthickness=2 if chosen else 1)
+
+    # --- перетаскивание карточек ---
+
+    def on_press(self, event, task_id):
+        self.drag = {"id": task_id, "x": event.x_root, "y": event.y_root, "ghost": None}
+        self.app.select_task(task_id)
+
+    def on_motion(self, event):
+        if not self.drag:
+            return
+        if self.drag["ghost"] is None:
+            if abs(event.x_root - self.drag["x"]) + abs(event.y_root - self.drag["y"]) < 6:
+                return  # ещё не тащим — это просто щелчок
+            ghost = tk.Toplevel(self)
+            ghost.overrideredirect(True)
+            ghost.attributes("-alpha", 0.85)
+            ghost.attributes("-topmost", True)
+            title = db.get_task(self.app.conn, self.drag["id"])[0]
+            tk.Label(ghost, text=short_text(title, 40), bg=SURFACE, fg=TEXT, font=FONT_BOLD,
+                     padx=12, pady=8, highlightthickness=2, highlightbackground=ACCENT).pack()
+            self.drag["ghost"] = ghost
+        self.drag["ghost"].geometry(f"+{event.x_root + 12}+{event.y_root + 8}")
+        target = self.lane_at(event.x_root, event.y_root)
+        for status_id, lane, _ in self.lanes:
+            lane.configure(highlightbackground=ACCENT if status_id == target else BORDER,
+                           highlightthickness=2 if status_id == target else 1)
+
+    def on_release(self, event):
+        drag, self.drag = self.drag, None
+        if not drag or drag["ghost"] is None:
+            return
+        drag["ghost"].destroy()
+        for _, lane, _ in self.lanes:
+            lane.configure(highlightbackground=BORDER, highlightthickness=1)
+        target = self.lane_at(event.x_root, event.y_root)
+        if target is not None:
+            # Доску перестраиваем после выхода из обработчика события
+            self.after_idle(lambda: self.app.move_task(drag["id"], target))
+
+    def lane_at(self, x, y):
+        for status_id, lane, _ in self.lanes:
+            lx, ly = lane.winfo_rootx(), lane.winfo_rooty()
+            if lx <= x < lx + lane.winfo_width() and ly <= y < ly + lane.winfo_height():
+                return status_id
+        return None
+
+
 class TodoApp:
     def __init__(self, root):
         self.root = root
         self.conn = db.connect()
-        self.due = {}  # id задачи -> срок (для подсветки просроченных)
+        self.due = {}         # id строки таблицы -> срок (для подсветки просроченных)
+        self.row_status = {}  # id строки таблицы -> название статуса
+        self.statuses = {}    # id статуса -> (название, цвет, выполнено ли)
 
         root.title(APP_NAME)
         if ICON_PATH.exists():
             root.iconbitmap(default=str(ICON_PATH))  # иконка для всех окон программы
         setup_style(root)
         load_images()
-        center_on_screen(root, 1290, 700)
+        center_on_screen(root, 1290, 720)
         root.minsize(820, 480)
 
         page = ttk.Frame(root, padding=(24, 14, 24, 20))
         page.pack(fill="both", expand=True)
 
-        # Заголовок, счётчик задач и Тоторо
+        # Заголовок, счётчик задач, Котобус, меню и справка
         header = ttk.Frame(page)
         header.pack(fill="x")
         ttk.Label(header, text=APP_NAME, style="Title.TLabel").pack(side="left", anchor="s")
@@ -874,8 +1122,12 @@ class TodoApp:
             side="right", anchor="s", pady=(0, 4))
         more = ttk.Menubutton(header, text="☰  Ещё", style="TMenubutton", cursor="hand2")
         more_menu = tk.Menu(more, tearoff=0)
+        more_menu.add_command(label="Добавить колонку на доску…", command=self.add_lane)
+        more_menu.add_separator()
         more_menu.add_command(label="Добавить примеры задач", command=self.add_examples)
         more_menu.add_command(label="Удалить примеры задач", command=self.delete_examples)
+        more_menu.add_separator()
+        more_menu.add_command(label="О программе", command=self.show_about)
         more["menu"] = more_menu
         more.pack(side="right", padx=(0, 8), anchor="s", pady=(0, 4))
         # Котобус везёт выполненные задачи к остановке «Готово»
@@ -896,11 +1148,18 @@ class TodoApp:
         ttk.Button(add_row, text="＋  Добавить", style="Accent.TButton",
                    command=self.add).pack(side="left", padx=(10, 0), ipady=2)
 
-        # Фильтр в виде сегментов и сортировка
+        # Вид (список или доска), фильтр и сортировка
         toolbar = ttk.Frame(page)
         toolbar.pack(fill="x", pady=(0, 12))
+        self.view = tk.StringVar(value=db.get_setting(self.conn, "view", "list"))
+        views = ttk.Frame(toolbar, style="Segments.TFrame", padding=3)
+        views.pack(side="left")
+        for value, text in (("list", "☰  Список"), ("board", "▦  Доска")):
+            ttk.Radiobutton(views, text=text, value=value, variable=self.view,
+                            style="Segment.TRadiobutton", command=self.switch_view,
+                            cursor="hand2").pack(side="left")
         filters = ttk.Frame(toolbar, style="Segments.TFrame", padding=3)
-        filters.pack(side="left")
+        filters.pack(side="left", padx=(12, 0))
         self.filter = tk.StringVar(value="Все")
         for name in FILTERS:
             ttk.Radiobutton(filters, text=name, value=name, variable=self.filter,
@@ -922,8 +1181,9 @@ class TodoApp:
                    command=self.delete).pack(side="right")
         ttk.Label(bottom, text="ПКМ — меню · F1 — справка",
                   style="Muted.TLabel").pack(side="right", padx=(0, 14))
+        ttk.Label(bottom, text=COPYRIGHT, style="Muted.TLabel").pack(side="right", padx=(0, 14))
 
-        # Середина окна: таблица задач и панель с Тоторо справа
+        # Середина окна: таблица или доска, справа — Тоторо или карточка задачи
         content = ttk.Frame(page)
         content.pack(fill="both", expand=True)
         self.side = SidePanel(content, on_task_click=self.reveal_task,
@@ -933,7 +1193,6 @@ class TodoApp:
         content.bind("<Configure>", self.fit_side_panel)
 
         card = tk.Frame(content, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
-        card.pack(fill="both", expand=True)
         self.table_card = card
         inner = ttk.Frame(card, style="Card.TFrame", padding=(6, 4, 4, 6))
         inner.pack(fill="both", expand=True)
@@ -964,27 +1223,96 @@ class TodoApp:
         self.scrollbar.config(command=self.tree.yview)
         self.empty = ttk.Label(inner, style="Empty.TLabel", justify="center")
         self.tree.bind("<Double-Button-1>", lambda e: self.edit())
-        self.tree.bind("<F2>", lambda e: self.edit())
-        self.tree.bind("<space>", lambda e: self.toggle())
-        self.tree.bind("<Delete>", lambda e: self.delete())
-        self.tree.bind("<Control-e>", lambda e: self.email())
-        self.tree.bind("<Control-E>", lambda e: self.email())
         self.tree.bind("<Button-3>", self.show_menu)  # правая кнопка мыши
         self.tree.bind("<App>", self.show_menu_for_selected)  # клавиша контекстного меню
-        # Выбор задачи показывает её карточку справа; щелчок мимо строк или Esc — снова Тоторо
-        self.tree.bind("<<TreeviewSelect>>", lambda e: self.update_side())
+        # Выбор задачи показывает её карточку справа; щелчок мимо строк — снова Тоторо
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self.on_tree_select())
         self.tree.bind("<Button-1>", self.click_empty_space, add="+")
-        self.tree.bind("<Escape>", lambda e: self.clear_selection())
 
+        self.board = KanbanBoard(content, self)
+
+        # Клавиши работают и в списке, и на доске (но не во время набора текста)
+        for sequence, action in (("<F2>", self.edit), ("<space>", self.toggle),
+                                 ("<Delete>", self.delete), ("<Control-e>", self.email),
+                                 ("<Control-E>", self.email), ("<Escape>", self.clear_selection)):
+            root.bind(sequence, lambda e, a=action: self.key_action(e, a))
         root.bind("<F1>", lambda e: self.show_help())
         self.help_window = None
 
         root.protocol("WM_DELETE_WINDOW", self.close)
+        self.show_main_widget()
         self.refresh()
-        root.after(200, self.repaint_tree)  # ещё раз, когда окно уже показано
+        root.after(200, self.repaint)  # ещё раз, когда окно уже показано
         self.show_placeholder()
         self.entry.focus()
         root.after(1000, self.check_reminders)
+
+    # --- список или доска ---
+
+    def main_widget(self):
+        return self.board if self.view.get() == "board" else self.table_card
+
+    def show_main_widget(self):
+        other = self.table_card if self.view.get() == "board" else self.board
+        other.pack_forget()
+        self.main_widget().pack(fill="both", expand=True)
+
+    def switch_view(self):
+        db.set_setting(self.conn, "view", self.view.get())
+        task_id = self.current_id()
+        self.show_main_widget()
+        self.refresh(select_id=task_id)
+
+    def key_action(self, event, action):
+        """Горячие клавиши не мешают печатать в полях ввода."""
+        if isinstance(event.widget, (tk.Entry, ttk.Entry, tk.Text, ttk.Combobox, ttk.Button,
+                                     ttk.Radiobutton, ttk.Checkbutton)):
+            return None
+        if action is not self.clear_selection and self.current_id() is None:
+            return None
+        action()
+        return "break"
+
+    # --- выбранная задача (одна и та же в списке и на доске) ---
+
+    def current_id(self):
+        if self.view.get() == "board":
+            return self.board.selected_id
+        sel = self.tree.selection()
+        return int(sel[0]) if sel else None
+
+    def select_task(self, task_id):
+        if self.tree.exists(str(task_id)):
+            self.tree.selection_set(str(task_id))
+            self.tree.see(str(task_id))
+        self.board.select(task_id)
+        self.update_side()
+
+    def on_tree_select(self):
+        sel = self.tree.selection()
+        if self.view.get() == "list":
+            self.board.select(int(sel[0]) if sel else None)
+        self.update_side()
+
+    def clear_selection(self):
+        self.tree.selection_remove(*self.tree.selection())
+        self.board.select(None)
+        self.update_side()
+
+    def click_empty_space(self, event):
+        """Щелчок по пустому месту таблицы снимает выделение."""
+        if not self.tree.identify_row(event.y) and self.tree.identify_region(event.x, event.y) != "heading":
+            self.clear_selection()
+
+    def reveal_task(self, task_id):
+        """Щелчок по задаче в облачке Тоторо: показать и выделить её."""
+        if not self.tree.exists(str(task_id)):
+            self.filter.set("Все")
+            self.refresh()
+        self.select_task(task_id)
+        if self.view.get() == "list" and self.tree.exists(str(task_id)):
+            self.tree.focus(str(task_id))
+            self.tree.focus_set()
 
     # --- правая панель: Тоторо или карточка задачи ---
 
@@ -992,34 +1320,39 @@ class TodoApp:
         wide_enough = event.width >= 1000
         shown = self.side.winfo_ismapped()
         if wide_enough and not shown:
-            self.side.pack(side="right", fill="y", padx=(12, 0), before=self.table_card)
+            self.side.pack(side="right", fill="y", padx=(12, 0), before=self.main_widget())
         elif not wide_enough and shown:
             self.side.pack_forget()
 
+    def task_info(self, task_id):
+        """Всё о задаче для карточки справа и письма."""
+        row = next((r for r in db.list_tasks(self.conn) if r[0] == task_id), None)
+        if row is None:
+            return None
+        _, title, done, created, due_at, remind_before, urgent, important, body, status_id = row
+        name, color, _ = self.statuses.get(status_id, ("—", MUTED, done))
+        overdue = bool(due_at and not done and datetime.fromisoformat(due_at) < datetime.now())
+        level = priority_level(urgent, important)
+        remind = REMIND_LABELS.get(remind_before, f"за {remind_before} мин") if due_at and remind_before else ""
+        return dict(title=title, body=body, done=bool(done), overdue=overdue, status_id=status_id,
+                    status=status_label(name, done, overdue), status_name=name, status_color=color,
+                    level=level, priority=PRIORITY_NAMES[level], due=format_due(due_at),
+                    remind=remind, created=created, urgent=urgent)
+
     def update_side(self):
         """Выбрана задача — показываем её карточку, иначе — Тоторо."""
-        sel = self.tree.selection()
-        task = db.get_task(self.conn, int(sel[0])) if sel else None
-        if not task:
+        task_id = self.current_id()
+        info = self.task_info(task_id) if task_id is not None else None
+        if not info:
             self.side.show_totoro()
             return
-        title, _, _, urgent, important, body = task
-        tags = self.tree.item(sel[0], "tags")
-        values = self.tree.set(sel[0])
         self.side.show_task(
-            title=title, body=body, status=values["status"],
-            overdue="overdue" in tags, done="done" in tags,
-            priority_level_=priority_level(urgent, important), priority_name=values["priority"],
-            due=values["due"], remind=values["remind"], created=values["created"],
+            title=info["title"], body=info["body"], status=info["status"],
+            status_color=DANGER if info["overdue"] else info["status_color"],
+            overdue=info["overdue"], done=info["done"],
+            priority_level_=info["level"], priority_name=info["priority"],
+            due=info["due"], remind=info["remind"], created=info["created"],
         )
-
-    def clear_selection(self):
-        self.tree.selection_remove(*self.tree.selection())
-
-    def click_empty_space(self, event):
-        """Щелчок по пустому месту таблицы снимает выделение."""
-        if not self.tree.identify_row(event.y) and self.tree.identify_region(event.x, event.y) != "heading":
-            self.clear_selection()
 
     def update_buddy(self):
         """Выбирает, что скажет Тоторо: о просроченной задаче, о задачах на сегодня и т. д."""
@@ -1054,21 +1387,101 @@ class TodoApp:
         elif active:
             task = most_important(active)
             panel.show("Начни с самого важного:", task[1], task[0],
-                       f"В работе задач: {len(active)}. Ты справишься!", "normal", stats)
+                       f"Активных задач: {len(active)}. Ты справишься!", "normal", stats)
         else:
             panel.show("Все задачи выполнены!",
                        tail="Можно отдохнуть под камфорным деревом.", mood="done")
 
-    def reveal_task(self, task_id):
-        """Щелчок по задаче в облачке: показать и выделить её в таблице."""
-        if not self.tree.exists(str(task_id)):
-            self.filter.set("Все")
-            self.refresh()
-        if self.tree.exists(str(task_id)):
-            self.tree.selection_set(str(task_id))
-            self.tree.see(str(task_id))
-            self.tree.focus(str(task_id))
-            self.tree.focus_set()
+    # --- колонки доски (статусы) ---
+
+    def add_lane(self):
+        name = simpledialog.askstring("Новая колонка", "Название колонки (статуса):", parent=self.root)
+        if not name or not name.strip():
+            return
+        used = {color for _, color, _ in self.statuses.values()}
+        color = next((c for _, c in LANE_COLORS if c not in used), LANE_COLORS[0][1])
+        db.add_status(self.conn, name.strip(), color)
+        if self.view.get() != "board":
+            self.view.set("board")
+            self.switch_view()
+        else:
+            self.refresh(select_id=self.current_id())
+
+    def lane_menu(self, status_id, x, y):
+        name, color, is_done = self.statuses[status_id]
+        order = list(self.statuses)
+        index = order.index(status_id)
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="Переименовать…", command=lambda: self.rename_lane(status_id))
+
+        colors = tk.Menu(menu, tearoff=0)
+        self.lane_color_choice = tk.StringVar(value=color)
+        for label, value in LANE_COLORS:
+            colors.add_radiobutton(label=label, value=value, variable=self.lane_color_choice,
+                                   image=swatch(value), compound="left",
+                                   command=lambda v=value: self.set_lane_color(status_id, v))
+        colors.add_separator()
+        colors.add_command(label="Другой цвет…", command=lambda: self.pick_lane_color(status_id))
+        menu.add_cascade(label="Цвет", menu=colors, image=swatch(color), compound="left")
+
+        self.lane_done_choice = tk.BooleanVar(value=bool(is_done))
+        menu.add_checkbutton(label="Задачи здесь считаются выполненными",
+                             variable=self.lane_done_choice,
+                             command=lambda: self.set_lane_done(status_id))
+        menu.add_separator()
+        menu.add_command(label="← Сдвинуть влево", state="normal" if index > 0 else "disabled",
+                         command=lambda: self.move_lane(status_id, -1))
+        menu.add_command(label="Сдвинуть вправо →",
+                         state="normal" if index < len(order) - 1 else "disabled",
+                         command=lambda: self.move_lane(status_id, 1))
+        menu.add_separator()
+        menu.add_command(label="Удалить колонку…", state="normal" if len(order) > 1 else "disabled",
+                         command=lambda: self.delete_lane(status_id))
+        menu.tk_popup(x, y)
+
+    def rename_lane(self, status_id):
+        name = simpledialog.askstring("Переименовать колонку", "Новое название:",
+                                      initialvalue=self.statuses[status_id][0], parent=self.root)
+        if name and name.strip():
+            db.rename_status(self.conn, status_id, name.strip())
+            self.refresh(select_id=self.current_id())
+
+    def set_lane_color(self, status_id, color):
+        db.set_status_color(self.conn, status_id, color)
+        self.refresh(select_id=self.current_id())
+
+    def pick_lane_color(self, status_id):
+        _, color = colorchooser.askcolor(self.statuses[status_id][1], title="Цвет колонки",
+                                         parent=self.root)
+        if color:
+            self.set_lane_color(status_id, color)
+
+    def set_lane_done(self, status_id):
+        db.set_status_done(self.conn, status_id, self.lane_done_choice.get())
+        self.refresh(select_id=self.current_id())
+
+    def move_lane(self, status_id, step):
+        db.move_status(self.conn, status_id, step)
+        self.refresh(select_id=self.current_id())
+
+    def delete_lane(self, status_id):
+        if len(self.statuses) < 2:
+            return
+        name = self.statuses[status_id][0]
+        target = next(sid for sid in self.statuses if sid != status_id)
+        count = db.count_in_status(self.conn, status_id)
+        moved = (f"\n\nЗадачи из неё ({count}) перейдут в колонку «{self.statuses[target][0]}»."
+                 if count else "")
+        if messagebox.askyesno("Удалить колонку?", f"Удалить колонку «{name}»?{moved}",
+                               icon="warning", default="no", parent=self.root):
+            db.delete_status(self.conn, status_id, target)
+            self.refresh(select_id=self.current_id())
+
+    def move_task(self, task_id, status_id):
+        db.set_task_status(self.conn, task_id, status_id)
+        self.refresh(select_id=task_id)
+
+    # --- примеры, справка, «О программе» ---
 
     def add_examples(self):
         """Добавляет примеры задач; старые примеры при этом заменяются свежими."""
@@ -1112,6 +1525,9 @@ class TodoApp:
             return
         self.help_window = HelpWindow(self.root)
 
+    def show_about(self):
+        messagebox.showinfo(f"О программе {APP_NAME}", ABOUT_TEXT, parent=self.root)
+
     # --- подсказка в пустом поле ввода ---
 
     def placeholder_shown(self):
@@ -1149,7 +1565,7 @@ class TodoApp:
             return ""
         return self.entry.get().strip()
 
-    # --- таблица ---
+    # --- таблица и доска ---
 
     def update_scrollbar(self, first, last):
         """Полоса прокрутки видна, только если задачи не помещаются в окно."""
@@ -1161,35 +1577,40 @@ class TodoApp:
                 self.scrollbar.pack_forget()
         self.scrollbar.set(first, last)
 
-    def repaint_tree(self):
+    def repaint(self):
         """Перестраивает таблицу, когда окно уже на экране. Если строить её только
         до показа окна, в Tk 9 красный цвет просроченной строки может «протечь»
         в правые столбцы остальных строк."""
-        sel = self.tree.selection()
-        self.refresh(select_id=sel[0] if sel else None)
+        self.refresh(select_id=self.current_id())
 
     def refresh(self, select_id=None):
-        """Перечитывает задачи из базы (с учётом фильтра) и рисует таблицу заново."""
+        """Перечитывает задачи из базы (с учётом фильтра) и рисует таблицу и доску заново."""
+        statuses = db.list_statuses(self.conn)
+        self.statuses = {sid: (name, color, bool(done)) for sid, name, color, done in statuses}
         rows = db.list_tasks(self.conn)
         active = sum(1 for row in rows if not row[2])
-        self.counter.configure(text=f"{active} в работе  ·  {len(rows) - active} выполнено")
+        self.counter.configure(text=f"активных: {active}  ·  выполнено: {len(rows) - active}")
         self.road.set_progress(len(rows) - active, len(rows))
 
         wanted = FILTERS[self.filter.get()]
         rows = [row for row in rows if wanted is None or bool(row[2]) == wanted]
         rows.sort(key=self.sort_key)
+        now = datetime.now()
+        overdue_ids = {r[0] for r in rows if r[4] and not r[2] and datetime.fromisoformat(r[4]) < now}
 
         self.tree.delete(*self.tree.get_children())
-        self.due = {}
-        for task_id, title, done, created, due_at, remind_before, urgent, important, _ in rows:
+        self.due, self.row_status = {}, {}
+        for task_id, title, done, created, due_at, remind_before, urgent, important, _, status_id in rows:
             remind = REMIND_LABELS.get(remind_before, f"за {remind_before} мин") if due_at else ""
             if remind == "Не напоминать":
                 remind = ""
             level = priority_level(urgent, important)
             iid = str(task_id)
+            name = self.statuses.get(status_id, ("—",))[0]
+            self.row_status[iid] = name
             self.tree.insert(
                 "", "end", iid=iid, image=IMAGES.get(f"priority_{level}", ""),
-                values=(status_text(done), title, PRIORITY_NAMES[level],
+                values=(status_label(name, done), title, PRIORITY_NAMES[level],
                         format_due(due_at), remind, created),
                 tags=("done",) if done else ("normal",),
             )
@@ -1203,15 +1624,17 @@ class TodoApp:
             self.empty.configure(text=EMPTY_TEXT[self.filter.get()])
             self.empty.place(relx=0.5, rely=0.5, anchor="center")
 
-        if select_id is not None and self.tree.exists(str(select_id)):
-            self.tree.selection_set(str(select_id))
-            self.tree.see(str(select_id))
+        if self.view.get() == "board":
+            self.board.render(statuses, rows, overdue_ids)
+
+        if select_id is not None:
+            self.select_task(select_id)
         self.update_buddy()
         self.update_side()
 
     def sort_key(self, row):
         """Выполненные всегда внизу; дальше — по выбранной сортировке."""
-        task_id, _, done, _, due_at, _, urgent, important, _ = row
+        task_id, _, done, _, due_at, _, urgent, important, _, _ = row
         level = priority_level(urgent, important)
         no_due = due_at is None
         due = due_at or ""
@@ -1229,15 +1652,17 @@ class TodoApp:
             if self.tree.exists(iid):
                 overdue = due < now
                 self.tree.item(iid, tags=("overdue",) if overdue else ("normal",))
-                self.tree.set(iid, "status", status_text(False, overdue))
+                self.tree.set(iid, "status", status_label(self.row_status[iid], False, overdue))
 
     def selected(self):
         """Возвращает (id, выполнена ли) выбранной задачи или None."""
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo(APP_NAME, "Сначала выберите задачу в списке.")
+        task_id = self.current_id()
+        info = self.task_info(task_id) if task_id is not None else None
+        if not info:
+            where = "на доске" if self.view.get() == "board" else "в списке"
+            messagebox.showinfo(APP_NAME, f"Сначала выберите задачу {where}.", parent=self.root)
             return None
-        return int(sel[0]), "done" in self.tree.item(sel[0], "tags")
+        return task_id, info["done"]
 
     def add(self):
         title = self.entry_text()
@@ -1246,6 +1671,8 @@ class TodoApp:
         task_id = db.add_task(self.conn, title)
         self.entry.delete(0, "end")
         self.show_placeholder()
+        if FILTERS[self.filter.get()] is True:
+            self.filter.set("Все")  # иначе новую задачу не будет видно
         self.refresh(select_id=task_id)
 
     def edit(self):
@@ -1264,14 +1691,22 @@ class TodoApp:
         if task is None:
             return
         task_id, done = task
-        db.set_done(self.conn, task_id, not done)
+        if not db.set_done(self.conn, task_id, not done):
+            messagebox.showinfo(
+                APP_NAME,
+                "На доске нет колонки, куда можно перенести задачу.\n\n"
+                "Отметьте одну из колонок как «Задачи здесь считаются выполненными» "
+                "(меню «⋯» в заголовке колонки).",
+                parent=self.root,
+            )
+            return
         self.refresh(select_id=task_id)
 
     def delete(self):
         task = self.selected()
         if task is None:
             return
-        title = self.tree.set(str(task[0]), "title")
+        title = db.get_task(self.conn, task[0])[0]
         if not messagebox.askyesno(
             "Удалить задачу?",
             f"Удалить задачу «{title}»?\n\nВернуть её будет нельзя.",
@@ -1279,6 +1714,7 @@ class TodoApp:
         ):
             return
         db.delete_task(self.conn, task[0])
+        self.clear_selection()
         self.refresh()
 
     # --- меню по правой кнопке мыши ---
@@ -1287,29 +1723,38 @@ class TodoApp:
         row = self.tree.identify_row(event.y)
         if not row:
             return
-        self.tree.selection_set(row)
         self.tree.focus(row)
-        self.build_menu(int(row)).tk_popup(event.x_root, event.y_root)
+        self.show_menu_for(int(row), event.x_root, event.y_root)
 
     def show_menu_for_selected(self, event):
         sel = self.tree.selection()
         if not sel:
             return
         x, y, _, height = self.tree.bbox(sel[0])
-        self.build_menu(int(sel[0])).tk_popup(
-            self.tree.winfo_rootx() + x + 40, self.tree.winfo_rooty() + y + height
-        )
+        self.show_menu_for(int(sel[0]), self.tree.winfo_rootx() + x + 40,
+                           self.tree.winfo_rooty() + y + height)
+
+    def show_menu_for(self, task_id, x, y):
+        self.select_task(task_id)
+        self.build_menu(task_id).tk_popup(x, y)
 
     def build_menu(self, task_id):
         title, due_at, remind_before, urgent, important, body = db.get_task(self.conn, task_id)
-        done = "done" in self.tree.item(str(task_id), "tags")
+        info = self.task_info(task_id)
 
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="Изменить…", accelerator="F2", command=self.edit)
         menu.add_command(
-            label="Снять отметку о выполнении" if done else "Отметить выполненной",
+            label="Снять отметку о выполнении" if info["done"] else "Отметить выполненной",
             accelerator="Пробел", command=self.toggle,
         )
+        status_menu = tk.Menu(menu, tearoff=0)
+        self.status_choice = tk.IntVar(value=info["status_id"] or 0)
+        for sid, (name, color, _) in self.statuses.items():
+            status_menu.add_radiobutton(label=name, value=sid, variable=self.status_choice,
+                                        image=swatch(color), compound="left",
+                                        command=lambda s=sid: self.move_task(task_id, s))
+        menu.add_cascade(label="Статус", menu=status_menu)
         menu.add_separator()
 
         prio_menu = tk.Menu(menu, tearoff=0)
@@ -1382,12 +1827,10 @@ class TodoApp:
         task = self.selected()
         if task is None:
             return
-        task_id = task[0]
-        title, _, _, urgent, _, description = db.get_task(self.conn, task_id)
-        values = self.tree.set(str(task_id))
-        status = values["status"].split(None, 1)[-1]  # без значка ○ ✔ ⚠
-        subject, body = build_email(title, status, values["priority"], values["due"],
-                                    values["remind"], values["created"], urgent, description)
+        info = self.task_info(task[0])
+        subject, body = build_email(info["title"], info["status_name"], info["priority"],
+                                    info["due"], info["remind"], info["created"],
+                                    info["urgent"], info["body"])
         url = f"mailto:?subject={quote(subject, safe='')}&body={quote(body, safe='')}"
         too_long = len(url) > MAILTO_LIMIT
         if too_long:
@@ -1418,6 +1861,8 @@ class TodoApp:
     def check_reminders(self):
         """Раз в 30 секунд проверяет, не пора ли о чём-то напомнить."""
         self.mark_overdue()
+        if self.view.get() == "board" and not self.board.drag:
+            self.refresh(select_id=self.current_id())  # обновить красные сроки на карточках
         self.update_buddy()
         self.update_side()
         due = db.due_reminders(self.conn)

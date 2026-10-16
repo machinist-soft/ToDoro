@@ -22,12 +22,12 @@ def make_examples(now=None):
 
     examples = [
         # Просроченная, срочная и важная — красная строка
-        dict(title="Оплатить интернет", due=_at(today - timedelta(days=1), 9),
+        dict(title="Оплатить интернет", stage="work", due=_at(today - timedelta(days=1), 9),
              remind=HOUR, urgent=True, important=True,
              body="Тариф «Домашний 500», 650 ₽.\nОплатить в приложении банка "
                   "по номеру договора 12-345678, иначе завтра отключат."),
         # Срочно и важно, срок сегодня через 3 часа
-        dict(title="Сдать квартальный отчёт", due=in_3_hours,
+        dict(title="Сдать квартальный отчёт", stage="work", due=in_3_hours,
              remind=30, urgent=True, important=True,
              body="Отчёт за III квартал для руководителя отдела.\n\n"
                   "— свести продажи по регионам;\n— добавить графики;\n"
@@ -37,7 +37,7 @@ def make_examples(now=None):
              remind=15, urgent=True,
              body="Бухгалтерия просит прислать скан командировочного удостоверения."),
         # Только важно, срок завтра, напомнить за день
-        dict(title="Подготовить презентацию для клиента", due=_at(today + timedelta(days=1), 10),
+        dict(title="Подготовить презентацию для клиента", stage="work", due=_at(today + timedelta(days=1), 10),
              remind=DAY, important=True,
              body="10–12 слайдов: о компании, кейсы, цены, сроки. "
                   "Взять шаблон из прошлой презентации и обновить цифры."),
@@ -61,10 +61,10 @@ def make_examples(now=None):
                   "Маме — тёплый плед, папе — книгу, сестре — настольную игру, "
                   "коллегам — сладкие наборы. Бюджет — до 15 000 ₽."),
         # Выполненные
-        dict(title="Позвонить маме", important=True, done=True,
+        dict(title="Позвонить маме", important=True, stage="done",
              body="Спросить, как прошла поездка на дачу."),
         dict(title="Забрать посылку на почте", due=_at(today - timedelta(days=1), 15),
-             urgent=True, done=True, body="Трек-номер RA123456789RU, отделение на Ленина, 5."),
+             urgent=True, stage="done", body="Трек-номер RA123456789RU, отделение на Ленина, 5."),
     ]
 
     for ex in examples:
