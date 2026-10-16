@@ -1,5 +1,6 @@
 """ToDoro — список дел с Тоторо."""
 import calendar
+import csv
 import ctypes
 import math
 import os
@@ -10,9 +11,9 @@ import tkinter as tk
 from email import policy as email_policy
 from email.message import EmailMessage
 from urllib.parse import quote
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from tkinter import colorchooser, messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import db
 from examples import make_examples
@@ -317,6 +318,165 @@ def write_draft(number, subject, body):
     path = DRAFTS_DIR / f"Задача {number}.eml"
     path.write_bytes(message.as_bytes())
     return str(path)
+
+
+# ---------- экспорт и импорт задач в CSV (таблица для Excel) ----------
+# Разделитель — «;», кодировка — UTF-8 с меткой BOM: так русский Excel открывает файл
+# двойным щелчком без «кракозябр». При импорте понимаем и «,», и кодировку Windows-1251
+# (в ней сохраняет CSV русский Excel).
+
+CSV_COLUMNS = ["№", "Заголовок", "Описание", "Статус", "Приоритет", "Срок", "Напомнить", "Создана"]
+CSV_TEMPLATE_COLUMNS = ["Заголовок", "Описание", "Статус", "Приоритет", "Срок", "Напомнить"]
+CSV_ALIASES = {  # заголовок столбца в файле (строчными) -> поле
+    "№": "num", "номер": "num",
+    "заголовок": "title", "задача": "title", "название": "title",
+    "описание": "body",
+    "статус": "status", "колонка": "status",
+    "приоритет": "priority",
+    "срок": "due",
+    "напомнить": "remind", "напоминание": "remind",
+    "создана": "created",
+}
+PRIORITY_FLAGS = {"срочно и важно": (1, 1), "важно": (0, 1), "срочно": (1, 0),
+                  "обычный": (0, 0), "обычная": (0, 0), "": (0, 0)}
+DATE_RE = re.compile(r"(\d{1,2})\.(\d{1,2})\.(\d{4})(?:[ T]+(\d{1,2}):(\d{2})(?::\d{2})?)?$")
+ISO_DATE_RE = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T]+(\d{1,2}):(\d{2})(?::\d{2})?)?$")
+
+
+def parse_csv_date(text):
+    """«16.10.2026 18:00», «16.10.2026» или «2026-10-16 18:00» -> datetime.
+    Без времени — 09:00, как в форме задачи. Пусто -> None, ошибка -> ValueError."""
+    text = text.strip()
+    if not text:
+        return None
+    if m := DATE_RE.match(text):
+        day, month, year, hour, minute = m.groups()
+    elif m := ISO_DATE_RE.match(text):
+        year, month, day, hour, minute = m.groups()
+    else:
+        raise ValueError(text)
+    return datetime(int(year), int(month), int(day), int(hour or 9), int(minute or 0))
+
+
+def parse_csv_remind(text):
+    """«за 1 час» или число минут -> минуты; пусто или «Не напоминать» -> None."""
+    text = text.strip()
+    for label, minutes in REMIND_OPTIONS.items():
+        if text.lower() == label.lower():
+            return minutes
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    raise ValueError(text)
+
+
+def write_csv(path, header, rows):
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f, delimiter=";", lineterminator="\r\n")
+        writer.writerow(header)
+        writer.writerows(rows)
+
+
+def export_rows(conn):
+    """Все задачи в виде строк CSV (в порядке номеров)."""
+    statuses = {sid: name for sid, name, _, _ in db.list_statuses(conn)}
+    rows = []
+    for task_id, title, done, created, due_at, remind_before, urgent, important, body, status_id \
+            in db.list_tasks(conn):
+        remind = REMIND_LABELS.get(remind_before, remind_before or "") if due_at else ""
+        if remind == "Не напоминать":
+            remind = ""
+        rows.append([task_id, title, body, statuses.get(status_id, ""),
+                     PRIORITY_NAMES[priority_level(urgent, important)] or "Обычный",
+                     format_due(due_at), remind, created])
+    return rows
+
+
+def template_rows():
+    """Примеры строк для шаблона импорта."""
+    soon = (datetime.now() + timedelta(days=3)).strftime("%d.%m.%Y")
+    return [
+        ["Купить продукты", "Молоко, хлеб, сыр", "Новая", "Срочно", f"{soon} 18:00", "за 1 час"],
+        ["Подготовить отчёт", "", "В работе", "Срочно и важно", soon, ""],
+        ["Позвонить маме", "", "Новая", "Обычный", "", ""],
+    ]
+
+
+def read_csv(path):
+    """Читает файл CSV: [(номер строки, {поле: текст}), ...].
+    Если нет столбца «Заголовок» — ValueError с понятным текстом."""
+    raw = Path(path).read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1251")
+    first = text.split("\n", 1)[0]
+    delimiter = max(";,\t", key=first.count)
+    reader = csv.reader(text.splitlines(keepends=True), delimiter=delimiter)
+    header = next(reader, [])
+    fields = [CSV_ALIASES.get(h.strip().lower()) for h in header]
+    if "title" not in fields:
+        raise ValueError("В первой строке файла нет столбца «Заголовок».\n\n"
+                         "Скачайте шаблон (☰ Меню → Шаблон для импорта) и заполните его.")
+    result = []
+    for line_no, cells in enumerate(reader, start=2):
+        values = {}
+        for field, cell in zip(fields, cells):
+            if field and field not in values:
+                values[field] = cell.strip()
+        if any(values.values()):
+            result.append((line_no, values))
+    return result
+
+
+def prepare_import(conn, records):
+    """Проверяет строки файла. Возвращает (задачи для db.import_tasks, список замечаний)."""
+    statuses = db.list_statuses(conn)
+    by_name = {name.strip().lower(): sid for sid, name, _, _ in statuses}
+    tasks, notes = [], []
+    for line_no, v in records:
+        title = v.get("title", "")
+        if not title:
+            notes.append(f"строка {line_no}: нет заголовка — пропущена")
+            continue
+        status_text = v.get("status", "")
+        status_id = by_name.get(status_text.lower())
+        if status_id is None:
+            status_id = statuses[0][0]
+            if status_text:
+                notes.append(f"строка {line_no}: статуса «{status_text}» нет — задача в «{statuses[0][1]}»")
+        priority_text = v.get("priority", "")
+        flags = PRIORITY_FLAGS.get(priority_text.lower())
+        if flags is None:
+            flags = (0, 0)
+            notes.append(f"строка {line_no}: приоритет «{priority_text}» непонятен — обычный")
+        try:
+            due = parse_csv_date(v.get("due", ""))
+        except ValueError:
+            due = None
+            notes.append(f"строка {line_no}: срок «{v['due']}» непонятен — без срока")
+        remind = None
+        if due:
+            try:
+                remind = parse_csv_remind(v.get("remind", ""))
+            except ValueError:
+                notes.append(f"строка {line_no}: напоминание «{v['remind']}» непонятно — без напоминания")
+        try:
+            created = parse_csv_date(v.get("created", ""))
+        except ValueError:
+            created = None
+        tasks.append(dict(
+            title=title, body=v.get("body", ""), status_id=status_id,
+            due_at=due.strftime("%Y-%m-%d %H:%M") if due else None, remind_before=remind,
+            # если момент напоминания уже прошёл — не засыпаем пользователя напоминаниями
+            reminded=bool(due and remind is not None
+                          and due - timedelta(minutes=remind) <= datetime.now()),
+            urgent=flags[0], important=flags[1],
+            # дата создания хранится в базе по UTC
+            created_at=created.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if created else None,
+        ))
+    return tasks, notes
 
 
 def status_label(name, done, overdue=False):
@@ -839,9 +999,6 @@ class TotoroPanel(tk.Frame):
         if stats:
             c.create_text(cx, y2 + 16 + totoro_h + 8, text=stats, font=FONT_SMALL,
                           fill=MUTED, anchor="n", width=width - 2 * pad, justify="center")
-        c.create_text(cx, height - 12, text="ПКМ по задаче — меню · F1 — справка",
-                      font=("Segoe UI", 9), fill=DONE, anchor="s", width=width - 2 * pad,
-                      justify="center")
 
         if task_id is not None:
             c.tag_bind("task", "<Button-1>", lambda e: self.on_task_click(task_id))
@@ -1890,10 +2047,10 @@ class TodoApp:
             ttk.Radiobutton(filters, text=name, value=name, variable=self.filter,
                             style="Segment.TRadiobutton", command=self.refresh,
                             cursor="hand2").pack(side="left")
-        self.sort = ttk.Combobox(toolbar, values=SORTS, state="readonly", width=22, font=FONT_SMALL)
+        self.sort = ttk.Combobox(toolbar, values=SORTS, state="readonly", width=27, font=FONT_SMALL)
         self.sort.set(SORTS[0])
         self.sort.pack(side="right")
-        self.sort.bind("<<ComboboxSelected>>", lambda e: self.refresh())
+        self.sort.bind("<<ComboboxSelected>>", lambda e: self.sort_chosen())
         ttk.Label(toolbar, text="Сортировка:", style="Muted.TLabel").pack(side="right", padx=(0, 8))
         # Настройка карточек — только на доске
         self.card_fields = db.get_json_setting(self.conn, "card_fields", DEFAULT_CARD_FIELDS)
@@ -1944,9 +2101,15 @@ class TodoApp:
         # Ширину столбцов можно менять, потянув за разделитель в заголовке; она запоминается
         # («_v2»: ширины из прошлой версии не годятся — там «Задача» растягивалась на всё место)
         widths = db.get_json_setting(self.conn, "list_columns_v2", {})
+        self.column_titles = {key: text for key, (text, _, _) in columns.items()}
         for key, (text, width, stretch) in columns.items():
-            self.tree.heading(key, text=text, anchor="w")
+            # Щелчок по заголовку столбца сортирует по нему, повторный — в обратном порядке
+            self.tree.heading(key, text=text, anchor="w",
+                              command=lambda k=key: self.sort_by_column(k))
             self.tree.column(key, width=widths.get(key, width), minwidth=40, stretch=stretch)
+        # Сортировка по столбцу: [столбец, по убыванию ли] или None — тогда работает список «Сортировка»
+        self.column_sort = db.get_json_setting(self.conn, "list_sort", None)
+        self.show_column_sort()
         # Пока ширины не настраивали — «Задача» занимает всё свободное место таблицы
         self.columns_fitted = bool(widths)
         self.tree.bind("<Configure>", self.fit_columns, add="+")
@@ -2062,6 +2225,10 @@ class TodoApp:
         return (PopupMenu()
                 .command("Добавить колонку на доску…", self.add_lane)
                 .command("Поля карточек на доске…", self.choose_card_fields)
+                .separator()
+                .command("Экспорт задач в CSV…", self.export_csv)
+                .command("Импорт задач из CSV…", self.import_csv)
+                .command("Шаблон для импорта…", self.save_template)
                 .separator()
                 .command("Добавить примеры задач", self.add_examples)
                 .command("Удалить примеры задач", self.delete_examples))
@@ -2374,6 +2541,78 @@ class TodoApp:
             parent=self.root,
         )
 
+    # --- экспорт и импорт CSV ---
+
+    def ask_save_csv(self, title, name):
+        return filedialog.asksaveasfilename(
+            parent=self.root, title=title, initialfile=name, defaultextension=".csv",
+            filetypes=[("Таблица CSV", "*.csv"), ("Все файлы", "*.*")])
+
+    def save_file(self, path, header, rows):
+        try:
+            write_csv(path, header, rows)
+            return True
+        except OSError as error:
+            messagebox.showerror(APP_NAME, f"Не удалось сохранить файл:\n{error}\n\n"
+                                 "Если он открыт в Excel — закройте его и попробуйте снова.",
+                                 parent=self.root)
+            return False
+
+    def export_csv(self):
+        rows = export_rows(self.conn)
+        if not rows:
+            messagebox.showinfo(APP_NAME, "Задач пока нет — выгружать нечего.", parent=self.root)
+            return
+        path = self.ask_save_csv("Экспорт задач", f"{APP_NAME} задачи {date.today():%d.%m.%Y}.csv")
+        if path and self.save_file(path, CSV_COLUMNS, rows):
+            messagebox.showinfo(APP_NAME, f"Выгружено задач: {len(rows)}.\n\n{path}\n\n"
+                                "Файл открывается в Excel двойным щелчком.", parent=self.root)
+
+    def save_template(self):
+        path = self.ask_save_csv("Шаблон для импорта", f"{APP_NAME} шаблон импорта.csv")
+        if path and self.save_file(path, CSV_TEMPLATE_COLUMNS, template_rows()):
+            messagebox.showinfo(
+                APP_NAME,
+                f"Шаблон сохранён:\n{path}\n\n"
+                "Откройте его в Excel, замените строки-примеры своими задачами и сохраните "
+                "в том же формате (CSV). Затем: ☰ Меню → Импорт задач из CSV.\n\n"
+                "Обязателен только «Заголовок». Статус — название колонки доски. "
+                "Приоритет — «Срочно и важно», «Важно», «Срочно» или «Обычный». "
+                "Срок — «16.10.2026 18:00» или просто дата (тогда 09:00). "
+                "Напомнить — «за 15 минут», «за 1 час», «за 1 день» и т. п.",
+                parent=self.root)
+
+    def import_csv(self):
+        path = filedialog.askopenfilename(
+            parent=self.root, title="Импорт задач",
+            filetypes=[("Таблица CSV", "*.csv"), ("Все файлы", "*.*")])
+        if not path:
+            return
+        try:
+            tasks, notes = prepare_import(self.conn, read_csv(path))
+        except OSError as error:
+            messagebox.showerror(APP_NAME, f"Не удалось открыть файл:\n{error}", parent=self.root)
+            return
+        except (ValueError, csv.Error) as error:
+            messagebox.showerror(APP_NAME, f"Файл не подходит для импорта.\n\n{error}", parent=self.root)
+            return
+        if not tasks:
+            messagebox.showwarning(APP_NAME, "В файле не найдено ни одной задачи с заголовком.",
+                                   parent=self.root)
+            return
+        text = f"Добавить задач из файла: {len(tasks)}?\n\nУже имеющиеся задачи останутся, " \
+               "новые получат свои номера."
+        if notes:
+            shown = "\n".join("• " + n for n in notes[:8])
+            more = f"\n…и ещё замечаний: {len(notes) - 8}" if len(notes) > 8 else ""
+            text += f"\n\nЗамечания:\n{shown}{more}"
+        if not messagebox.askyesno("Импорт задач", text, parent=self.root):
+            return
+        db.import_tasks(self.conn, tasks)
+        self.filter.set("Все")
+        self.refresh()
+        messagebox.showinfo(APP_NAME, f"Добавлено задач: {len(tasks)}.", parent=self.root)
+
     def delete_examples(self):
         count = db.count_examples(self.conn)
         if not count:
@@ -2478,7 +2717,7 @@ class TodoApp:
 
         wanted = FILTERS[self.filter.get()]
         rows = [row for row in rows if wanted is None or bool(row[2]) == wanted]
-        rows.sort(key=self.sort_key)
+        rows = self.sort_rows(rows, statuses)
         now = datetime.now()
         overdue_ids = {r[0] for r in rows if r[4] and not r[2] and datetime.fromisoformat(r[4]) < now}
 
@@ -2515,6 +2754,57 @@ class TodoApp:
             self.select_task(select_id)
         self.update_buddy()
         self.update_side()
+
+    def sort_rows(self, rows, statuses):
+        """Сортировка по столбцу (щелчок по заголовку) или по списку «Сортировка».
+        При сортировке по столбцу пустые значения (нет срока, напоминания) всегда внизу."""
+        if not self.column_sort:
+            return sorted(rows, key=self.sort_key)
+        column, descending = self.column_sort
+        position = {s[0]: i for i, s in enumerate(statuses)}
+
+        def value(row):
+            task_id, title, done, _, due_at, remind_before, urgent, important, _, status_id = row
+            return {
+                "num": task_id,
+                "created": task_id,  # номера растут по порядку создания
+                "status": position.get(status_id, len(position)),
+                "title": title.casefold(),
+                "priority": priority_level(urgent, important),
+                "due": due_at,
+                "remind": remind_before if due_at else None,
+            }[column]
+
+        rows = sorted(rows, key=lambda r: r[0])
+        filled = sorted((r for r in rows if value(r) is not None), key=value, reverse=descending)
+        return filled + [r for r in rows if value(r) is None]
+
+    def sort_by_column(self, column):
+        if self.column_sort and self.column_sort[0] == column:
+            self.column_sort = [column, not self.column_sort[1]]
+        else:
+            self.column_sort = [column, False]
+        db.set_json_setting(self.conn, "list_sort", self.column_sort)
+        self.show_column_sort()
+        self.refresh(select_id=self.current_id())
+
+    def sort_chosen(self):
+        """Выбран вариант в списке «Сортировка» — сортировка по столбцу отменяется."""
+        self.column_sort = None
+        db.set_json_setting(self.conn, "list_sort", None)
+        self.show_column_sort()
+        self.refresh(select_id=self.current_id())
+
+    def show_column_sort(self):
+        """Стрелка ▲/▼ у заголовка столбца, по которому отсортировано, и подпись в списке."""
+        column, descending = self.column_sort or (None, False)
+        arrow = "▼" if descending else "▲"
+        for key, text in self.column_titles.items():
+            self.tree.heading(key, text=f"{text}  {arrow}" if key == column else text)
+        if column:
+            self.sort.set(f"По столбцу «{self.column_titles[column].capitalize()}» {arrow}")
+        elif self.sort.get() not in SORTS:
+            self.sort.set(SORTS[0])
 
     def sort_key(self, row):
         """Выполненные всегда внизу; дальше — по выбранной сортировке."""

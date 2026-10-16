@@ -330,6 +330,23 @@ def add_examples(conn, examples):
         )
 
 
+def import_tasks(conn, tasks):
+    """Добавляет задачи из файла (см. prepare_import в todoro.py). Номера им даются новые.
+    created_at=None — создана сейчас."""
+    is_done = {s[0]: s[3] for s in list_statuses(conn)}
+    with conn:
+        conn.executemany(
+            """
+            INSERT INTO tasks (title, body, status_id, done, due_at, remind_before, reminded,
+                               urgent, important, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
+            """,
+            [(t["title"], t["body"], t["status_id"], is_done[t["status_id"]], t["due_at"],
+              t["remind_before"], int(t["reminded"]), int(t["urgent"]), int(t["important"]),
+              t["created_at"]) for t in tasks],
+        )
+
+
 def delete_examples(conn):
     """Удаляет только примеры; задачи пользователя не трогает. Возвращает число удалённых."""
     with conn:
