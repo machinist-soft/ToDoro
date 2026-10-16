@@ -1,10 +1,23 @@
 """Работа с базой данных SQLite: здесь хранятся задачи."""
+import os
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
 # Файл базы лежит рядом с программой. Если его нет, SQLite создаст его сам.
-DB_PATH = Path(__file__).with_name("todo.db")
+DB_PATH = Path(__file__).with_name("todoro.db")
+OLD_DB_PATH = Path(__file__).with_name("todo.db")  # так база называлась в первых версиях
+
+
+def default_path():
+    """todoro.db; старый todo.db при первом запуске переименовывается.
+    Если старый файл сейчас занят (открыт другой копией программы) — работаем с ним."""
+    if not DB_PATH.exists() and OLD_DB_PATH.exists():
+        try:
+            os.replace(OLD_DB_PATH, DB_PATH)
+        except OSError:
+            return OLD_DB_PATH
+    return DB_PATH
 
 # Столбцы, которые появились в новых версиях программы.
 # В старую базу они добавляются автоматически, задачи при этом сохраняются.
@@ -28,8 +41,8 @@ DEFAULT_STATUSES = [
 ]
 
 
-def connect(path=DB_PATH):
-    conn = sqlite3.connect(path)
+def connect(path=None):
+    conn = sqlite3.connect(path or default_path())
     # Таблица tasks — это как лист Excel: каждая строка — одна задача.
     conn.execute(
         """

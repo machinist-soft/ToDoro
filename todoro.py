@@ -4,7 +4,11 @@ import ctypes
 import math
 import os
 import re
+import tempfile
+import time as time_module
 import tkinter as tk
+from email import policy as email_policy
+from email.message import EmailMessage
 from urllib.parse import quote
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -130,7 +134,10 @@ MONTHS = ["Январь", "Февраль", "Март", "Апрель", "Май"
 WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
 PLACEHOLDER = "Заголовок новой задачи… (Enter — добавить)"
-MAILTO_LIMIT = 2000  # длиннее ссылку «создать письмо» почтовые программы могут не принять
+# Длиннее ссылку «создать письмо» (mailto:) почтовые программы могут не принять:
+# Outlook ломался уже на ~1700 символах (русская буква в ссылке занимает 6 символов).
+MAILTO_LIMIT = 1000
+DRAFTS_DIR = Path(tempfile.gettempdir()) / APP_NAME  # временные черновики писем (.eml)
 
 
 def setup_style(root):
@@ -277,13 +284,13 @@ def short_text(text, limit=60):
     return text[:limit].rsplit(" ", 1)[0].rstrip(",.;:—-") + "…"
 
 
-def build_email(title, status, priority, due, remind, created, urgent, body=""):
+def build_email(number, title, status, priority, due, remind, created, urgent, body=""):
     """Тема и текст письма по задаче: в теме — заголовок, в тексте — описание и все поля."""
     subject = f"Задача из {APP_NAME}: {short_text(title)}"
     if urgent:
         subject = "СРОЧНО! " + subject
     level_hint = next((PRIORITY_HINTS[k] for k, v in PRIORITY_NAMES.items() if v and v == priority), "")
-    lines = [f"Задача: {title}", ""]
+    lines = [f"Задача #{number}: {title}", ""]
     if body.strip():
         lines += ["Описание:", *body.strip().splitlines(), ""]
     lines += [
@@ -297,6 +304,19 @@ def build_email(title, status, priority, due, remind, created, urgent, body=""):
         f"Отправлено из {APP_NAME}",
     ]
     return subject, "\r\n".join(lines)
+
+
+def write_draft(number, subject, body):
+    """Сохраняет черновик письма в файл .eml и возвращает путь к нему.
+    Заголовок X-Unsent: 1 говорит почтовой программе открыть его как новое письмо."""
+    message = EmailMessage(policy=email_policy.SMTP)
+    message["Subject"] = subject
+    message["X-Unsent"] = "1"
+    message.set_content(body.replace("\r\n", "\n"))
+    DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = DRAFTS_DIR / f"Задача {number}.eml"
+    path.write_bytes(message.as_bytes())
+    return str(path)
 
 
 def status_label(name, done, overdue=False):
@@ -1379,8 +1399,8 @@ class CatbusRun(tk.Toplevel):
     """
 
     KEY = "#f3f5fa"  # почти цвет фона — края рисунка на светлом интерфейсе не видны
-    HEIGHT = 112
-    DURATION = 1700  # мс
+    HEIGHT = 124
+    ENTER, STOP, LEAVE = 1500, 1700, 1300  # въезд, остановка, отъезд — в миллисекундах
 
     def __init__(self, root, text):
         super().__init__(root)
@@ -1402,8 +1422,8 @@ class CatbusRun(tk.Toplevel):
         self.canvas.pack()
         self.bus = self.canvas.create_image(-bus.width(), self.HEIGHT - 4, image=bus, anchor="sw")
         # табличка с названием задачи над Котобусом
-        label = f"✔ {short_text(text, 32)}"
-        self.sign_text = self.canvas.create_text(0, 0, text=label, font=FONT_SMALL, fill="#166534",
+        label = f"✔ Выполнено: {short_text(text, 40)}"
+        self.sign_text = self.canvas.create_text(0, 0, text=label, font=FONT_BOLD, fill="#166534",
                                                  anchor="s")
         x1, y1, x2, y2 = self.canvas.bbox(self.sign_text)
         self.sign_w, self.sign_h = x2 - x1 + 20, y2 - y1 + 8
@@ -1414,22 +1434,34 @@ class CatbusRun(tk.Toplevel):
         self.start = None
         self.after(16, self.step)
 
+    def position(self, ms):
+        """Где Котобус через ms миллисекунд: въезжает, стоит посередине, уезжает.
+        Возвращает (x, бежит ли сейчас)."""
+        middle = (self.width - self.bus_w) / 2
+        if ms < self.ENTER:                      # въезжает и плавно тормозит
+            t = ms / self.ENTER
+            return -self.bus_w + (1 - (1 - t) ** 2) * (middle + self.bus_w), True
+        ms -= self.ENTER
+        if ms < self.STOP:                       # стоит, чтобы табличку успели прочитать
+            return middle, False
+        t = min((ms - self.STOP) / self.LEAVE, 1.0)  # плавно разгоняется и уезжает
+        return middle + t * t * (self.width - middle + 40), True
+
     def step(self):
-        import time as _time
-        now = _time.perf_counter() * 1000
+        now = time_module.perf_counter() * 1000
         if self.start is None:
             self.start = now
-        t = min((now - self.start) / self.DURATION, 1.0)
-        eased = t * t * (3 - 2 * t)  # плавный разгон и торможение
-        x = -self.bus_w + eased * (self.width + self.bus_w + 40)
-        bounce = abs(math.sin(t * math.pi * 7)) * 3  # Котобус бежит вприпрыжку
+        elapsed = now - self.start
+        x, running = self.position(elapsed)
+        # бежит вприпрыжку, а стоя — чуть «дышит»
+        bounce = abs(math.sin(elapsed / 90)) * 3 if running else abs(math.sin(elapsed / 400)) * 1.5
         y = self.HEIGHT - 4 - bounce
         self.canvas.coords(self.bus, x, y)
         sx = x + self.bus_w / 2 - self.sign_w / 2
         sy = y - self.bus_h - 6
         self.canvas.coords(self.sign, *self.rect_points(sx, sy - self.sign_h, sx + self.sign_w, sy, 8))
         self.canvas.coords(self.sign_text, sx + self.sign_w / 2, sy - 4)
-        if t < 1.0:
+        if elapsed < self.ENTER + self.STOP + self.LEAVE:
             self.after(15, self.step)
         else:
             self.destroy()
@@ -1892,23 +1924,35 @@ class TodoApp:
         columns = {
             "num": ("№", 52, False),
             "status": ("СТАТУС", 125, False),
-            "title": ("ЗАДАЧА", 220, True),
+            "title": ("ЗАДАЧА", 220, False),
             "priority": ("ПРИОРИТЕТ", 130, False),
             "due": ("СРОК", 125, False),
             "remind": ("НАПОМНИТЬ", 105, False),
-            "created": ("СОЗДАНА", 125, False),
+            # Растягивается последний столбец: если бы растягивалась «Задача», Tk сразу
+            # возвращал бы ей всё свободное место и её ширину нельзя было бы изменить.
+            "created": ("СОЗДАНА", 125, True),
         }
         # Первый, узкий столбец (#0) — цветная метка приоритета.
+        self.hscroll = ttk.Scrollbar(inner, orient="horizontal")
         self.tree = ttk.Treeview(
             inner, columns=list(columns), show=("tree", "headings"),
             selectmode="browse", yscrollcommand=self.update_scrollbar,
+            xscrollcommand=self.update_hscroll,
         )
+        self.hscroll.configure(command=self.tree.xview)
         self.tree.column("#0", width=30, minwidth=30, stretch=False)
         # Ширину столбцов можно менять, потянув за разделитель в заголовке; она запоминается
-        widths = db.get_json_setting(self.conn, "list_columns", {})
+        # («_v2»: ширины из прошлой версии не годятся — там «Задача» растягивалась на всё место)
+        widths = db.get_json_setting(self.conn, "list_columns_v2", {})
         for key, (text, width, stretch) in columns.items():
             self.tree.heading(key, text=text, anchor="w")
             self.tree.column(key, width=widths.get(key, width), minwidth=40, stretch=stretch)
+        # Пока ширины не настраивали — «Задача» занимает всё свободное место таблицы
+        self.columns_fitted = bool(widths)
+        self.tree.bind("<Configure>", self.fit_columns, add="+")
+        self.resizing_column = False
+        self.tree.bind("<ButtonPress-1>", lambda e: setattr(
+            self, "resizing_column", self.tree.identify_region(e.x, e.y) == "separator"), add="+")
         self.tree.tag_configure("hover", background="#f6f8fc")
         self.hover_row = None
         self.tree.bind("<Motion>", self.tree_motion)
@@ -1972,10 +2016,21 @@ class TodoApp:
                 self.tree.item(item, tags=tags + (["hover"] if add else []))
         self.hover_row = row
 
+    def fit_columns(self, event):
+        if self.columns_fitted or event.width < 300:
+            return
+        others = sum(self.tree.column(c, "width") for c in self.tree["columns"] if c != "title")
+        free = event.width - others - self.tree.column("#0", "width") - 4
+        self.tree.column("title", width=max(free, 150))
+
     def save_column_widths(self, event=None):
+        if event is not None and not self.resizing_column:
+            return  # сохраняем только после того, как тянули разделитель в заголовке
+        self.resizing_column = False
+        self.columns_fitted = True
         widths = {key: self.tree.column(key, "width") for key in self.tree["columns"]}
-        if widths != db.get_json_setting(self.conn, "list_columns", {}):
-            db.set_json_setting(self.conn, "list_columns", widths)
+        if widths != db.get_json_setting(self.conn, "list_columns_v2", {}):
+            db.set_json_setting(self.conn, "list_columns_v2", widths)
 
     def show_main_widget(self):
         """Слева в разделителе — таблица или доска, справа — панель."""
@@ -2386,6 +2441,15 @@ class TodoApp:
 
     # --- таблица и доска ---
 
+    def update_hscroll(self, first, last):
+        """Горизонтальная прокрутка — если столбцы вместе шире таблицы."""
+        needed = not (float(first) <= 0 and float(last) >= 1)
+        if needed and not self.hscroll.winfo_ismapped():
+            self.hscroll.pack(side="bottom", fill="x", before=self.tree)
+        elif not needed and self.hscroll.winfo_ismapped():
+            self.hscroll.pack_forget()
+        self.hscroll.set(first, last)
+
     def update_scrollbar(self, first, last):
         """Полоса прокрутки видна, только если задачи не помещаются в окно."""
         needed = not (float(first) <= 0 and float(last) >= 1)
@@ -2653,9 +2717,16 @@ class TodoApp:
         if task is None:
             return
         info = self.task_info(task[0])
-        subject, body = build_email(info["title"], info["status_name"], info["priority"],
+        subject, body = build_email(task[0], info["title"], info["status_name"], info["priority"],
                                     info["due"], info["remind"], info["created"],
                                     info["urgent"], info["body"])
+        # Основной способ — черновик письма в файле .eml: Outlook открывает его как новое
+        # письмо, и длина текста не ограничена (в отличие от ссылки mailto:).
+        try:
+            os.startfile(write_draft(task[0], subject, body))
+            return
+        except OSError:
+            pass  # .eml открыть нечем — пробуем ссылку mailto:
         url = f"mailto:?subject={quote(subject, safe='')}&body={quote(body, safe='')}"
         too_long = len(url) > MAILTO_LIMIT
         if too_long:

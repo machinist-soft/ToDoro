@@ -1,4 +1,6 @@
 # База с задачами — это ваши данные, а не код
+todoro.db
+todoro.db-journal
 todo.db
 todo.db-journal
 
