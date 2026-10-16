@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-REPO = "amfilippov/ToDoro"
+REPO = "machinist-soft/ToDoro"
 PROJECT_URL = f"https://github.com/{REPO}"
 LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"

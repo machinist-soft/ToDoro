@@ -1,7 +1,7 @@
 # Что нового в ToDoro
 
 Здесь записано, что менялось от версии к версии. Новые записи — сверху.
-Скачать установщик любой версии: https://github.com/amfilippov/ToDoro/releases
+Скачать установщик любой версии: https://github.com/machinist-soft/ToDoro/releases
 
 ## Не выпущено
 

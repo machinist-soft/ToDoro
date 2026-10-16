@@ -3,7 +3,7 @@
 Простой список дел и канбан-доска для Windows с Тоторо-помощником.
 A simple to-do list and kanban board for Windows with a Totoro helper.
 
-**[⬇ Скачать установщик / Download](https://github.com/amfilippov/ToDoro/releases/latest)**
+**[⬇ Скачать установщик / Download](https://github.com/machinist-soft/ToDoro/releases/latest)**
 
 ![Список задач и Тоторо-помощник / Task list with the Totoro helper](docs/screenshots/list.png)
 
@@ -58,8 +58,8 @@ reminder.*
 
 ## Запуск / Running
 
-Проще всего — скачать установщик `ToDoro-Setup-*.exe` в разделе [Releases](https://github.com/amfilippov/ToDoro/releases).
-Easiest: download the installer from [Releases](https://github.com/amfilippov/ToDoro/releases).
+Проще всего — скачать установщик `ToDoro-Setup-*.exe` в разделе [Releases](https://github.com/machinist-soft/ToDoro/releases).
+Easiest: download the installer from [Releases](https://github.com/machinist-soft/ToDoro/releases).
 
 Из исходного кода нужен Python 3 с Tkinter / From source, requires Python 3 with Tkinter:
 
@@ -72,15 +72,15 @@ Tasks are stored in `%APPDATA%\ToDoro\todoro.db`.
 
 ## Нашли ошибку? / Found a bug?
 
-[Сообщите об ошибке](https://github.com/amfilippov/ToDoro/issues/new?template=bug_report.yml) или
-[предложите идею](https://github.com/amfilippov/ToDoro/issues/new?template=feature_request.yml) —
+[Сообщите об ошибке](https://github.com/machinist-soft/ToDoro/issues/new?template=bug_report.yml) или
+[предложите идею](https://github.com/machinist-soft/ToDoro/issues/new?template=feature_request.yml) —
 прямо из программы: **☰ Меню → Обратная связь**.
-*[Report a bug](https://github.com/amfilippov/ToDoro/issues/new?template=bug_report.yml) or
-[suggest a feature](https://github.com/amfilippov/ToDoro/issues/new?template=feature_request.yml).*
+*[Report a bug](https://github.com/machinist-soft/ToDoro/issues/new?template=bug_report.yml) or
+[suggest a feature](https://github.com/machinist-soft/ToDoro/issues/new?template=feature_request.yml).*
 
 ## Что нового / Release notes
 
-См. [RELEASE_NOTES.md](RELEASE_NOTES.md). Установщик — в разделе [Releases](https://github.com/amfilippov/ToDoro/releases).
+См. [RELEASE_NOTES.md](RELEASE_NOTES.md). Установщик — в разделе [Releases](https://github.com/machinist-soft/ToDoro/releases).
 
 ## Лицензия / License
 
