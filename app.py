@@ -565,6 +565,95 @@ class HelpWindow(tk.Toplevel):
                 text.insert("end", part, kind)
 
 
+def round_rect(canvas, x1, y1, x2, y2, r, **kw):
+    """Прямоугольник со скруглёнными углами на холсте."""
+    points = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
+              x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+    return canvas.create_polygon(points, smooth=True, **kw)
+
+
+class TotoroPanel(tk.Frame):
+    """Панель справа: большой Тоторо и облачко с подсказкой по задачам."""
+
+    WIDTH = 240
+    BUBBLE = {  # заливка и рамка облачка в зависимости от настроения
+        "normal": (BG, BORDER, TEXT),
+        "alert": ("#fdeeee", "#f3c4c4", DANGER),
+        "done": ("#eaf7ef", "#bfe5cc", "#15803d"),
+    }
+
+    def __init__(self, parent, on_task_click):
+        super().__init__(parent, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
+        self.on_task_click = on_task_click
+        self.canvas = tk.Canvas(self, width=self.WIDTH, bg=SURFACE, highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
+        self.canvas.bind("<Configure>", lambda e: self.draw())
+        self.message = ("", None, None, "", "normal", "")
+
+    def show(self, lead, task_title=None, task_id=None, tail="", mood="normal", stats=""):
+        message = (lead, task_title, task_id, tail, mood, stats)
+        if message != self.message:
+            self.message = message
+            self.draw()
+
+    def draw(self):
+        lead, task_title, task_id, tail, mood, stats = self.message
+        c = self.canvas
+        c.delete("all")
+        width, height = c.winfo_width(), c.winfo_height()
+        if width < 50:
+            return
+        fill, outline, task_color = self.BUBBLE[mood]
+        pad, inner = 16, 14
+        text_width = width - 2 * (pad + inner)
+        cx = width // 2
+
+        # Тексты облачка (сначала рисуем их, чтобы узнать высоту)
+        y = 0
+        items = []
+        for text, font, color, tags in (
+            (lead, FONT_SMALL, MUTED, ()),
+            (f"«{short_text(task_title, 70)}»" if task_title else "", FONT_BOLD, task_color, ("task",)),
+            (tail, FONT_SMALL, TEXT, ()),
+        ):
+            if not text:
+                continue
+            item = c.create_text(cx, y, text=text, font=font, fill=color, width=text_width,
+                                 justify="center", anchor="n", tags=tags)
+            x1, y1, x2, y2 = c.bbox(item)
+            items.append(item)
+            y = y2 + 6
+        bubble_h = y - 6 + 2 * inner
+
+        totoro = IMAGES.get("totoro")
+        totoro_h = totoro.height() if totoro else 0
+        stats_h = 24 if stats else 0
+        total = bubble_h + 16 + totoro_h + stats_h
+        top = max(pad, (height - total) // 2)
+
+        # Облачко с «хвостиком» вниз, к Тоторо
+        for item in items:
+            c.move(item, 0, top + inner)
+        y2 = top + bubble_h
+        bubble = round_rect(c, pad, top, width - pad, y2, 16, fill=fill, outline=outline)
+        tail_poly = c.create_polygon(cx - 10, y2 - 1, cx + 10, y2 - 1, cx, y2 + 14,
+                                     fill=fill, outline=outline)
+        joint = c.create_line(cx - 9, y2, cx + 9, y2, fill=fill, width=2)
+        for shape in (joint, tail_poly, bubble):
+            c.tag_lower(shape)
+
+        if totoro:
+            c.create_image(cx, y2 + 16, image=totoro, anchor="n")
+        if stats:
+            c.create_text(cx, y2 + 16 + totoro_h + 8, text=stats, font=FONT_SMALL,
+                          fill=MUTED, anchor="n", width=width - 2 * pad, justify="center")
+
+        if task_id is not None:
+            c.tag_bind("task", "<Button-1>", lambda e: self.on_task_click(task_id))
+            c.tag_bind("task", "<Enter>", lambda e: c.configure(cursor="hand2"))
+            c.tag_bind("task", "<Leave>", lambda e: c.configure(cursor=""))
+
+
 class TodoApp:
     def __init__(self, root):
         self.root = root
@@ -576,7 +665,7 @@ class TodoApp:
             root.iconbitmap(default=str(ICON_PATH))  # иконка для всех окон программы
         setup_style(root)
         load_images()
-        center_on_screen(root, 1000, 640)
+        center_on_screen(root, 1240, 660)
         root.minsize(820, 440)
 
         page = ttk.Frame(root, padding=(24, 14, 24, 20))
@@ -588,10 +677,8 @@ class TodoApp:
         ttk.Label(header, text=APP_NAME, style="Title.TLabel").pack(side="left", anchor="s")
         self.counter = ttk.Label(header, style="Muted.TLabel")
         self.counter.pack(side="left", padx=(14, 0), pady=(0, 6), anchor="s")
-        if "totoro_small" in IMAGES:
-            ttk.Label(header, image=IMAGES["totoro_small"]).pack(side="right")
         ttk.Button(header, text="?  Справка", command=self.show_help).pack(
-            side="right", padx=(0, 14), anchor="s", pady=(0, 4))
+            side="right", anchor="s", pady=(0, 4))
         more = ttk.Menubutton(header, text="☰  Ещё", style="TMenubutton", cursor="hand2")
         more_menu = tk.Menu(more, tearoff=0)
         more_menu.add_command(label="Добавить примеры задач", command=self.add_examples)
@@ -640,19 +727,27 @@ class TodoApp:
         ttk.Label(bottom, text="ПКМ — меню · F1 — справка",
                   style="Muted.TLabel").pack(side="right", padx=(0, 14))
 
-        # Карточка с таблицей задач
-        card = tk.Frame(page, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
+        # Середина окна: таблица задач и панель с Тоторо справа
+        content = ttk.Frame(page)
+        content.pack(fill="both", expand=True)
+        self.totoro_panel = TotoroPanel(content, on_task_click=self.reveal_task)
+        self.totoro_panel.pack(side="right", fill="y", padx=(12, 0))
+        # В узком окне панель прячется, чтобы не теснить таблицу
+        content.bind("<Configure>", self.fit_totoro_panel)
+
+        card = tk.Frame(content, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
         card.pack(fill="both", expand=True)
+        self.card = card
         inner = ttk.Frame(card, style="Card.TFrame", padding=(6, 4, 4, 6))
         inner.pack(fill="both", expand=True)
         self.scrollbar = ttk.Scrollbar(inner, orient="vertical")
         columns = {
-            "status": ("СТАТУС", 140, False),
-            "title": ("ЗАДАЧА", 230, True),
-            "priority": ("ПРИОРИТЕТ", 140, False),
-            "due": ("СРОК", 135, False),
-            "remind": ("НАПОМНИТЬ", 110, False),
-            "created": ("СОЗДАНА", 135, False),
+            "status": ("СТАТУС", 135, False),
+            "title": ("ЗАДАЧА", 250, True),
+            "priority": ("ПРИОРИТЕТ", 135, False),
+            "due": ("СРОК", 130, False),
+            "remind": ("НАПОМНИТЬ", 105, False),
+            "created": ("СОЗДАНА", 130, False),
         }
         # Первый, узкий столбец (#0) — цветная метка приоритета.
         self.tree = ttk.Treeview(
@@ -670,8 +765,7 @@ class TodoApp:
         self.tree.tag_configure("normal", foreground=TEXT)
         self.tree.pack(side="left", fill="both", expand=True)
         self.scrollbar.config(command=self.tree.yview)
-        self.empty = ttk.Label(inner, style="Empty.TLabel", compound="top",
-                               image=IMAGES.get("totoro", ""), justify="center")
+        self.empty = ttk.Label(inner, style="Empty.TLabel", justify="center")
         self.tree.bind("<Double-Button-1>", lambda e: self.edit())
         self.tree.bind("<F2>", lambda e: self.edit())
         self.tree.bind("<space>", lambda e: self.toggle())
@@ -690,6 +784,65 @@ class TodoApp:
         self.show_placeholder()
         self.entry.focus()
         root.after(1000, self.check_reminders)
+
+    # --- Тоторо-помощник ---
+
+    def fit_totoro_panel(self, event):
+        wide_enough = event.width >= 1000
+        shown = self.totoro_panel.winfo_ismapped()
+        if wide_enough and not shown:
+            self.totoro_panel.pack(side="right", fill="y", padx=(12, 0), before=self.card)
+        elif not wide_enough and shown:
+            self.totoro_panel.pack_forget()
+
+    def update_buddy(self):
+        """Выбирает, что скажет Тоторо: о просроченной задаче, о задачах на сегодня и т. д."""
+        now = datetime.now()
+        rows = db.list_tasks(self.conn)
+        active = [r for r in rows if not r[2]]
+        due = {r[0]: datetime.fromisoformat(r[4]) for r in active if r[4]}
+        overdue = [r for r in active if r[0] in due and due[r[0]] < now]
+        today = [r for r in active if r[0] in due and now <= due[r[0]] and due[r[0]].date() == now.date()]
+
+        def most_important(tasks):
+            return min(tasks, key=lambda r: (priority_level(r[6], r[7]), due.get(r[0], datetime.max), r[0]))
+
+        stats = " · ".join(text for count, text in (
+            (len(overdue), f"просрочено: {len(overdue)}"),
+            (len(today), f"на сегодня: {len(today)}"),
+        ) if count)
+
+        panel = self.totoro_panel
+        if not rows:
+            panel.show("Привет! Я Тоторо.", tail="Добавь первую задачу — я присмотрю за ней.")
+        elif overdue:
+            task = most_important(overdue)
+            more = f" И ещё просрочено: {len(overdue) - 1}." if len(overdue) > 1 else ""
+            panel.show("Ой! Срок уже прошёл:", task[1], task[0],
+                       "Давай сделаем её первой?" + more, "alert", stats)
+        elif today:
+            task = min(today, key=lambda r: due[r[0]])
+            more = f" Всего на сегодня: {len(today)}." if len(today) > 1 else ""
+            panel.show("Сегодня срок:", task[1], task[0],
+                       f"до {due[task[0]].strftime('%H:%M')}." + more, "normal", stats)
+        elif active:
+            task = most_important(active)
+            panel.show("Начни с самого важного:", task[1], task[0],
+                       f"В работе задач: {len(active)}. Ты справишься!", "normal", stats)
+        else:
+            panel.show("Все задачи выполнены!",
+                       tail="Можно отдохнуть под камфорным деревом.", mood="done")
+
+    def reveal_task(self, task_id):
+        """Щелчок по задаче в облачке: показать и выделить её в таблице."""
+        if not self.tree.exists(str(task_id)):
+            self.filter.set("Все")
+            self.refresh()
+        if self.tree.exists(str(task_id)):
+            self.tree.selection_set(str(task_id))
+            self.tree.see(str(task_id))
+            self.tree.focus(str(task_id))
+            self.tree.focus_set()
 
     def add_examples(self):
         """Добавляет примеры задач; старые примеры при этом заменяются свежими."""
@@ -826,6 +979,7 @@ class TodoApp:
         if select_id is not None and self.tree.exists(str(select_id)):
             self.tree.selection_set(str(select_id))
             self.tree.see(str(select_id))
+        self.update_buddy()
 
     def sort_key(self, row):
         """Выполненные всегда внизу; дальше — по выбранной сортировке."""
@@ -1022,6 +1176,7 @@ class TodoApp:
     def check_reminders(self):
         """Раз в 30 секунд проверяет, не пора ли о чём-то напомнить."""
         self.mark_overdue()
+        self.update_buddy()
         due = db.due_reminders(self.conn)
         if due:
             for task_id, _, _ in due:
