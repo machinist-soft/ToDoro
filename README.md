@@ -52,6 +52,11 @@ reminder.*
 
 ![Окно обновления / Update dialog](docs/screenshots/update.png)
 
+**Совместная работа** — несколько списков задач (личные и общие для команды в сетевой папке),
+автор и исполнитель задачи, «Мои задачи», защита от затирания чужих правок.
+*Teamwork: several task lists (personal and shared via a network folder), author and assignee,
+“My tasks”, protection against overwriting others’ edits.*
+
 А ещё: экспорт и импорт задач в CSV (Excel), сортировка по столбцам, напоминания, письмо по задаче,
 подробная справка (F1).
 *Also: CSV export / import (Excel), column sorting, reminders, e-mail a task, built-in help (F1).*
