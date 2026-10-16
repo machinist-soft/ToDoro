@@ -42,7 +42,11 @@ NEW_COLUMNS = [
     ("status_id", "INTEGER"),                       # колонка доски (таблица statuses)
     ("done_at", "TEXT"),                            # когда задачу выполнили (для «сегодня выполнено»)
     ("created_by", "TEXT"),                         # кто создал (в общих списках — имя участника)
-]
+    ("assignee", "TEXT"),                           # исполнитель (в общих списках)
+    ("updated_by", "TEXT"),                         # кто изменил последним
+    ("updated_at", "TEXT"),                         # когда изменили последний раз (местное время)
+    ("version", "INTEGER NOT NULL DEFAULT 0"),      # растёт при каждом изменении — чтобы заметить,
+]                                                   # что задачу поменял кто-то другой
 
 # Статусы по умолчанию: (название, цвет, «задачи здесь выполнены»)
 DEFAULT_STATUSES = [
@@ -134,13 +138,13 @@ def set_status_color(conn, status_id, color):
         conn.execute("UPDATE statuses SET color = ? WHERE id = ?", (color, status_id))
 
 
-def set_status_done(conn, status_id, is_done):
+def set_status_done(conn, status_id, is_done, by=None):
     """Отметить колонку как «выполненную» (или нет) — вместе со всеми её задачами."""
     with conn:
         conn.execute("UPDATE statuses SET is_done = ? WHERE id = ?", (int(is_done), status_id))
         conn.execute(
-            f"UPDATE tasks SET done = ?, done_at = {DONE_AT_SQL} WHERE status_id = ?",
-            (int(is_done), int(is_done), status_id),
+            f"UPDATE tasks SET done = ?, done_at = {DONE_AT_SQL}, {TOUCH_SQL} WHERE status_id = ?",
+            (int(is_done), int(is_done), by, status_id),
         )
 
 
@@ -163,12 +167,12 @@ def move_status(conn, status_id, step):
                              [(pos, sid) for pos, sid in enumerate(ids)])
 
 
-def delete_status(conn, status_id, move_to):
+def delete_status(conn, status_id, move_to, by=None):
     """Удаляет колонку; её задачи переносятся в колонку move_to."""
     with conn:
         done = conn.execute("SELECT is_done FROM statuses WHERE id = ?", (move_to,)).fetchone()[0]
-        conn.execute(f"UPDATE tasks SET status_id = ?, done = ?, done_at = {DONE_AT_SQL} "
-                     "WHERE status_id = ?", (move_to, done, done, status_id))
+        conn.execute(f"UPDATE tasks SET status_id = ?, done = ?, done_at = {DONE_AT_SQL}, {TOUCH_SQL} "
+                     "WHERE status_id = ?", (move_to, done, done, by, status_id))
         conn.execute("DELETE FROM statuses WHERE id = ?", (status_id,))
 
 
@@ -182,16 +186,20 @@ def count_in_status(conn, status_id):
 DONE_AT_SQL = ("CASE WHEN ? = 0 THEN NULL WHEN done = 1 THEN done_at "
                "ELSE strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime') END")
 
+# Отметка «изменено»: номер версии +1, время и кто изменил (параметр — имя или None)
+TOUCH_SQL = ("version = version + 1, updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'), "
+             "updated_by = ?")
 
-def set_task_status(conn, task_id, status_id):
+
+def set_task_status(conn, task_id, status_id, by=None):
     """Переносит задачу в колонку; «выполнена» ли она — решает колонка.
     Возвращает True, если задача только что стала выполненной."""
     is_done = conn.execute("SELECT is_done FROM statuses WHERE id = ?", (status_id,)).fetchone()[0]
     was_done = conn.execute("SELECT done FROM tasks WHERE id = ?", (task_id,)).fetchone()[0]
     with conn:
         conn.execute(
-            f"UPDATE tasks SET status_id = ?, done = ?, done_at = {DONE_AT_SQL} WHERE id = ?",
-            (status_id, is_done, is_done, task_id),
+            f"UPDATE tasks SET status_id = ?, done = ?, done_at = {DONE_AT_SQL}, {TOUCH_SQL} WHERE id = ?",
+            (status_id, is_done, is_done, by, task_id),
         )
     return bool(is_done and not was_done)
 
@@ -257,32 +265,61 @@ def add_task(conn, title, status_id=None, created_by=None):
 
 
 def update_task(conn, task_id, title, due_at, remind_before, urgent=False, important=False,
-                body=None):
+                body=None, by=None, version=None):
+    """version — номер версии задачи, с которым открыли форму: если задачу с тех пор кто-то
+    изменил, ничего не сохраняется и возвращается False (иначе True)."""
     # Если изменился срок или напоминание — напомнить нужно заново.
     # («IS» вместо «=» правильно сравнивает и пустые значения NULL.)
     # body=None — описание не трогаем.
     with conn:
-        conn.execute(
-            """
+        cur = conn.execute(
+            f"""
             UPDATE tasks SET
                 reminded = CASE WHEN due_at IS ? AND remind_before IS ? THEN reminded ELSE 0 END,
                 title = ?, due_at = ?, remind_before = ?, urgent = ?, important = ?,
-                body = COALESCE(?, body)
-            WHERE id = ?
+                body = COALESCE(?, body), {TOUCH_SQL}
+            WHERE id = ? AND (? IS NULL OR version = ?)
             """,
             (due_at, remind_before, title, due_at, remind_before,
-             int(urgent), int(important), body, task_id),
+             int(urgent), int(important), body, by, task_id, version, version),
         )
+    return cur.rowcount > 0
 
 
-def set_done(conn, task_id, done):
+def set_done(conn, task_id, done, by=None):
     """Отметить выполненной — перенести в первую «выполненную» колонку, снять отметку —
     в первую невыполненную. Возвращает False, если подходящей колонки нет."""
     status_id = first_status(conn, done)
     if status_id is None:
         return False
-    set_task_status(conn, task_id, status_id)
+    set_task_status(conn, task_id, status_id, by)
     return True
+
+
+def set_assignee(conn, task_id, assignee, by=None):
+    """Назначить исполнителя (None — снять)."""
+    with conn:
+        conn.execute(f"UPDATE tasks SET assignee = ?, {TOUCH_SQL} WHERE id = ?", (assignee, by, task_id))
+
+
+def task_meta(conn, task_id):
+    """Кто создал, исполнитель, кто и когда изменил, номер версии — или None, если задачи нет."""
+    row = conn.execute("SELECT created_by, assignee, updated_by, updated_at, version FROM tasks "
+                       "WHERE id = ?", (task_id,)).fetchone()
+    if row is None:
+        return None
+    return dict(zip(("author", "assignee", "updated_by", "updated_at", "version"), row))
+
+
+def task_assignees(conn):
+    """{id задачи: исполнитель} — там, где исполнитель назначен."""
+    return dict(conn.execute("SELECT id, assignee FROM tasks WHERE assignee IS NOT NULL AND assignee <> ''"))
+
+
+def assigned_to(conn, user):
+    """Невыполненные задачи, назначенные на user: [(id, title, кто назначил/изменил)]."""
+    return conn.execute("SELECT id, title, updated_by FROM tasks WHERE done = 0 AND assignee = ?",
+                        (user,)).fetchall()
 
 
 def get_json_setting(conn, key, default):
@@ -350,12 +387,12 @@ def import_tasks(conn, tasks, created_by=None):
         conn.executemany(
             """
             INSERT INTO tasks (title, body, status_id, done, due_at, remind_before, reminded,
-                               urgent, important, created_at, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?)
+                               urgent, important, created_at, created_by, assignee)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?)
             """,
             [(t["title"], t["body"], t["status_id"], is_done[t["status_id"]], t["due_at"],
               t["remind_before"], int(t["reminded"]), int(t["urgent"]), int(t["important"]),
-              t["created_at"], t.get("created_by") or created_by) for t in tasks],
+              t["created_at"], t.get("created_by") or created_by, t.get("assignee")) for t in tasks],
         )
 
 
@@ -390,12 +427,12 @@ def move_task_to(src, task_id, dst):
     (выполненную задачу — в «выполненную» колонку). Возвращает id задачи в новом списке."""
     row = src.execute(
         """SELECT t.title, t.body, t.done, t.created_at, t.due_at, t.remind_before, t.reminded,
-                  t.urgent, t.important, t.done_at, s.name, t.created_by
+                  t.urgent, t.important, t.done_at, s.name, t.created_by, t.assignee
            FROM tasks t LEFT JOIN statuses s ON s.id = t.status_id WHERE t.id = ?""",
         (task_id,),
     ).fetchone()
     (title, body, done, created, due_at, remind_before, reminded, urgent, important, done_at, status,
-     created_by) = row
+     created_by, assignee) = row
     same = [sid for sid, name, _, is_done in list_statuses(dst)
             if name.strip().lower() == (status or "").strip().lower() and is_done == done]
     status_id = same[0] if same else first_status(dst, done)
@@ -405,10 +442,10 @@ def move_task_to(src, task_id, dst):
     with dst:
         new_id = dst.execute(
             """INSERT INTO tasks (title, body, done, created_at, due_at, remind_before, reminded,
-                                  urgent, important, done_at, status_id, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  urgent, important, done_at, status_id, created_by, assignee)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (title, body, is_done, created, due_at, remind_before, reminded, urgent, important,
-             done_at if is_done else None, status_id, created_by),
+             done_at if is_done else None, status_id, created_by, assignee),
         ).lastrowid
     delete_task(src, task_id)
     return new_id
@@ -448,14 +485,16 @@ def due_reminders(conn, now=None):
 
 
 def shared_reminders(conn, user, now=None):
-    """Напоминания в общем списке: о невыполненных задачах, которые создал user.
+    """Напоминания в общем списке: о задачах, где user — исполнитель (или автор, если
+    исполнителя нет).
     Флаг reminded в общем файле не трогаем (он один на всех) — кому уже напомнили, программа
     помнит у себя. Возвращает [(ключ, id, title, due_at), ...]; ключ меняется вместе со сроком."""
     now = now or datetime.now()
     rows = conn.execute(
         """
         SELECT id, title, due_at, remind_before FROM tasks
-        WHERE done = 0 AND due_at IS NOT NULL AND remind_before IS NOT NULL AND created_by = ?
+        WHERE done = 0 AND due_at IS NOT NULL AND remind_before IS NOT NULL
+          AND COALESCE(NULLIF(assignee, ''), created_by) = ?
         """, (user,),
     ).fetchall()
     return [

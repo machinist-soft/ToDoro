@@ -245,6 +245,14 @@ def setup_style(root):
               background=[("selected", SURFACE), ("active", "#dde3ee")],
               foreground=[("selected", ACCENT), ("active", TEXT)])
     style.configure("Segments.TFrame", background=SEGMENT_BG)
+    style.layout("Segment.TCheckbutton", [
+        ("Checkbutton.padding", {"sticky": "nswe", "children": [
+            ("Checkbutton.label", {"sticky": "nswe"})]})])
+    style.configure("Segment.TCheckbutton", background=SEGMENT_BG, foreground=MUTED,
+                    padding=(14, 5), font=FONT_SMALL, anchor="center")
+    style.map("Segment.TCheckbutton",
+              background=[("selected", SURFACE), ("active", "#dde3ee")],
+              foreground=[("selected", ACCENT), ("active", TEXT)])
 
     # Таблица задач
     style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
@@ -298,7 +306,8 @@ def short_text(text, limit=60):
     return text[:limit].rsplit(" ", 1)[0].rstrip(",.;:—-") + "…"
 
 
-def build_email(number, title, status, priority, due, remind, created, urgent, body="", author=""):
+def build_email(number, title, status, priority, due, remind, created, urgent, body="", author="",
+                assignee=""):
     """Тема и текст письма по задаче: в теме — заголовок, в тексте — описание и все поля."""
     subject = f"Задача из {APP_NAME}: {short_text(title)}"
     if urgent:
@@ -313,6 +322,7 @@ def build_email(number, title, status, priority, due, remind, created, urgent, b
         f"Срок: {due or 'не задан'}",
         f"Напоминание: {remind or 'нет'}",
         f"Создана: {created}" + (f" (автор: {author})" if author else ""),
+        *([f"Исполнитель: {assignee}"] if assignee else []),
         "",
         "—",
         f"Отправлено из {APP_NAME}",
@@ -339,7 +349,7 @@ def write_draft(number, subject, body):
 # (в ней сохраняет CSV русский Excel).
 
 CSV_COLUMNS = ["№", "Заголовок", "Описание", "Статус", "Приоритет", "Срок", "Напомнить", "Создана",
-               "Автор"]
+               "Автор", "Исполнитель"]
 CSV_TEMPLATE_COLUMNS = ["Заголовок", "Описание", "Статус", "Приоритет", "Срок", "Напомнить"]
 CSV_ALIASES = {  # заголовок столбца в файле (строчными) -> поле
     "№": "num", "номер": "num",
@@ -351,6 +361,7 @@ CSV_ALIASES = {  # заголовок столбца в файле (строчн
     "напомнить": "remind", "напоминание": "remind",
     "создана": "created",
     "автор": "author",
+    "исполнитель": "assignee",
 }
 PRIORITY_FLAGS = {"срочно и важно": (1, 1), "важно": (0, 1), "срочно": (1, 0),
                   "обычный": (0, 0), "обычная": (0, 0), "": (0, 0)}
@@ -396,7 +407,7 @@ def write_csv(path, header, rows):
 def export_rows(conn):
     """Все задачи в виде строк CSV (в порядке номеров)."""
     statuses = {sid: name for sid, name, _, _ in db.list_statuses(conn)}
-    authors = db.task_authors(conn)
+    authors, assignees = db.task_authors(conn), db.task_assignees(conn)
     rows = []
     for task_id, title, done, created, due_at, remind_before, urgent, important, body, status_id \
             in db.list_tasks(conn):
@@ -405,7 +416,8 @@ def export_rows(conn):
             remind = ""
         rows.append([task_id, title, body, statuses.get(status_id, ""),
                      PRIORITY_NAMES[priority_level(urgent, important)] or "Обычный",
-                     format_due(due_at), remind, created, authors.get(task_id, "")])
+                     format_due(due_at), remind, created, authors.get(task_id, ""),
+                     assignees.get(task_id, "")])
     return rows
 
 
@@ -492,6 +504,7 @@ def prepare_import(conn, records):
             # дата создания хранится в базе по UTC
             created_at=created.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if created else None,
             created_by=v.get("author") or None,
+            assignee=v.get("assignee") or None,
         ))
     return tasks, notes
 
@@ -629,10 +642,11 @@ class TaskForm(ttk.Frame):
     on_save получает словарь с новыми значениями, on_cancel вызывается при отмене.
     """
 
-    def __init__(self, parent, task, statuses, on_save, on_cancel, compact=False):
+    def __init__(self, parent, task, statuses, on_save, on_cancel, compact=False, members=None):
         super().__init__(parent, style="Card.TFrame" if compact else "TFrame")
         self.on_save, self.on_cancel = on_save, on_cancel
         self.statuses = statuses  # [(id, название, цвет, выполнено)]
+        self.members = members    # участники общего списка; None — личный список, исполнителя нет
         style_bg = SURFACE if compact else BG
         label_style = "CardMuted.TLabel" if compact else "Muted.TLabel"
 
@@ -665,6 +679,15 @@ class TaskForm(ttk.Frame):
         self.status.pack(fill="x" if compact else None, anchor="w")
         current = next((s[1] for s in statuses if s[0] == task["status_id"]), statuses[0][1])
         self.status.set(current)
+
+        self.assignee = None
+        if members is not None:
+            label("Исполнитель")
+            names = sorted(set(members) | ({task.get("assignee")} - {None, ""}), key=str.casefold)
+            self.assignee = ttk.Combobox(self, values=["— не назначен —"] + names, state="readonly",
+                                         width=1 if compact else 24, font=FONT)
+            self.assignee.pack(fill="x" if compact else None, anchor="w")
+            self.assignee.set(task.get("assignee") or "— не назначен —")
 
         due = datetime.fromisoformat(task["due_at"]) if task["due_at"] else None
         label("Срок выполнения")
@@ -762,10 +785,13 @@ class TaskForm(ttk.Frame):
             due = datetime.combine(self.date.value, time(int(self.hour.get()), int(self.minute.get())))
             due_at = due.strftime("%Y-%m-%d %H:%M")
         status_id = next(s[0] for s in self.statuses if s[1] == self.status.get())
+        assignee = None
+        if self.assignee is not None and self.assignee.get() != "— не назначен —":
+            assignee = self.assignee.get()
         return dict(title=self.title_entry.get().strip(), body=self.desc.get("1.0", "end-1c").strip(),
                     status_id=status_id, due_at=due_at,
                     remind_before=REMIND_OPTIONS.get(self.remind.get()),
-                    urgent=self.urgent.get(), important=self.important.get())
+                    urgent=self.urgent.get(), important=self.important.get(), assignee=assignee)
 
     def dirty(self):
         """Есть ли несохранённые изменения."""
@@ -785,14 +811,15 @@ class TaskForm(ttk.Frame):
 class TaskDialog(tk.Toplevel):
     """Запасное окно с формой задачи — когда правая панель скрыта (узкое окно)."""
 
-    def __init__(self, parent, task, statuses):
+    def __init__(self, parent, task, statuses, members=None):
         super().__init__(parent)
         self.result = None
         self.title("Задача")
         self.configure(bg=BG)
         self.resizable(False, False)
         self.transient(parent)
-        self.form = TaskForm(self, task, statuses, on_save=self.saved, on_cancel=self.destroy)
+        self.form = TaskForm(self, task, statuses, on_save=self.saved, on_cancel=self.destroy,
+                             members=members)
         self.form.configure(padding=(20, 18, 20, 18))
         self.form.pack(fill="both")
         center_on_screen(self)
@@ -801,6 +828,7 @@ class TaskDialog(tk.Toplevel):
 
     def saved(self, result):
         self.result = result
+        self.form_initial = self.form.initial
         self.destroy()
 
 
@@ -1084,7 +1112,8 @@ class TaskCard(tk.Frame):
         self.values = {}
         self.captions = {}
         for row, (key, label) in enumerate((("due", "Срок"), ("remind", "Напомнить"),
-                                            ("created", "Создана"), ("author", "Автор"))):
+                                            ("created", "Создана"), ("author", "Автор"),
+                                            ("assignee", "Исполнитель"), ("updated", "Изменена"))):
             caption = tk.Label(self.fields, text=label, bg=SURFACE, fg=MUTED, font=FONT_SMALL)
             caption.grid(row=row, column=0, sticky="w", pady=1)
             value = tk.Label(self.fields, bg=SURFACE, fg=TEXT, font=FONT_SMALL)
@@ -1115,9 +1144,9 @@ class TaskCard(tk.Frame):
         self.body_scroll.set(first, last)
 
     def show(self, number, title, body, status, status_color, overdue, done, priority_level_,
-             priority_name, due, remind, created, author=""):
+             priority_name, due, remind, created, author="", assignee="", updated=""):
         shown = (number, title, body, status, status_color, overdue, done, priority_level_,
-                 priority_name, due, remind, created, author)
+                 priority_name, due, remind, created, author, assignee, updated)
         if shown == getattr(self, "shown", None):
             return  # ничего не изменилось — не трогаем, чтобы не сбросить прокрутку описания
         self.shown = shown
@@ -1141,10 +1170,11 @@ class TaskCard(tk.Frame):
         self.values["due"].configure(text=due or "не задан", fg=DANGER if overdue else TEXT)
         self.values["remind"].configure(text=remind or "нет")
         self.values["created"].configure(text=created)
-        # автор известен только в общих списках — в личных строку не показываем
-        self.values["author"].configure(text=author)
-        for widget in (self.values["author"], self.captions["author"]):
-            widget.grid() if author else widget.grid_remove()
+        # автор, исполнитель и «кто изменил» есть только в общих списках — в личных строк нет
+        for key, value in (("author", author), ("assignee", assignee), ("updated", updated)):
+            self.values[key].configure(text=value)
+            for widget in (self.values[key], self.captions[key]):
+                widget.grid() if value else widget.grid_remove()
 
 
 class ScrollArea(tk.Frame):
@@ -1218,7 +1248,7 @@ class SidePanel(tk.Frame):
         self.card.show(**task)
         self.switch("task", self.card)
 
-    def show_form(self, task, statuses, on_save, on_cancel):
+    def show_form(self, task, statuses, on_save, on_cancel, members=None):
         """Форма изменения задачи прямо в панели."""
         if self.editor is not None:
             self.editor.destroy()
@@ -1231,7 +1261,8 @@ class SidePanel(tk.Frame):
         close = tk.Label(head, text="✕", bg=SURFACE, fg=MUTED, font=FONT, cursor="hand2")
         close.pack(side="right")
         close.bind("<Button-1>", lambda e: on_cancel())
-        self.form = TaskForm(self.editor.inner, task, statuses, on_save, on_cancel, compact=True)
+        self.form = TaskForm(self.editor.inner, task, statuses, on_save, on_cancel, compact=True,
+                             members=members)
         self.form.pack(fill="x", padx=18, pady=(0, 16))
         self.editor.bind_wheel()
         self.switch("edit", self.editor)
@@ -1574,6 +1605,37 @@ class ModernDialog(tk.Toplevel):
         raise NotImplementedError
 
 
+class ConflictDialog(ModernDialog):
+    """Задачу изменил другой участник, пока вы её правили: чей вариант оставить?"""
+
+    def __init__(self, parent, title, who, when, changed, can_return):
+        super().__init__(parent, "Задачу изменили", "Задачу уже изменили", "Сохранить мой вариант")
+        what = ", ".join(changed) if changed else "задачу"
+        text = (f"Пока вы правили «{title}», {who}{' в ' + when if when else ''} изменил(а): "
+                f"{what}.\n\n«Сохранить мой вариант» — ваши правки запишутся поверх.\n"
+                f"«Оставить вариант {who}» — ваши правки не сохранятся.")
+        if can_return:
+            text += "\n«Вернуться к правке» — продолжить редактировать (форма останется открытой)."
+        tk.Label(self.content, text=text, bg=SURFACE, fg=TEXT, font=FONT_SMALL, justify="left",
+                 wraplength=440).pack(anchor="w")
+        # кнопки: [Вернуться] [Оставить их] ... [Сохранить мой] (последняя — из ModernDialog)
+        buttons = self.content.master.winfo_children()[-1]
+        cancel = [w for w in buttons.winfo_children() if isinstance(w, ttk.Button)][-1]
+        cancel.configure(text=f"Оставить вариант {who}", command=self.theirs)
+        if can_return:
+            ttk.Button(buttons, text="Вернуться к правке", style="Soft.TButton",
+                       command=self.destroy).pack(side="right", padx=(0, 8))
+        self.result = "back" if can_return else "theirs"
+
+    def ok(self):
+        self.result = "mine"
+        self.destroy()
+
+    def theirs(self):
+        self.result = "theirs"
+        self.destroy()
+
+
 class LaneDialog(ModernDialog):
     """Создание или настройка колонки доски: название, цвет, «задачи здесь выполнены»."""
 
@@ -1651,8 +1713,9 @@ CARD_FIELDS = {
     "remind": "Напоминание",
     "created": "Дата создания",
     "author": "Автор (в общих списках)",
+    "assignee": "Исполнитель (в общих списках)",
 }
-DEFAULT_CARD_FIELDS = ["number", "priority", "body", "due", "author"]
+DEFAULT_CARD_FIELDS = ["number", "priority", "body", "due", "author", "assignee"]
 
 
 class Toggle(tk.Canvas):
@@ -1823,7 +1886,8 @@ class SettingsDialog(tk.Toplevel):
         card.pack_configure(fill="none")
         for i, (key, label) in enumerate(CARD_FIELDS.items()):
             control = self.row(card, label.replace(" (в общих списках)", ""),
-                               "только в общих списках" if key == "author" else "", first=i == 0)
+                               "только в общих списках" if key in ("author", "assignee") else "",
+                               first=i == 0)
             Toggle(control, self.fields[key], command=self.update_preview).pack()
         # Образец карточки справа — сразу видно, как будет выглядеть
         side = tk.Frame(columns, bg=BG)
@@ -1858,6 +1922,8 @@ class SettingsDialog(tk.Toplevel):
         extra = [text for key, text in (("due", "срок 17.10 18:00"), ("remind", "напомнить за 1 час"),
                                         ("created", "создана 16.10"), ("author", "автор Мария"))
                  if key in on]
+        if "assignee" in on:
+            extra.insert(0, "исполнитель Олег")
         if extra:
             tk.Label(inner, text="\n".join(extra), bg=SURFACE, fg=MUTED, font=("Segoe UI", 9),
                      justify="left").pack(anchor="w", pady=(6, 0))
@@ -2432,6 +2498,8 @@ class KanbanBoard(tk.Frame):
             extra.append("напомнить " + REMIND_LABELS.get(remind_before, f"за {remind_before} мин"))
         if "created" in fields:
             extra.append("создана " + created[:5])
+        if "assignee" in fields and self.app.assignees.get(task_id):
+            extra.insert(0, "исполнитель " + self.app.assignees[task_id])
         if "author" in fields and self.app.authors.get(task_id):
             extra.append("автор " + self.app.authors[task_id])
         if extra:
@@ -2624,7 +2692,8 @@ class TodoApp:
         self.load_lists()
         self.list_id = db.get_setting(self.prefs, "current_list", db.PERSONAL)
         self.watch = None  # «отпечаток» открытого общего списка — чтобы заметить чужие изменения
-        self.authors = {}  # id задачи -> кто создал (в общих списках)
+        self.authors = {}    # id задачи -> кто создал (в общих списках)
+        self.assignees = {}  # id задачи -> исполнитель (в общих списках)
         try:
             self.conn = self.list_conn(self.list_id)
             db.list_statuses(self.conn)
@@ -2698,17 +2767,25 @@ class TodoApp:
                                      cursor="hand2")
             button.pack(side="left")
         self.overdue_button = button  # последняя кнопка; на ней — число просроченных задач
+        # «Мои задачи» — только назначенные на меня (виден в общих списках)
+        self.only_mine = tk.BooleanVar(value=False)
+        self.mine_frame = ttk.Frame(toolbar, style="Segments.TFrame", padding=3)
+        ttk.Checkbutton(self.mine_frame, text="Мои задачи", variable=self.only_mine,
+                        style="Segment.TCheckbutton", command=self.refresh,
+                        cursor="hand2").pack(side="left")
+        self.filters_frame = filters
         self.sort = ttk.Combobox(toolbar, values=SORTS, state="readonly", width=27, font=FONT_SMALL)
         self.sort.set(SORTS[0])
         self.sort.pack(side="right")
         self.sort.bind("<<ComboboxSelected>>", lambda e: self.sort_chosen())
         ttk.Label(toolbar, text="Сортировка:", style="Muted.TLabel").pack(side="right", padx=(0, 8))
         self.card_fields = db.get_json_setting(self.prefs, "card_fields", DEFAULT_CARD_FIELDS)
-        if not db.get_setting(self.prefs, "card_author_added"):  # поле «Автор» появилось в 1.5 —
-            if "author" not in self.card_fields:                  # включаем его один раз
-                self.card_fields.append("author")
-                db.set_json_setting(self.prefs, "card_fields", self.card_fields)
-            db.set_setting(self.prefs, "card_author_added", "1")
+        for key in ("author", "assignee"):  # поля появились в 1.5 — включаем их один раз
+            if not db.get_setting(self.prefs, f"card_{key}_added"):
+                if key not in self.card_fields:
+                    self.card_fields.append(key)
+                    db.set_json_setting(self.prefs, "card_fields", self.card_fields)
+                db.set_setting(self.prefs, f"card_{key}_added", "1")
         self.toolbar = toolbar
 
         # Середина окна: таблица или доска, справа — Тоторо, карточка или форма задачи.
@@ -2740,7 +2817,8 @@ class TodoApp:
             "remind": ("НАПОМНИТЬ", 105, False),
             # Растягивается последний столбец: если бы растягивалась «Задача», Tk сразу
             # возвращал бы ей всё свободное место и её ширину нельзя было бы изменить.
-            "author": ("АВТОР", 110, False),  # виден только в общих списках
+            "assignee": ("ИСПОЛНИТЕЛЬ", 120, False),  # виден только в общих списках
+            "author": ("АВТОР", 110, False),          # тоже
             "created": ("СОЗДАНА", 125, True),
         }
         # Первый, узкий столбец (#0) — цветная метка приоритета.
@@ -3071,21 +3149,70 @@ class TodoApp:
 
     def form_data(self, task_id):
         title, due_at, remind_before, urgent, important, body = db.get_task(self.conn, task_id)
+        meta = db.task_meta(self.conn, task_id)
         return dict(title=title, due_at=due_at, remind_before=remind_before, urgent=urgent,
-                    important=important, body=body, status_id=self.task_info(task_id)["status_id"])
+                    important=important, body=body, status_id=self.task_info(task_id)["status_id"],
+                    assignee=meta["assignee"], version=meta["version"])
 
-    def apply_edit(self, task_id, result, refresh=True):
-        db.update_task(self.conn, task_id, result["title"], result["due_at"], result["remind_before"],
-                       result["urgent"], result["important"], result["body"])
+    def apply_edit(self, task_id, result, refresh=True, version=None):
+        """Сохраняет правку. version — номер версии на момент открытия формы (в общих списках):
+        если задачу с тех пор изменил кто-то другой, ничего не сохраняет и возвращает False."""
+        by = self.created_by()
+        if not db.update_task(self.conn, task_id, result["title"], result["due_at"],
+                              result["remind_before"], result["urgent"], result["important"],
+                              result["body"], by=by, version=version):
+            return False
+        if self.members() is not None and result.get("assignee") != (db.task_meta(self.conn, task_id) or {}).get("assignee"):
+            db.set_assignee(self.conn, task_id, result.get("assignee"), by=by)
         if result["status_id"] != self.task_info(task_id)["status_id"]:
-            if db.set_task_status(self.conn, task_id, result["status_id"]):
+            if db.set_task_status(self.conn, task_id, result["status_id"], by=by):
                 self.celebrate(task_id)
         if refresh:
             self.refresh(select_id=task_id)
+        return True
 
     def save_edit(self, task_id, result):
-        self.editing = None
-        self.apply_edit(task_id, result)
+        form = self.side.form
+        version = self.edit_version if self.created_by() else None
+        if self.apply_edit(task_id, result, refresh=False, version=version):
+            self.editing = None
+            self.refresh(select_id=task_id)
+            return
+        choice = self.resolve_conflict(task_id, result, form.initial if form else None, can_return=True)
+        if choice == "mine":
+            self.editing = None
+            self.apply_edit(task_id, result)
+        elif choice == "theirs":
+            self.editing = None
+            self.refresh(select_id=task_id)
+        else:  # вернуться к правке; следующее «Сохранить» запишет поверх
+            meta = db.task_meta(self.conn, task_id)
+            if meta is None:
+                self.editing = None
+                self.refresh()
+            else:
+                self.edit_version = meta["version"]
+
+    CHANGED_NAMES = {"title": "заголовок", "body": "описание", "status_id": "статус",
+                     "due_at": "срок", "remind_before": "напоминание", "urgent": "«срочно»",
+                     "important": "«важно»", "assignee": "исполнителя"}
+
+    def resolve_conflict(self, task_id, mine, initial, can_return):
+        """Задачу, которую вы правили, тем временем изменил другой участник.
+        Возвращает "mine" (сохранить мой вариант), "theirs" (оставить их) или "back"."""
+        meta = db.task_meta(self.conn, task_id)
+        if meta is None:
+            messagebox.showwarning(APP_NAME, "Пока вы правили задачу, её удалил другой участник. "
+                                   "Ваши изменения не сохранены.", parent=self.root)
+            return "theirs"
+        now = self.form_data(task_id)
+        changed = [name for key, name in self.CHANGED_NAMES.items()
+                   if initial is not None and (now.get(key) or None) != (initial.get(key) or None)
+                   and not (key in ("urgent", "important") and bool(now.get(key)) == bool(initial.get(key)))]
+        who = meta.get("updated_by") or "другой участник"
+        when = datetime.fromisoformat(meta["updated_at"]).strftime("%H:%M") if meta.get("updated_at") else ""
+        return ConflictDialog(self.root, short_text(mine["title"], 60), who, when, changed,
+                              can_return).show()
 
     def cancel_edit(self):
         self.editing = None
@@ -3107,7 +3234,10 @@ class TodoApp:
         if messagebox.askyesno("Сохранить изменения?",
                                f"В задаче «{short_text(result['title'], 50)}» есть несохранённые "
                                "изменения. Сохранить их?", parent=self.root):
-            self.apply_edit(task_id, result, refresh=False)
+            version = self.edit_version if self.created_by() else None
+            if not self.apply_edit(task_id, result, refresh=False, version=version):
+                if self.resolve_conflict(task_id, result, form.initial, can_return=False) == "mine":
+                    self.apply_edit(task_id, result, refresh=False)
             self.root.after_idle(lambda: self.refresh(select_id=self.current_id()))
 
     def task_info(self, task_id):
@@ -3123,8 +3253,18 @@ class TodoApp:
         return dict(title=title, body=body, done=bool(done), overdue=overdue, status_id=status_id,
                     status=status_label(name, done, overdue), status_name=name, status_color=color,
                     level=level, priority=PRIORITY_NAMES[level], due=format_due(due_at),
-                    remind=remind, created=created, urgent=urgent,
-                    author=db.task_authors(self.conn).get(task_id, ""))
+                    remind=remind, created=created, urgent=urgent, **self.people(task_id))
+
+    def people(self, task_id):
+        """Автор, исполнитель и «кто когда изменил» — для карточки и письма."""
+        meta = db.task_meta(self.conn, task_id) or {}
+        shared = bool(self.list_id and self.current_list()["shared"])
+        updated = ""
+        if shared and meta.get("updated_by"):
+            when = datetime.fromisoformat(meta["updated_at"]).strftime("%d.%m %H:%M")
+            updated = f"{when}, {meta['updated_by']}"
+        return dict(author=meta.get("author") or "", assignee=meta.get("assignee") or "",
+                    updated=updated, shared=shared)
 
     def update_side(self):
         """Выбрана задача — показываем её карточку, иначе — Тоторо.
@@ -3144,6 +3284,8 @@ class TodoApp:
             overdue=info["overdue"], done=info["done"],
             priority_level_=info["level"], priority_name=info["priority"],
             due=info["due"], remind=info["remind"], created=info["created"], author=info["author"],
+            assignee=info["assignee"] or ("не назначен" if info["shared"] else ""),
+            updated=info["updated"],
         )
 
     def update_buddy(self):
@@ -3206,7 +3348,7 @@ class TodoApp:
             return
         status_id = db.add_status(self.conn, result["name"], result["color"])
         if result["is_done"]:
-            db.set_status_done(self.conn, status_id, True)
+            db.set_status_done(self.conn, status_id, True, by=self.created_by())
         if self.view.get() != "board":
             self.view.set("board")
             self.switch_view()
@@ -3221,7 +3363,7 @@ class TodoApp:
         db.rename_status(self.conn, status_id, result["name"])
         db.set_status_color(self.conn, status_id, result["color"])
         if result["is_done"] != is_done:
-            db.set_status_done(self.conn, status_id, result["is_done"])
+            db.set_status_done(self.conn, status_id, result["is_done"], by=self.created_by())
         self.refresh(select_id=self.current_id())
 
     def lane_menu(self, status_id, x, y):
@@ -3268,12 +3410,12 @@ class TodoApp:
                  if count else "")
         if messagebox.askyesno("Удалить колонку?", f"Удалить колонку «{name}»?{moved}",
                                icon="warning", default="no", parent=self.root):
-            db.delete_status(self.conn, status_id, target)
+            db.delete_status(self.conn, status_id, target, by=self.created_by())
             self.refresh(select_id=self.current_id())
 
     def move_task(self, task_id, status_id):
         self.finish_editing()
-        if db.set_task_status(self.conn, task_id, status_id):
+        if db.set_task_status(self.conn, task_id, status_id, by=self.created_by()):
             self.celebrate(task_id)
         self.refresh(select_id=task_id)
 
@@ -3470,11 +3612,14 @@ class TodoApp:
         self.statuses = {sid: (name, color, bool(done)) for sid, name, color, done in statuses}
         rows = db.list_tasks(self.conn)
         self.authors = db.task_authors(self.conn)
-        # столбец «Автор» — только в общих списках (в личном автор всегда вы)
-        columns = list(self.tree["columns"])
-        if not (self.list_id and self.current_list()["shared"]):
-            columns.remove("author")
+        self.assignees = db.task_assignees(self.conn)
+        shared = bool(self.list_id and self.current_list()["shared"])
+        # столбцы «Исполнитель» и «Автор» — только в общих списках (в личном всё ваше)
+        columns = [c for c in self.tree["columns"] if shared or c not in ("assignee", "author")]
         self.tree["displaycolumns"] = columns
+        if shared and self.only_mine.get():
+            me = self.user_name()
+            rows = [r for r in rows if self.assignees.get(r[0]) == me]
         active = sum(1 for row in rows if not row[2])
         self.chips["active"].configure(text=f"активных  {active}")
         self.chips["done"].configure(text=f"выполнено  {len(rows) - active}")
@@ -3505,7 +3650,8 @@ class TodoApp:
             self.tree.insert(
                 "", "end", iid=iid, image=IMAGES.get(f"priority_{level}", ""),
                 values=(f"#{task_id}", status_label(name, done), title, PRIORITY_NAMES[level],
-                        format_due(due_at), remind, self.authors.get(task_id, ""), created),
+                        format_due(due_at), remind, self.assignees.get(task_id, ""),
+                        self.authors.get(task_id, ""), created),
                 tags=("done",) if done else ("normal",),
             )
             if due_at and not done:
@@ -3515,7 +3661,8 @@ class TodoApp:
         if self.tree.get_children():
             self.empty.place_forget()
         else:
-            self.empty.configure(text=EMPTY_TEXT[self.filter.get()])
+            self.empty.configure(text="На вас пока ничего не назначено" if shared and self.only_mine.get()
+                                 else EMPTY_TEXT[self.filter.get()])
             self.empty.place(relx=0.5, rely=0.5, anchor="center")
 
         if self.view.get() == "board":
@@ -3549,6 +3696,7 @@ class TodoApp:
                 "num": task_id,
                 "created": task_id,  # номера растут по порядку создания
                 "author": (self.authors.get(task_id) or "").casefold() or None,
+                "assignee": (self.assignees.get(task_id) or "").casefold() or None,
                 "status": position.get(status_id, len(position)),
                 "title": title.casefold(),
                 "priority": priority_level(urgent, important),
@@ -3646,15 +3794,22 @@ class TodoApp:
                 return
             self.finish_editing()
             self.editing = task_id
-            self.side.show_form(self.form_data(task_id), statuses,
+            data = self.form_data(task_id)
+            self.edit_version = data["version"]
+            self.side.show_form(data, statuses,
                                 on_save=lambda result: self.save_edit(task_id, result),
-                                on_cancel=self.cancel_edit)
+                                on_cancel=self.cancel_edit, members=self.members())
             return
         # Окно узкое и панель скрыта — открываем форму в отдельном окне
-        dialog = TaskDialog(self.root, self.form_data(task_id), statuses)
+        data = self.form_data(task_id)
+        dialog = TaskDialog(self.root, data, statuses, members=self.members())
         self.root.wait_window(dialog)
         if dialog.result:
-            self.apply_edit(task_id, dialog.result)
+            version = data["version"] if self.created_by() else None
+            if not self.apply_edit(task_id, dialog.result, version=version):
+                if self.resolve_conflict(task_id, dialog.result, dialog.form_initial, False) == "mine":
+                    self.apply_edit(task_id, dialog.result)
+                self.refresh(select_id=task_id)
 
     def toggle(self):
         task = self.selected()
@@ -3662,7 +3817,7 @@ class TodoApp:
             return
         self.finish_editing()
         task_id, done = task[0], self.task_info(task[0])["done"]
-        if not db.set_done(self.conn, task_id, not done):
+        if not db.set_done(self.conn, task_id, not done, by=self.created_by()):
             messagebox.showinfo(
                 APP_NAME,
                 "На доске нет колонки, куда можно перенести задачу.\n\n"
@@ -3740,6 +3895,16 @@ class TodoApp:
             remind.command(label, lambda m=minutes: self.quick_remind(task_id, m),
                            checked=minutes == remind_before)
 
+        people = None
+        if self.members() is not None:
+            current = self.assignees.get(task_id)
+            people = PopupMenu()
+            for name in self.members():
+                people.command(name + ("  (я)" if name == self.user_name() else ""),
+                               lambda n=name: self.quick_assignee(task_id, n), checked=name == current)
+            people.separator()
+            people.command("Не назначен", lambda: self.quick_assignee(task_id, None), checked=not current)
+
         lists = PopupMenu()
         for item in self.lists:
             if item["id"] != self.list_id:
@@ -3750,6 +3915,7 @@ class TodoApp:
                 .command("Вернуть в работу" if info["done"] else "Отметить выполненной",
                          self.toggle, accel="Пробел")
                 .submenu("Статус", statuses, icon=swatch(info["status_color"]))
+                .submenu("Исполнитель", people or PopupMenu(), enabled=people is not None)
                 .separator()
                 .submenu("Приоритет", priority,
                          icon=IMAGES.get(f"priority_{info['level']}"))
@@ -3772,19 +3938,27 @@ class TodoApp:
         else:
             old = datetime.fromisoformat(due_at).time() if due_at else time(*map(int, DEFAULT_TIME))
             due_at = datetime.combine(date.today() + timedelta(days=days), old).strftime("%Y-%m-%d %H:%M")
-        db.update_task(self.conn, task_id, title, due_at, remind_before, urgent, important)
+        db.update_task(self.conn, task_id, title, due_at, remind_before, urgent, important,
+                       by=self.created_by())
+        self.refresh(select_id=task_id)
+
+    def quick_assignee(self, task_id, name):
+        self.finish_editing()
+        db.set_assignee(self.conn, task_id, name, by=self.created_by())
         self.refresh(select_id=task_id)
 
     def quick_remind(self, task_id, minutes):
         self.finish_editing()
         title, due_at, _, urgent, important, _ = db.get_task(self.conn, task_id)
-        db.update_task(self.conn, task_id, title, due_at, minutes, urgent, important)
+        db.update_task(self.conn, task_id, title, due_at, minutes, urgent, important,
+                       by=self.created_by())
         self.refresh(select_id=task_id)
 
     def quick_priority(self, task_id, urgent, important):
         self.finish_editing()
         title, due_at, remind_before, _, _, _ = db.get_task(self.conn, task_id)
-        db.update_task(self.conn, task_id, title, due_at, remind_before, urgent, important)
+        db.update_task(self.conn, task_id, title, due_at, remind_before, urgent, important,
+                       by=self.created_by())
         self.refresh(select_id=task_id)
 
     def copy_text(self, text):
@@ -3799,7 +3973,7 @@ class TodoApp:
         info = self.task_info(task[0])
         subject, body = build_email(task[0], info["title"], info["status_name"], info["priority"],
                                     info["due"], info["remind"], info["created"],
-                                    info["urgent"], info["body"], info["author"])
+                                    info["urgent"], info["body"], info["author"], info["assignee"])
         # Основной способ — черновик письма в файле .eml: Outlook открывает его как новое
         # письмо, и длина текста не ограничена (в отличие от ссылки mailto:).
         try:
@@ -3864,6 +4038,7 @@ class TodoApp:
                 continue  # общая папка сейчас недоступна — напомним, когда появится связь
         if lines:
             db.set_json_setting(self.prefs, "shared_reminded", sorted(reminded)[-500:])
+        self.check_assigned()
         if lines:
             # Показываем окно поверх всех остальных, даже если оно было свёрнуто.
             self.root.deiconify()
@@ -3926,11 +4101,28 @@ class TodoApp:
         return next(i for i in self.lists if i["id"] == self.list_id)
 
     def created_by(self):
-        """Кто создаёт задачу: в общем списке — имя участника, в личном — никто."""
-        return self.user_name() if self.current_list()["shared"] else None
+        """Кто создаёт или меняет задачу: в общем списке — имя участника, в личном — никто."""
+        return self.user_name() if self.list_id and self.current_list()["shared"] else None
+
+    def members(self):
+        """Участники для выбора исполнителя (None — личный список)."""
+        if not (self.list_id and self.current_list()["shared"]):
+            return None
+        names = set(self.assignees.values()) | {self.user_name()}
+        try:
+            names |= set(self.team.members()) if self.team else set()
+        except sqlite3.Error:
+            pass
+        return sorted(names, key=str.casefold)
 
     def show_list_name(self):
         item = self.current_list()
+        # «Мои задачи» имеет смысл только в общем списке
+        if item["shared"]:
+            self.mine_frame.pack(side="left", padx=(12, 0), after=self.filters_frame)
+        else:
+            self.mine_frame.pack_forget()
+            self.only_mine.set(False)
         mark = "  · общий" if item["shared"] else ""
         self.list_button.configure(text=f"{item['name']}{mark}  ▾")
         self.root.title(f"{APP_NAME} — {item['name']}{' (общий)' if item['shared'] else ''}")
@@ -4053,6 +4245,35 @@ class TodoApp:
         self.clear_selection()
         self.refresh()
         self.side.totoro.show(f"Задача перенесена в список «{target['name']}».", mood="done")
+
+    def check_assigned(self):
+        """Кто-то назначил на меня задачу в общем списке — сообщаем (один раз на задачу).
+        Задачи, которые были назначены до первого подключения к списку, не показываем."""
+        known = set(db.get_json_setting(self.prefs, "known_assigned", []))
+        seen_lists = set(db.get_json_setting(self.prefs, "assigned_seen_lists", []))
+        me, lines, now_known = self.user_name(), [], set()
+        for item in [i for i in self.lists if i["shared"]]:
+            try:
+                tasks = db.assigned_to(self.list_conn(item["id"]), me)
+            except (sqlite3.Error, StopIteration):
+                now_known |= {k for k in known if k.startswith(item["id"] + "|")}
+                continue
+            for task_id, title, by in tasks:
+                key = f"{item['id']}|{task_id}"
+                now_known.add(key)
+                if key not in known and item["id"] in seen_lists and by and by != me:
+                    lines.append(f"• {title} — назначил(а) {by}  (список «{item['name']}»)")
+            seen_lists.add(item["id"])
+        if now_known != known:
+            db.set_json_setting(self.prefs, "known_assigned", sorted(now_known))
+        db.set_json_setting(self.prefs, "assigned_seen_lists", sorted(seen_lists))
+        if lines:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.bell()
+            messagebox.showinfo("Вам назначены задачи", "\n".join(lines), parent=self.root)
+            if self.list_id and self.current_list()["shared"]:
+                self.refresh(select_id=self.current_id())
 
     def on_error(self, kind, error, trace):
         """Ошибка во время работы. Если пропала связь с общей папкой — объясняем и открываем
