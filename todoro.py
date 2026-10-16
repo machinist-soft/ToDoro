@@ -1089,6 +1089,11 @@ class TaskCard(tk.Frame):
 
     def show(self, number, title, body, status, status_color, overdue, done, priority_level_,
              priority_name, due, remind, created):
+        shown = (number, title, body, status, status_color, overdue, done, priority_level_,
+                 priority_name, due, remind, created)
+        if shown == getattr(self, "shown", None):
+            return  # ничего не изменилось — не трогаем, чтобы не сбросить прокрутку описания
+        self.shown = shown
         self.number.configure(text=f"#{number}")
         self.toggle_button.configure(text="↺  Вернуть в работу" if done else "✔  Выполнено")
         self.priority.configure(
@@ -2934,6 +2939,15 @@ class TodoApp:
             self.select_task(select_id)
         self.update_buddy()
         self.update_side()
+        self.shown_state = self.time_state()
+
+    def time_state(self):
+        """То, что меняется само по себе, со временем: какие задачи уже просрочены и какой
+        сегодня день (счётчик «сегодня»). Если это не изменилось, перерисовывать нечего."""
+        now = datetime.now()
+        overdue = frozenset(r[0] for r in db.list_tasks(self.conn, done=False)
+                            if r[4] and datetime.fromisoformat(r[4]) < now)
+        return overdue, date.today()
 
     def sort_rows(self, rows, statuses):
         """Сортировка по столбцу (щелчок по заголовку) или по списку «Сортировка».
@@ -3005,8 +3019,11 @@ class TodoApp:
         for iid, due in self.due.items():
             if self.tree.exists(iid):
                 overdue = due < now
-                self.tree.item(iid, tags=("overdue",) if overdue else ("normal",))
-                self.tree.set(iid, "status", status_label(self.row_status[iid], False, overdue))
+                tags = self.tree.item(iid, "tags")
+                wanted = "overdue" if overdue else "normal"
+                if wanted not in tags:  # меняем только то, что изменилось; подсветка под мышью остаётся
+                    self.tree.item(iid, tags=[wanted] + (["hover"] if "hover" in tags else []))
+                    self.tree.set(iid, "status", status_label(self.row_status[iid], False, overdue))
 
     def selected(self):
         """Возвращает (id, выполнена ли) выбранной задачи или None."""
@@ -3226,9 +3243,10 @@ class TodoApp:
 
     def check_reminders(self):
         """Раз в 30 секунд проверяет, не пора ли о чём-то напомнить."""
-        self.mark_overdue()
-        if self.view.get() == "board" and not self.board.drag:
-            self.refresh(select_id=self.current_id())  # обновить красные сроки на карточках
+        # Перерисовываем, только если какая-то задача стала просроченной или наступил новый день:
+        # иначе доска и список «вздрагивали» бы каждые 30 секунд
+        if self.time_state() != self.shown_state and not self.board.drag:
+            self.refresh(select_id=self.current_id())
         self.update_buddy()
         self.update_side()
         due = db.due_reminders(self.conn)
