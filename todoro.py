@@ -298,7 +298,7 @@ def short_text(text, limit=60):
     return text[:limit].rsplit(" ", 1)[0].rstrip(",.;:—-") + "…"
 
 
-def build_email(number, title, status, priority, due, remind, created, urgent, body=""):
+def build_email(number, title, status, priority, due, remind, created, urgent, body="", author=""):
     """Тема и текст письма по задаче: в теме — заголовок, в тексте — описание и все поля."""
     subject = f"Задача из {APP_NAME}: {short_text(title)}"
     if urgent:
@@ -312,7 +312,7 @@ def build_email(number, title, status, priority, due, remind, created, urgent, b
         f"Приоритет: {priority} — {level_hint}" if priority else "Приоритет: обычный",
         f"Срок: {due or 'не задан'}",
         f"Напоминание: {remind or 'нет'}",
-        f"Создана: {created}",
+        f"Создана: {created}" + (f" (автор: {author})" if author else ""),
         "",
         "—",
         f"Отправлено из {APP_NAME}",
@@ -338,7 +338,8 @@ def write_draft(number, subject, body):
 # двойным щелчком без «кракозябр». При импорте понимаем и «,», и кодировку Windows-1251
 # (в ней сохраняет CSV русский Excel).
 
-CSV_COLUMNS = ["№", "Заголовок", "Описание", "Статус", "Приоритет", "Срок", "Напомнить", "Создана"]
+CSV_COLUMNS = ["№", "Заголовок", "Описание", "Статус", "Приоритет", "Срок", "Напомнить", "Создана",
+               "Автор"]
 CSV_TEMPLATE_COLUMNS = ["Заголовок", "Описание", "Статус", "Приоритет", "Срок", "Напомнить"]
 CSV_ALIASES = {  # заголовок столбца в файле (строчными) -> поле
     "№": "num", "номер": "num",
@@ -349,6 +350,7 @@ CSV_ALIASES = {  # заголовок столбца в файле (строчн
     "срок": "due",
     "напомнить": "remind", "напоминание": "remind",
     "создана": "created",
+    "автор": "author",
 }
 PRIORITY_FLAGS = {"срочно и важно": (1, 1), "важно": (0, 1), "срочно": (1, 0),
                   "обычный": (0, 0), "обычная": (0, 0), "": (0, 0)}
@@ -394,6 +396,7 @@ def write_csv(path, header, rows):
 def export_rows(conn):
     """Все задачи в виде строк CSV (в порядке номеров)."""
     statuses = {sid: name for sid, name, _, _ in db.list_statuses(conn)}
+    authors = db.task_authors(conn)
     rows = []
     for task_id, title, done, created, due_at, remind_before, urgent, important, body, status_id \
             in db.list_tasks(conn):
@@ -402,7 +405,7 @@ def export_rows(conn):
             remind = ""
         rows.append([task_id, title, body, statuses.get(status_id, ""),
                      PRIORITY_NAMES[priority_level(urgent, important)] or "Обычный",
-                     format_due(due_at), remind, created])
+                     format_due(due_at), remind, created, authors.get(task_id, "")])
     return rows
 
 
@@ -488,6 +491,7 @@ def prepare_import(conn, records):
             urgent=flags[0], important=flags[1],
             # дата создания хранится в базе по UTC
             created_at=created.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if created else None,
+            created_by=v.get("author") or None,
         ))
     return tasks, notes
 
@@ -1078,13 +1082,14 @@ class TaskCard(tk.Frame):
         self.fields = tk.Frame(self, bg=SURFACE)
         self.fields.pack(side="bottom", fill="x")
         self.values = {}
+        self.captions = {}
         for row, (key, label) in enumerate((("due", "Срок"), ("remind", "Напомнить"),
-                                            ("created", "Создана"))):
-            tk.Label(self.fields, text=label, bg=SURFACE, fg=MUTED, font=FONT_SMALL).grid(
-                row=row, column=0, sticky="w", pady=1)
+                                            ("created", "Создана"), ("author", "Автор"))):
+            caption = tk.Label(self.fields, text=label, bg=SURFACE, fg=MUTED, font=FONT_SMALL)
+            caption.grid(row=row, column=0, sticky="w", pady=1)
             value = tk.Label(self.fields, bg=SURFACE, fg=TEXT, font=FONT_SMALL)
             value.grid(row=row, column=1, sticky="w", padx=(12, 0), pady=1)
-            self.values[key] = value
+            self.values[key], self.captions[key] = value, caption
         tk.Frame(self, bg=BORDER, height=1).pack(side="bottom", fill="x", pady=12)
 
         # Описание (только для чтения, с прокруткой колесом)
@@ -1110,9 +1115,9 @@ class TaskCard(tk.Frame):
         self.body_scroll.set(first, last)
 
     def show(self, number, title, body, status, status_color, overdue, done, priority_level_,
-             priority_name, due, remind, created):
+             priority_name, due, remind, created, author=""):
         shown = (number, title, body, status, status_color, overdue, done, priority_level_,
-                 priority_name, due, remind, created)
+                 priority_name, due, remind, created, author)
         if shown == getattr(self, "shown", None):
             return  # ничего не изменилось — не трогаем, чтобы не сбросить прокрутку описания
         self.shown = shown
@@ -1136,6 +1141,10 @@ class TaskCard(tk.Frame):
         self.values["due"].configure(text=due or "не задан", fg=DANGER if overdue else TEXT)
         self.values["remind"].configure(text=remind or "нет")
         self.values["created"].configure(text=created)
+        # автор известен только в общих списках — в личных строку не показываем
+        self.values["author"].configure(text=author)
+        for widget in (self.values["author"], self.captions["author"]):
+            widget.grid() if author else widget.grid_remove()
 
 
 class ScrollArea(tk.Frame):
@@ -1641,8 +1650,9 @@ CARD_FIELDS = {
     "due": "Срок",
     "remind": "Напоминание",
     "created": "Дата создания",
+    "author": "Автор (в общих списках)",
 }
-DEFAULT_CARD_FIELDS = ["number", "priority", "body", "due"]
+DEFAULT_CARD_FIELDS = ["number", "priority", "body", "due", "author"]
 
 
 # Как открывать окно при запуске: значение настройки -> подпись
@@ -2175,6 +2185,8 @@ class KanbanBoard(tk.Frame):
             extra.append("напомнить " + REMIND_LABELS.get(remind_before, f"за {remind_before} мин"))
         if "created" in fields:
             extra.append("создана " + created[:5])
+        if "author" in fields and self.app.authors.get(task_id):
+            extra.append("автор " + self.app.authors[task_id])
         if extra:
             tk.Label(content, text=" · ".join(extra), bg=SURFACE, fg=MUTED, font=FONT_SMALL,
                      anchor="w", justify="left", wraplength=LANE_WIDTH - 60).pack(fill="x", pady=(2, 0))
@@ -2365,6 +2377,7 @@ class TodoApp:
         self.load_lists()
         self.list_id = db.get_setting(self.prefs, "current_list", db.PERSONAL)
         self.watch = None  # «отпечаток» открытого общего списка — чтобы заметить чужие изменения
+        self.authors = {}  # id задачи -> кто создал (в общих списках)
         try:
             self.conn = self.list_conn(self.list_id)
             db.list_statuses(self.conn)
@@ -2444,6 +2457,11 @@ class TodoApp:
         self.sort.bind("<<ComboboxSelected>>", lambda e: self.sort_chosen())
         ttk.Label(toolbar, text="Сортировка:", style="Muted.TLabel").pack(side="right", padx=(0, 8))
         self.card_fields = db.get_json_setting(self.prefs, "card_fields", DEFAULT_CARD_FIELDS)
+        if not db.get_setting(self.prefs, "card_author_added"):  # поле «Автор» появилось в 1.5 —
+            if "author" not in self.card_fields:                  # включаем его один раз
+                self.card_fields.append("author")
+                db.set_json_setting(self.prefs, "card_fields", self.card_fields)
+            db.set_setting(self.prefs, "card_author_added", "1")
         self.toolbar = toolbar
 
         # Середина окна: таблица или доска, справа — Тоторо, карточка или форма задачи.
@@ -2475,6 +2493,7 @@ class TodoApp:
             "remind": ("НАПОМНИТЬ", 105, False),
             # Растягивается последний столбец: если бы растягивалась «Задача», Tk сразу
             # возвращал бы ей всё свободное место и её ширину нельзя было бы изменить.
+            "author": ("АВТОР", 110, False),  # виден только в общих списках
             "created": ("СОЗДАНА", 125, True),
         }
         # Первый, узкий столбец (#0) — цветная метка приоритета.
@@ -2824,7 +2843,8 @@ class TodoApp:
         return dict(title=title, body=body, done=bool(done), overdue=overdue, status_id=status_id,
                     status=status_label(name, done, overdue), status_name=name, status_color=color,
                     level=level, priority=PRIORITY_NAMES[level], due=format_due(due_at),
-                    remind=remind, created=created, urgent=urgent)
+                    remind=remind, created=created, urgent=urgent,
+                    author=db.task_authors(self.conn).get(task_id, ""))
 
     def update_side(self):
         """Выбрана задача — показываем её карточку, иначе — Тоторо.
@@ -2843,7 +2863,7 @@ class TodoApp:
             status_color=DANGER if info["overdue"] else info["status_color"],
             overdue=info["overdue"], done=info["done"],
             priority_level_=info["level"], priority_name=info["priority"],
-            due=info["due"], remind=info["remind"], created=info["created"],
+            due=info["due"], remind=info["remind"], created=info["created"], author=info["author"],
         )
 
     def update_buddy(self):
@@ -3169,6 +3189,12 @@ class TodoApp:
         statuses = db.list_statuses(self.conn)
         self.statuses = {sid: (name, color, bool(done)) for sid, name, color, done in statuses}
         rows = db.list_tasks(self.conn)
+        self.authors = db.task_authors(self.conn)
+        # столбец «Автор» — только в общих списках (в личном автор всегда вы)
+        columns = list(self.tree["columns"])
+        if not (self.list_id and self.current_list()["shared"]):
+            columns.remove("author")
+        self.tree["displaycolumns"] = columns
         active = sum(1 for row in rows if not row[2])
         self.chips["active"].configure(text=f"активных  {active}")
         self.chips["done"].configure(text=f"выполнено  {len(rows) - active}")
@@ -3199,7 +3225,7 @@ class TodoApp:
             self.tree.insert(
                 "", "end", iid=iid, image=IMAGES.get(f"priority_{level}", ""),
                 values=(f"#{task_id}", status_label(name, done), title, PRIORITY_NAMES[level],
-                        format_due(due_at), remind, created),
+                        format_due(due_at), remind, self.authors.get(task_id, ""), created),
                 tags=("done",) if done else ("normal",),
             )
             if due_at and not done:
@@ -3242,6 +3268,7 @@ class TodoApp:
             return {
                 "num": task_id,
                 "created": task_id,  # номера растут по порядку создания
+                "author": (self.authors.get(task_id) or "").casefold() or None,
                 "status": position.get(status_id, len(position)),
                 "title": title.casefold(),
                 "priority": priority_level(urgent, important),
@@ -3492,7 +3519,7 @@ class TodoApp:
         info = self.task_info(task[0])
         subject, body = build_email(task[0], info["title"], info["status_name"], info["priority"],
                                     info["due"], info["remind"], info["created"],
-                                    info["urgent"], info["body"])
+                                    info["urgent"], info["body"], info["author"])
         # Основной способ — черновик письма в файле .eml: Outlook открывает его как новое
         # письмо, и длина текста не ограничена (в отличие от ссылки mailto:).
         try:

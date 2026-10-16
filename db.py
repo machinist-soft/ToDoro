@@ -355,7 +355,7 @@ def import_tasks(conn, tasks, created_by=None):
             """,
             [(t["title"], t["body"], t["status_id"], is_done[t["status_id"]], t["due_at"],
               t["remind_before"], int(t["reminded"]), int(t["urgent"]), int(t["important"]),
-              t["created_at"], created_by) for t in tasks],
+              t["created_at"], t.get("created_by") or created_by) for t in tasks],
         )
 
 
@@ -412,6 +412,11 @@ def move_task_to(src, task_id, dst):
         ).lastrowid
     delete_task(src, task_id)
     return new_id
+
+
+def task_authors(conn):
+    """Кто создал задачи: {id: имя} (только там, где автор известен — в общих списках)."""
+    return dict(conn.execute("SELECT id, created_by FROM tasks WHERE created_by IS NOT NULL"))
 
 
 def count_tasks(conn):
