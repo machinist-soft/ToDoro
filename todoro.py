@@ -16,7 +16,7 @@ from email.message import EmailMessage
 from urllib.parse import quote
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from tkinter import colorchooser, filedialog, messagebox, ttk
+from tkinter import colorchooser, filedialog, ttk
 
 import db
 import team
@@ -25,7 +25,7 @@ from examples import make_examples
 from help_text import HELP
 
 APP_NAME = "ToDoro"  # ToDo + Totoro
-APP_VERSION = "2.1"  # номер версии — меняется здесь (установщик берёт его отсюда)
+APP_VERSION = "2.2"  # номер версии — меняется здесь (установщик берёт его отсюда)
 APP_YEAR = 2026
 COPYRIGHT_HOLDER = "Machinist"  # автор — имя меняется здесь и в файле LICENSE
 COPYRIGHT = f"© {APP_YEAR} {COPYRIGHT_HOLDER}"
@@ -146,6 +146,7 @@ MONTHS = ["Январь", "Февраль", "Март", "Апрель", "Май"
 WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
 PLACEHOLDER = "Заголовок новой задачи… (Enter — добавить)"
+SEARCH_HINT = "Поиск задач  (Ctrl+F)"
 # Длиннее ссылку «создать письмо» (mailto:) почтовые программы могут не принять:
 # Outlook ломался уже на ~1700 символах (русская буква в ссылке занимает 6 символов).
 MAILTO_LIMIT = 1000
@@ -407,7 +408,7 @@ def write_csv(path, header, rows):
 def export_rows(conn):
     """Все задачи в виде строк CSV (в порядке номеров)."""
     statuses = {sid: name for sid, name, _, _ in db.list_statuses(conn)}
-    authors, assignees = db.task_authors(conn), db.task_assignees(conn)
+    authors, assignees = db.task_people(conn)
     rows = []
     for task_id, title, done, created, due_at, remind_before, urgent, important, body, status_id \
             in db.list_tasks(conn):
@@ -509,10 +510,124 @@ def prepare_import(conn, records):
     return tasks, notes
 
 
+def search_stems(query):
+    """Слова поиска без окончаний: «исполнитель» найдёт и «исполнителя», «исполнителю»."""
+    return [w[:max(4, len(w) - 2)] if len(w) >= 5 else w for w in query.lower().split()]
+
+
 def status_label(name, done, overdue=False):
     """Название статуса (колонки доски) со значком: ✔ выполнено, ⚠ просрочено, ○ остальное."""
     mark = "✔" if done else "⚠" if overdue else "○"
     return f"{mark}  {name}"
+
+
+class AlertDialog(tk.Toplevel):
+    """Сообщение или вопрос в стиле программы (вместо стандартных серых окон Windows)."""
+
+    # значок (шрифт Segoe MDL2 Assets) и его цвет
+    KINDS = {"info": ("", ACCENT), "warning": ("", "#d97706"),
+             "error": ("", DANGER), "question": ("", ACCENT)}
+
+    def __init__(self, parent, title, message, kind, buttons, default, cancel):
+        """buttons — [(подпись, значение, стиль)], default — значение кнопки для Enter,
+        cancel — значение для Esc и закрытия окна."""
+        super().__init__(parent)
+        self.result = cancel
+        self.title(title)
+        self.configure(bg=SURFACE)
+        self.resizable(False, False)
+        if parent is not None:
+            self.transient(parent)
+        body = tk.Frame(self, bg=SURFACE, padx=24, pady=20)
+        body.pack(fill="both", expand=True)
+        icon, color = self.KINDS[kind]
+        tk.Label(body, text=icon, bg=SURFACE, fg=color, font=("Segoe MDL2 Assets", 22)).pack(
+            side="left", anchor="n", padx=(0, 16), pady=(2, 0))
+        text = tk.Frame(body, bg=SURFACE)
+        text.pack(side="left", fill="both", expand=True)
+        tk.Label(text, text=title, bg=SURFACE, fg=TEXT, font=("Segoe UI Semibold", 12),
+                 justify="left", anchor="w").pack(anchor="w", pady=(0, 6))
+        tk.Label(text, text=message, bg=SURFACE, fg=TEXT, font=FONT_SMALL, justify="left",
+                 anchor="w", wraplength=420).pack(anchor="w")
+
+        bar = tk.Frame(self, bg=BG, highlightthickness=1, highlightbackground=BORDER)
+        bar.pack(fill="x", side="bottom")
+        focus = None
+        for label, value, style in reversed(buttons):
+            button = ttk.Button(bar, text=label, style=style, cursor="hand2",
+                                command=lambda v=value: self.finish(v))
+            button.pack(side="right", padx=(0, 10 if focus is None else 8), pady=12)
+            if value == default:
+                focus = button
+        self.bind("<Escape>", lambda e: self.finish(cancel))
+        self.bind("<Return>", lambda e: self.finish(default))
+        self.protocol("WM_DELETE_WINDOW", lambda: self.finish(cancel))
+        self.focus_button = focus
+
+    def finish(self, value):
+        self.result = value
+        self.destroy()
+
+    def show(self):
+        parent = self.master if isinstance(self.master, (tk.Tk, tk.Toplevel)) else None
+        self.update_idletasks()
+        if parent is not None and parent.winfo_viewable():  # по центру окна, из которого спросили
+            w, h = self.winfo_reqwidth(), self.winfo_reqheight()
+            x = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
+            y = parent.winfo_rooty() + (parent.winfo_height() - h) // 3
+            self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        else:
+            center_on_screen(self)
+        previous = self.grab_current()  # окно-диалог, из которого спросили, снова станет модальным
+        self.grab_set()
+        self.lift()
+        self.focus_force()
+        if self.focus_button is not None:
+            self.focus_button.focus_set()
+        self.wait_window()
+        if previous is not None:
+            try:
+                if previous.winfo_exists():
+                    previous.grab_set()
+            except tk.TclError:
+                pass
+        return self.result
+
+
+class ui:
+    """Сообщения и вопросы в стиле программы. Те же вызовы, что у tkinter.messagebox:
+    ui.showinfo(заголовок, текст, parent=…), ui.askyesno(…, icon="warning", default="no") и т. д."""
+
+    YES, NO = ("Да", True, "Accent.TButton"), ("Нет", False, "TButton")
+
+    @staticmethod
+    def _show(title, message, kind, buttons, default, cancel, parent=None):
+        return AlertDialog(parent, title, message, kind, buttons, default, cancel).show()
+
+    @staticmethod
+    def showinfo(title, message, parent=None, **_):
+        ui._show(title, message, "info", [("OK", True, "Accent.TButton")], True, True, parent)
+
+    @staticmethod
+    def showwarning(title, message, parent=None, **_):
+        ui._show(title, message, "warning", [("OK", True, "Accent.TButton")], True, True, parent)
+
+    @staticmethod
+    def showerror(title, message, parent=None, **_):
+        ui._show(title, message, "error", [("OK", True, "Accent.TButton")], True, True, parent)
+
+    @staticmethod
+    def askyesno(title, message, parent=None, icon="question", default="yes", **_):
+        danger = icon == "warning"  # опасное действие (удаление) — «Да» красная
+        yes = ("Да", True, "DangerSoft.TButton" if danger else "Accent.TButton")
+        return ui._show(title, message, "warning" if danger else "question", [ui.NO, yes],
+                        default != "no", False, parent)
+
+    @staticmethod
+    def askokcancel(title, message, parent=None, **_):
+        return ui._show(title, message, "info", [("Отмена", False, "TButton"),
+                                                 ("Продолжить", True, "Accent.TButton")],
+                        True, False, parent)
 
 
 class DatePicker(ttk.Frame):
@@ -696,7 +811,7 @@ class TaskForm(ttk.Frame):
         self.date = DatePicker(due_row, due.date() if due else None, on_change=self.date_changed)
         self.date.configure(style=self["style"])
         self.date.pack(side="left")
-        time_row =ttk.Frame(self, style=self["style"]) if compact else due_row
+        time_row = ttk.Frame(self, style=self["style"]) if compact else due_row
         if compact:
             time_row.pack(fill="x", pady=(6, 0))
         ttk.Label(time_row, text="время" if compact else "в",
@@ -743,11 +858,12 @@ class TaskForm(ttk.Frame):
         self.remind.pack(fill="x" if compact else None, anchor="w")
         self.remind.set(REMIND_LABELS.get(task["remind_before"], f"за {task['remind_before']} мин"))
 
-        buttons = ttk.Frame(self, style=self["style"])
-        buttons.pack(fill="x", pady=(18, 0))
-        ttk.Button(buttons, text="Сохранить", style="Accent.TButton", command=self.save).pack(side="right")
-        ttk.Button(buttons, text="Отмена", style="Soft.TButton" if compact else "TButton",
-                   command=on_cancel).pack(side="right", padx=(0, 8))
+        if not compact:  # в правой панели кнопки — в нижней строке панели (SidePanel.show_form)
+            buttons = ttk.Frame(self, style=self["style"])
+            buttons.pack(fill="x", pady=(18, 0))
+            ttk.Button(buttons, text="Сохранить", style="Accent.TButton", command=self.save).pack(side="right")
+            ttk.Button(buttons, text="Отмена", style="TButton", command=on_cancel).pack(
+                side="right", padx=(0, 8))
 
         self.date_changed()
         self.initial = self.values()
@@ -800,10 +916,10 @@ class TaskForm(ttk.Frame):
     def save(self):
         result = self.values()
         if not result["title"]:
-            messagebox.showwarning("Задача", "Заголовок задачи не может быть пустым.", parent=self)
+            ui.showwarning("Задача", "Заголовок задачи не может быть пустым.", parent=self)
             return
         if result["remind_before"] is not None and result["due_at"] is None:
-            messagebox.showwarning("Задача", "Чтобы напомнить о задаче, укажите срок.", parent=self)
+            ui.showwarning("Задача", "Чтобы напомнить о задаче, укажите срок.", parent=self)
             return
         self.on_save(result)
 
@@ -942,8 +1058,7 @@ class HelpWindow(tk.Toplevel):
         return re.sub(r"\*\*|\[|\]|\{p[123]\}", "", line).replace("{github}", "github")
 
     def stems(self):
-        """Слова поиска без окончаний: «исполнитель» найдёт и «исполнителя», «исполнителю»."""
-        return [w[:max(4, len(w) - 2)] if len(w) >= 5 else w for w in self.query.split()]
+        return search_stems(self.query)
 
     def matches(self, topic):
         if not self.query:
@@ -1463,7 +1578,7 @@ class SidePanel(tk.Frame):
         self.pack_propagate(False)  # ширину задаёт разделитель, а не длина текста
         self.totoro = TotoroPanel(self, on_task_click)
         self.card = TaskCard(self, on_close, on_edit, on_email, on_toggle, on_delete)
-        self.editor = None  # ScrollArea с формой, пока задача редактируется
+        self.editor = None  # форма задачи (с прокруткой и кнопками внизу), пока задача редактируется
         self.form = None
         self.mode = None
         self.show_totoro()
@@ -1491,18 +1606,31 @@ class SidePanel(tk.Frame):
         if self.editor is not None:
             self.editor.destroy()
         self.mode = None
-        self.editor = ScrollArea(self, SURFACE)
-        head = tk.Frame(self.editor.inner, bg=SURFACE)
+        # Поля формы прокручиваются, а кнопки «Сохранить / Отмена» внизу видны всегда
+        self.editor = tk.Frame(self, bg=SURFACE)
+        footer = tk.Frame(self.editor, bg=SURFACE)
+        footer.pack(side="bottom", fill="x")
+        tk.Frame(footer, bg=BORDER, height=1).pack(fill="x")
+        buttons = tk.Frame(footer, bg=SURFACE)
+        buttons.pack(fill="x", padx=18, pady=10)
+        tk.Label(buttons, text="Ctrl+Enter", bg=SURFACE, fg=DONE, font=("Segoe UI", 9)).pack(side="left")
+        area = ScrollArea(self.editor, SURFACE)
+        area.pack(fill="both", expand=True)
+        head = tk.Frame(area.inner, bg=SURFACE)
         head.pack(fill="x", padx=18, pady=(14, 10))
         tk.Label(head, text="Изменение задачи", bg=SURFACE, fg=TEXT,
                  font=("Segoe UI Semibold", 13)).pack(side="left")
         close = tk.Label(head, text="✕", bg=SURFACE, fg=MUTED, font=FONT, cursor="hand2")
         close.pack(side="right")
         close.bind("<Button-1>", lambda e: on_cancel())
-        self.form = TaskForm(self.editor.inner, task, statuses, on_save, on_cancel, compact=True,
+        self.form = TaskForm(area.inner, task, statuses, on_save, on_cancel, compact=True,
                              members=members)
         self.form.pack(fill="x", padx=18, pady=(0, 16))
-        self.editor.bind_wheel()
+        ttk.Button(buttons, text="Сохранить", style="Accent.TButton", cursor="hand2",
+                   command=self.form.save).pack(side="right")
+        ttk.Button(buttons, text="Отмена", style="Soft.TButton", cursor="hand2",
+                   command=on_cancel).pack(side="right", padx=(0, 8))
+        area.bind_wheel()
         self.switch("edit", self.editor)
         self.form.focus_title()
 
@@ -2271,7 +2399,7 @@ class SettingsDialog(tk.Toplevel):
         folder, name = self.folder.get().strip(), " ".join(self.name.get().split())
         if folder and not name:
             self.show_page("sharing")
-            messagebox.showwarning("Настройки", "Укажите своё имя — по нему другие участники "
+            ui.showwarning("Настройки", "Укажите своё имя — по нему другие участники "
                                    "увидят, кто создал или изменил задачу.", parent=self)
             self.name.focus_set()
             return
@@ -2305,7 +2433,7 @@ class NameDialog(ModernDialog):
     def ok(self):
         name = " ".join(self.entry.get().split())
         if not name:
-            messagebox.showwarning(self.title(), "Название не может быть пустым.", parent=self)
+            ui.showwarning(self.title(), "Название не может быть пустым.", parent=self)
             return
         self.result = name
         self.destroy()
@@ -2930,6 +3058,8 @@ class TodoApp:
         self.load_lists()
         self.list_id = db.get_setting(self.prefs, "current_list", db.PERSONAL)
         self.watch = None  # «отпечаток» открытого общего списка — чтобы заметить чужие изменения
+        self.all_rows = []   # все задачи открытого списка (читаются в refresh)
+        self.done_today = 0
         self.authors = {}    # id задачи -> кто создал (в общих списках)
         self.assignees = {}  # id задачи -> исполнитель (в общих списках)
         try:
@@ -3012,11 +3142,32 @@ class TodoApp:
                         style="Segment.TCheckbutton", command=self.refresh,
                         cursor="hand2").pack(side="left")
         self.filters_frame = filters
+        # Поиск задач по тексту (Ctrl+F): заголовок, описание, номер, автор, исполнитель
+        self.search_query = ""
+        self.search_after = None
+        search = tk.Frame(toolbar, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER,
+                          highlightcolor=ACCENT)
+        tk.Label(search, text="\uE721", bg=SURFACE, fg=MUTED, font=("Segoe MDL2 Assets", 10)).pack(
+            side="left", padx=(8, 2))
+        self.search = tk.Entry(search, relief="flat", bg=SURFACE, fg=DONE, font=FONT_SMALL, width=20,
+                               insertbackground=TEXT, highlightthickness=0, borderwidth=0)
+        self.search.pack(side="left", ipady=5, padx=(2, 4))
+        self.search_clear = tk.Label(search, text="✕", bg=SURFACE, fg=MUTED, font=FONT_SMALL,
+                                     cursor="hand2")
+        self.search_clear.bind("<Button-1>", lambda e: self.clear_search())
+        self.search.insert(0, SEARCH_HINT)
+        self.search.bind("<FocusIn>", lambda e: self.search_focus())
+        self.search.bind("<FocusOut>", lambda e: self.search_blur())
+        self.search.bind("<KeyRelease>", lambda e: self.search_typed())
+        self.search.bind("<Escape>", lambda e: (self.clear_search(), "break")[1])
+        self.search.bind("<Return>", lambda e: self.search_typed(now=True))
+        self.search_box = search
         self.sort = ttk.Combobox(toolbar, values=SORTS, state="readonly", width=27, font=FONT_SMALL)
         self.sort.set(SORTS[0])
         self.sort.pack(side="right")
         self.sort.bind("<<ComboboxSelected>>", lambda e: self.sort_chosen())
         ttk.Label(toolbar, text="Сортировка:", style="Muted.TLabel").pack(side="right", padx=(0, 8))
+        search.pack(side="right", padx=(0, 16))
         self.card_fields = db.get_json_setting(self.prefs, "card_fields", DEFAULT_CARD_FIELDS)
         for key in ("author", "assignee"):  # поля появились в 1.5 — включаем их один раз
             if not db.get_setting(self.prefs, f"card_{key}_added"):
@@ -3032,6 +3183,11 @@ class TodoApp:
                                  sashrelief="flat", opaqueresize=True, sashcursor="sb_h_double_arrow")
         content.pack(fill="both", expand=True)
         self.paned = content
+        # Над разделителем Tk включает курсор ⟷ для всей средней части окна, а вернуть обычный
+        # может «забыть» — например, если при запуске разделитель проехал под неподвижной мышью.
+        # Тогда ⟷ виден над всеми задачами и кнопками. Возвращаем обычный курсор сами, как
+        # только мышь ушла с разделителя (в том числе на задачи и панель).
+        content.bind("<Leave>", lambda e: self.reset_cursor(), add="+")
         self.side = SidePanel(content, on_task_click=self.reveal_task,
                               on_close=self.clear_selection, on_edit=self.edit, on_email=self.email,
                               on_toggle=self.toggle, on_delete=self.delete)
@@ -3114,6 +3270,10 @@ class TodoApp:
                                  ("<Control-E>", self.email), ("<Escape>", self.clear_selection)):
             root.bind(sequence, lambda e, a=action: self.key_action(e, a))
         root.bind("<F1>", lambda e: self.show_help())
+        for key in ("<Control-f>", "<Control-F>"):
+            root.bind(key, lambda e: (self.search.focus_set(), "break")[1])
+        for key in ("<Control-n>", "<Control-N>"):
+            root.bind(key, lambda e: (self.entry.focus_set(), "break")[1])
         self.help_window = None
 
         root.protocol("WM_DELETE_WINDOW", self.close)
@@ -3128,6 +3288,7 @@ class TodoApp:
         else:
             root.deiconify()
         root.after(200, self.repaint)  # ещё раз, когда окно уже показано
+        root.after(600, self.reset_cursor)  # и обычный курсор — на случай, если ⟷ «залип» при запуске
         self.show_placeholder()
         self.entry.focus()
         root.after(1000, self.check_reminders)
@@ -3226,9 +3387,9 @@ class TodoApp:
                 self.list_id = None
                 self.switch_list(db.PERSONAL)
             if error:
-                messagebox.showerror(APP_NAME, error, parent=self.root)
+                ui.showerror(APP_NAME, error, parent=self.root)
             elif self.team:
-                messagebox.showinfo(APP_NAME, "Общая папка подключена. Общие списки — в меню "
+                ui.showinfo(APP_NAME, "Общая папка подключена. Общие списки — в меню "
                                     "списков (кнопка с названием списка вверху).", parent=self.root)
 
     def check_folder(self, folder, done):
@@ -3292,7 +3453,7 @@ class TodoApp:
 
     def send_feedback(self, kind):
         """Открывает на GitHub форму сообщения об ошибке или идеи (раздел Issues)."""
-        if not messagebox.askokcancel(
+        if not ui.askokcancel(
             "Обратная связь",
             "Откроется страница на сайте GitHub с готовой формой — номер версии ToDoro "
             "и Windows уже подставлены, ваши задачи никуда не отправляются.\n\n"
@@ -3360,6 +3521,8 @@ class TodoApp:
         """Щелчок по задаче в облачке Тоторо: показать и выделить её."""
         if not self.tree.exists(str(task_id)):
             self.filter.set("Все")
+            self.only_mine.set(False)
+            self.clear_search(refresh=False)
             self.refresh()
         self.select_task(task_id)
         if self.view.get() == "list" and self.tree.exists(str(task_id)):
@@ -3367,6 +3530,13 @@ class TodoApp:
             self.tree.focus_set()
 
     # --- правая панель: Тоторо или карточка задачи ---
+
+    def reset_cursor(self):
+        """Обычный курсор в средней части окна (см. комментарий у self.paned)."""
+        try:
+            self.paned.configure(cursor="")
+        except tk.TclError:
+            pass  # окно уже закрыто
 
     def fit_side_panel(self, event):
         wide_enough = event.width >= 1000
@@ -3440,7 +3610,7 @@ class TodoApp:
         Возвращает "mine" (сохранить мой вариант), "theirs" (оставить их) или "back"."""
         meta = db.task_meta(self.conn, task_id)
         if meta is None:
-            messagebox.showwarning(APP_NAME, "Пока вы правили задачу, её удалил другой участник. "
+            ui.showwarning(APP_NAME, "Пока вы правили задачу, её удалил другой участник. "
                                    "Ваши изменения не сохранены.", parent=self.root)
             return "theirs"
         now = self.form_data(task_id)
@@ -3469,7 +3639,7 @@ class TodoApp:
             return
         if result["due_at"] is None:
             result["remind_before"] = None
-        if messagebox.askyesno("Сохранить изменения?",
+        if ui.askyesno("Сохранить изменения?",
                                f"В задаче «{short_text(result['title'], 50)}» есть несохранённые "
                                "изменения. Сохранить их?", parent=self.root):
             version = self.edit_version if self.created_by() else None
@@ -3480,7 +3650,7 @@ class TodoApp:
 
     def task_info(self, task_id):
         """Всё о задаче для карточки справа и письма."""
-        row = next((r for r in db.list_tasks(self.conn) if r[0] == task_id), None)
+        row = db.get_task_row(self.conn, task_id)
         if row is None:
             return None
         _, title, done, created, due_at, remind_before, urgent, important, body, status_id = row
@@ -3529,7 +3699,7 @@ class TodoApp:
     def update_buddy(self):
         """Выбирает, что скажет Тоторо: о просроченной задаче, о задачах на сегодня и т. д."""
         now = datetime.now()
-        rows = db.list_tasks(self.conn)
+        rows = self.all_rows  # прочитаны в refresh
         active = [r for r in rows if not r[2]]
         due = {r[0]: datetime.fromisoformat(r[4]) for r in active if r[4]}
         overdue = [r for r in active if r[0] in due and due[r[0]] < now]
@@ -3538,7 +3708,7 @@ class TodoApp:
         def most_important(tasks):
             return min(tasks, key=lambda r: (priority_level(r[6], r[7]), due.get(r[0], datetime.max), r[0]))
 
-        done_today = db.count_done_today(self.conn)
+        done_today = self.done_today
         stats = " · ".join(text for count, text in (
             (len(overdue), f"просрочено: {len(overdue)}"),
             (len(today), f"на сегодня: {len(today)}"),
@@ -3646,7 +3816,7 @@ class TodoApp:
         count = db.count_in_status(self.conn, status_id)
         moved = (f"\n\nЗадачи из неё ({count}) перейдут в колонку «{self.statuses[target][0]}»."
                  if count else "")
-        if messagebox.askyesno("Удалить колонку?", f"Удалить колонку «{name}»?{moved}",
+        if ui.askyesno("Удалить колонку?", f"Удалить колонку «{name}»?{moved}",
                                icon="warning", default="no", parent=self.root):
             db.delete_status(self.conn, status_id, target, by=self.created_by())
             self.refresh(select_id=self.current_id())
@@ -3662,7 +3832,7 @@ class TodoApp:
     def add_examples(self):
         """Добавляет примеры задач; старые примеры при этом заменяются свежими."""
         if db.count_examples(self.conn):
-            if not messagebox.askyesno(
+            if not ui.askyesno(
                 APP_NAME, "Примеры уже есть в списке.\n\nЗаменить их свежими (со сроками от сегодняшнего дня)?",
                 parent=self.root,
             ):
@@ -3672,7 +3842,7 @@ class TodoApp:
         db.add_examples(self.conn, examples)
         self.filter.set("Все")
         self.refresh()
-        messagebox.showinfo(
+        ui.showinfo(
             APP_NAME,
             f"Добавлено примеров: {len(examples)}.\n\n"
             "Убрать их можно в меню «☰ Меню» → «Примеры задач» → «Удалить примеры задач» — ваши задачи не пострадают.",
@@ -3691,7 +3861,7 @@ class TodoApp:
             write_csv(path, header, rows)
             return True
         except OSError as error:
-            messagebox.showerror(APP_NAME, f"Не удалось сохранить файл:\n{error}\n\n"
+            ui.showerror(APP_NAME, f"Не удалось сохранить файл:\n{error}\n\n"
                                  "Если он открыт в Excel — закройте его и попробуйте снова.",
                                  parent=self.root)
             return False
@@ -3699,18 +3869,18 @@ class TodoApp:
     def export_csv(self):
         rows = export_rows(self.conn)
         if not rows:
-            messagebox.showinfo(APP_NAME, "Задач пока нет — выгружать нечего.", parent=self.root)
+            ui.showinfo(APP_NAME, "Задач пока нет — выгружать нечего.", parent=self.root)
             return
         name = re.sub(r'[\\/:*?"<>|]', "_", self.current_list()["name"])  # без запрещённых в имени файла знаков
         path = self.ask_save_csv("Экспорт задач", f"{APP_NAME} {name} {date.today():%d.%m.%Y}.csv")
         if path and self.save_file(path, CSV_COLUMNS, rows):
-            messagebox.showinfo(APP_NAME, f"Выгружено задач: {len(rows)}.\n\n{path}\n\n"
+            ui.showinfo(APP_NAME, f"Выгружено задач: {len(rows)}.\n\n{path}\n\n"
                                 "Файл открывается в Excel двойным щелчком.", parent=self.root)
 
     def save_template(self):
         path = self.ask_save_csv("Шаблон для импорта", f"{APP_NAME} шаблон импорта.csv")
         if path and self.save_file(path, CSV_TEMPLATE_COLUMNS, template_rows()):
-            messagebox.showinfo(
+            ui.showinfo(
                 APP_NAME,
                 f"Шаблон сохранён:\n{path}\n\n"
                 "Откройте его в Excel, замените строки-примеры своими задачами и сохраните "
@@ -3730,13 +3900,13 @@ class TodoApp:
         try:
             tasks, notes = prepare_import(self.conn, read_csv(path))
         except OSError as error:
-            messagebox.showerror(APP_NAME, f"Не удалось открыть файл:\n{error}", parent=self.root)
+            ui.showerror(APP_NAME, f"Не удалось открыть файл:\n{error}", parent=self.root)
             return
         except (ValueError, csv.Error) as error:
-            messagebox.showerror(APP_NAME, f"Файл не подходит для импорта.\n\n{error}", parent=self.root)
+            ui.showerror(APP_NAME, f"Файл не подходит для импорта.\n\n{error}", parent=self.root)
             return
         if not tasks:
-            messagebox.showwarning(APP_NAME, "В файле не найдено ни одной задачи с заголовком.",
+            ui.showwarning(APP_NAME, "В файле не найдено ни одной задачи с заголовком.",
                                    parent=self.root)
             return
         text = (f"Добавить задач из файла: {len(tasks)} — в список «{self.current_list()['name']}»?"
@@ -3745,19 +3915,19 @@ class TodoApp:
             shown = "\n".join("• " + n for n in notes[:8])
             more = f"\n…и ещё замечаний: {len(notes) - 8}" if len(notes) > 8 else ""
             text += f"\n\nЗамечания:\n{shown}{more}"
-        if not messagebox.askyesno("Импорт задач", text, parent=self.root):
+        if not ui.askyesno("Импорт задач", text, parent=self.root):
             return
         db.import_tasks(self.conn, tasks, created_by=self.created_by())
         self.filter.set("Все")
         self.refresh()
-        messagebox.showinfo(APP_NAME, f"Добавлено задач: {len(tasks)}.", parent=self.root)
+        ui.showinfo(APP_NAME, f"Добавлено задач: {len(tasks)}.", parent=self.root)
 
     def delete_examples(self):
         count = db.count_examples(self.conn)
         if not count:
-            messagebox.showinfo(APP_NAME, "Примеров задач в списке нет.", parent=self.root)
+            ui.showinfo(APP_NAME, "Примеров задач в списке нет.", parent=self.root)
             return
-        if messagebox.askyesno(
+        if ui.askyesno(
             "Удалить примеры?",
             f"Удалить примеры задач ({count} шт.)?\n\nВаши собственные задачи останутся.",
             icon="warning", default="no", parent=self.root,
@@ -3781,6 +3951,55 @@ class TodoApp:
         LicenseWindow(self.root)
 
     # --- подсказка в пустом поле ввода ---
+
+    # --- поиск задач ---
+
+    def search_focus(self):
+        if self.search.get() == SEARCH_HINT:
+            self.search.delete(0, "end")
+        self.search.configure(fg=TEXT)
+
+    def search_blur(self):
+        if not self.search.get():
+            self.search.insert(0, SEARCH_HINT)
+            self.search.configure(fg=DONE)
+
+    def search_typed(self, now=False):
+        """Ищем, когда пользователь перестал печатать (через 0,25 с), а не на каждую букву."""
+        if self.search_after:
+            self.root.after_cancel(self.search_after)
+        self.search_after = self.root.after(0 if now else 250, self.run_task_search)
+
+    def run_task_search(self):
+        self.search_after = None
+        text = self.search.get()
+        query = "" if text == SEARCH_HINT else " ".join(text.split())
+        if query == self.search_query:
+            return
+        self.search_query = query
+        if query:
+            self.search_clear.pack(side="left", padx=(0, 8))
+        else:
+            self.search_clear.pack_forget()
+        self.refresh(select_id=self.current_id())
+
+    def clear_search(self, refresh=True):
+        self.search.delete(0, "end")
+        self.search_clear.pack_forget()
+        if self.root.focus_get() is not self.search:
+            self.search_blur()
+        changed = bool(self.search_query)
+        self.search_query = ""
+        if refresh and changed:
+            self.refresh(select_id=self.current_id())
+
+    def found(self, row):
+        """Подходит ли задача под поиск: все слова — в номере, заголовке, описании, авторе
+        или исполнителе (без учёта окончаний)."""
+        task_id, title, *_, body, _ = row
+        haystack = " ".join((f"#{task_id}", title, body, self.authors.get(task_id, ""),
+                             self.assignees.get(task_id, ""))).lower()
+        return all(stem in haystack for stem in search_stems(self.search_query))
 
     def placeholder_shown(self):
         return self.entry.cget("style") == "Placeholder.TEntry"
@@ -3848,9 +4067,11 @@ class TodoApp:
         """Перечитывает задачи из базы (с учётом фильтра) и рисует таблицу и доску заново."""
         statuses = db.list_statuses(self.conn)
         self.statuses = {sid: (name, color, bool(done)) for sid, name, color, done in statuses}
-        rows = db.list_tasks(self.conn)
-        self.authors = db.task_authors(self.conn)
-        self.assignees = db.task_assignees(self.conn)
+        # Список задач читаем из базы один раз — Тоторо, счётчики и проверка сроков берут его отсюда
+        # (в общих списках каждое чтение — поход по сети)
+        rows = self.all_rows = db.list_tasks(self.conn)
+        self.done_today = db.count_done_today(self.conn)
+        self.authors, self.assignees = db.task_people(self.conn)
         shared = bool(self.list_id and self.current_list()["shared"])
         # столбцы «Исполнитель» и «Автор» — только в общих списках (в личном всё ваше)
         columns = [c for c in self.tree["columns"] if shared or c not in ("assignee", "author")]
@@ -3861,7 +4082,7 @@ class TodoApp:
         active = sum(1 for row in rows if not row[2])
         self.chips["active"].configure(text=f"активных  {active}")
         self.chips["done"].configure(text=f"выполнено  {len(rows) - active}")
-        self.chips["today"].configure(text=f"✔ сегодня  {db.count_done_today(self.conn)}")
+        self.chips["today"].configure(text=f"✔ сегодня  {self.done_today}")
 
         wanted = FILTERS[self.filter.get()]
         now = datetime.now()
@@ -3871,9 +4092,10 @@ class TodoApp:
             rows = [row for row in rows if row[0] in late]
         elif wanted is not None:
             rows = [row for row in rows if bool(row[2]) == wanted]
+        if self.search_query:
+            rows = [r for r in rows if self.found(r)]
         rows = self.sort_rows(rows, statuses)
-        now = datetime.now()
-        overdue_ids = {r[0] for r in rows if r[4] and not r[2] and datetime.fromisoformat(r[4]) < now}
+        overdue_ids = late & {r[0] for r in rows}
 
         self.tree.delete(*self.tree.get_children())
         self.due, self.row_status = {}, {}
@@ -3899,8 +4121,13 @@ class TodoApp:
         if self.tree.get_children():
             self.empty.place_forget()
         else:
-            self.empty.configure(text="На вас пока ничего не назначено" if shared and self.only_mine.get()
-                                 else EMPTY_TEXT[self.filter.get()])
+            if self.search_query:
+                text = f"Ничего не найдено по запросу «{self.search_query}»"
+            elif shared and self.only_mine.get():
+                text = "На вас пока ничего не назначено"
+            else:
+                text = EMPTY_TEXT[self.filter.get()]
+            self.empty.configure(text=text)
             self.empty.place(relx=0.5, rely=0.5, anchor="center")
 
         if self.view.get() == "board":
@@ -3910,14 +4137,17 @@ class TodoApp:
             self.select_task(select_id)
         self.update_buddy()
         self.update_side()
-        self.shown_state = self.time_state()
+        self.shown_state = self.time_state(self.all_rows)
 
-    def time_state(self):
+    def time_state(self, rows=None):
         """То, что меняется само по себе, со временем: какие задачи уже просрочены и какой
-        сегодня день (счётчик «сегодня»). Если это не изменилось, перерисовывать нечего."""
+        сегодня день (счётчик «сегодня»). Если это не изменилось, перерисовывать нечего.
+        rows — уже прочитанные задачи (иначе читаем из базы)."""
         now = datetime.now()
-        overdue = frozenset(r[0] for r in db.list_tasks(self.conn, done=False)
-                            if r[4] and datetime.fromisoformat(r[4]) < now)
+        if rows is None:
+            rows = db.list_tasks(self.conn, done=False)
+        overdue = frozenset(r[0] for r in rows
+                            if r[4] and not r[2] and datetime.fromisoformat(r[4]) < now)
         return overdue, date.today()
 
     def sort_rows(self, rows, statuses):
@@ -4004,7 +4234,7 @@ class TodoApp:
         info = self.task_info(task_id) if task_id is not None else None
         if not info:
             where = "на доске" if self.view.get() == "board" else "в списке"
-            messagebox.showinfo(APP_NAME, f"Сначала выберите задачу {where}.", parent=self.root)
+            ui.showinfo(APP_NAME, f"Сначала выберите задачу {where}.", parent=self.root)
             return None
         return task_id, info["done"]
 
@@ -4054,9 +4284,9 @@ class TodoApp:
         if task is None:
             return
         self.finish_editing()
-        task_id, done = task[0], self.task_info(task[0])["done"]
+        task_id, done = task
         if not db.set_done(self.conn, task_id, not done, by=self.created_by()):
-            messagebox.showinfo(
+            ui.showinfo(
                 APP_NAME,
                 "На доске нет колонки, куда можно перенести задачу.\n\n"
                 "Отметьте одну из колонок как «Задачи здесь считаются выполненными» "
@@ -4073,7 +4303,7 @@ class TodoApp:
         if task is None:
             return
         title = db.get_task(self.conn, task[0])[0]
-        if not messagebox.askyesno(
+        if not ui.askyesno(
             "Удалить задачу?",
             f"Удалить задачу «{title}»?\n\nВернуть её будет нельзя.",
             icon="warning", default="no", parent=self.root,
@@ -4229,7 +4459,7 @@ class TodoApp:
         try:
             os.startfile(url)  # откроет почтовую программу по умолчанию (например, Outlook)
             if too_long:
-                messagebox.showinfo(
+                ui.showinfo(
                     APP_NAME,
                     "Описание задачи длинное, поэтому текст письма скопирован.\n\n"
                     "Щёлкните в тексте письма и нажмите Ctrl+V.",
@@ -4237,7 +4467,7 @@ class TodoApp:
                 )
         except OSError:
             self.copy_text(f"{subject}\n\n{body}")
-            messagebox.showwarning(
+            ui.showwarning(
                 APP_NAME,
                 "Не удалось открыть почтовую программу.\n\n"
                 "Тема и текст письма скопированы — вставьте их в письмо вручную (Ctrl+V).",
@@ -4250,10 +4480,11 @@ class TodoApp:
         """Раз в 30 секунд проверяет, не пора ли о чём-то напомнить."""
         # Перерисовываем, только если какая-то задача стала просроченной или наступил новый день:
         # иначе доска и список «вздрагивали» бы каждые 30 секунд
-        if self.time_state() != self.shown_state and not self.board.drag:
-            self.refresh(select_id=self.current_id())
-        self.update_buddy()
-        self.update_side()
+        try:
+            if self.time_state() != self.shown_state and not self.board.drag:
+                self.refresh(select_id=self.current_id())
+        except sqlite3.Error:
+            pass  # общая папка недоступна — проверим в следующий раз
         # Напоминания — по задачам из всех списков, не только из открытого
         lines = []
         reminded = set(db.get_json_setting(self.prefs, "shared_reminded", []))
@@ -4283,7 +4514,7 @@ class TodoApp:
             self.root.lift()
             self.root.attributes("-topmost", True)
             self.root.bell()
-            messagebox.showinfo("Напоминание", "Напоминаю о задачах:\n\n" + "\n".join(lines), parent=self.root)
+            ui.showinfo("Напоминание", "Напоминаю о задачах:\n\n" + "\n".join(lines), parent=self.root)
             self.root.attributes("-topmost", False)
         self.root.after(CHECK_EVERY_MS, self.check_reminders)
 
@@ -4406,7 +4637,7 @@ class TodoApp:
             db.list_statuses(conn)  # проверка, что файл читается
         except sqlite3.Error:
             self.forget_list(list_id)
-            messagebox.showerror(APP_NAME, "Не удалось открыть общий список — общая папка "
+            ui.showerror(APP_NAME, "Не удалось открыть общий список — общая папка "
                                  "сейчас недоступна. Проверьте сеть (VPN) и попробуйте ещё раз.",
                                  parent=self.root)
             return
@@ -4425,7 +4656,7 @@ class TodoApp:
             try:
                 item = self.team.add_list(name, self.user_name())
             except (sqlite3.Error, OSError):
-                messagebox.showerror(APP_NAME, "Не удалось создать общий список — общая папка "
+                ui.showerror(APP_NAME, "Не удалось создать общий список — общая папка "
                                      "недоступна.", parent=self.root)
                 return
         else:
@@ -4456,7 +4687,7 @@ class TodoApp:
         count = db.count_tasks(self.conn)
         what = f"вместе с задачами ({count} шт.)" if count else "(задач в нём нет)"
         everyone = "\n\nЭто общий список — он пропадёт у всех участников." if item["shared"] else ""
-        if not messagebox.askyesno(
+        if not ui.askyesno(
             "Удалить список?",
             f"Удалить список «{item['name']}» {what}?{everyone}\n\nЕсли задачи нужны — сначала "
             "перенесите их в другой список (правая кнопка мыши → «Переместить в список») или "
@@ -4504,12 +4735,13 @@ class TodoApp:
             seen_lists.add(item["id"])
         if now_known != known:
             db.set_json_setting(self.prefs, "known_assigned", sorted(now_known))
-        db.set_json_setting(self.prefs, "assigned_seen_lists", sorted(seen_lists))
+        if seen_lists != set(db.get_json_setting(self.prefs, "assigned_seen_lists", [])):
+            db.set_json_setting(self.prefs, "assigned_seen_lists", sorted(seen_lists))
         if lines:
             self.root.deiconify()
             self.root.lift()
             self.root.bell()
-            messagebox.showinfo("Вам назначены задачи", "\n".join(lines), parent=self.root)
+            ui.showinfo("Вам назначены задачи", "\n".join(lines), parent=self.root)
             if self.list_id and self.current_list()["shared"]:
                 self.refresh(select_id=self.current_id())
 
@@ -4522,7 +4754,7 @@ class TodoApp:
             self.list_id = None
             self.editing = None
             self.switch_list(db.PERSONAL)
-            messagebox.showerror(
+            ui.showerror(
                 APP_NAME, f"Пропала связь с общим списком «{name}» — общая папка недоступна "
                 "(сеть, VPN) или файл занят слишком долго.\n\nОткрыт личный список. Последнее "
                 "действие в общем списке могло не сохраниться — проверьте его, когда связь "
@@ -4578,16 +4810,19 @@ class TodoApp:
     def check_update_now(self):
         def done(release, error):
             if error:
-                messagebox.showwarning(APP_NAME, str(error), parent=self.root)
+                ui.showwarning(APP_NAME, str(error), parent=self.root)
             elif updater.is_newer(release["version"], APP_VERSION):
                 UpdateDialog(self.root, release, self.close)
             else:
-                messagebox.showinfo(APP_NAME, f"У вас последняя версия — {APP_VERSION}.", parent=self.root)
+                ui.showinfo(APP_NAME, f"У вас последняя версия — {APP_VERSION}.", parent=self.root)
         in_background(self.root, updater.fetch_latest, done)
 
     def close(self):
+        self.finish_editing()  # есть несохранённая правка задачи — спросим, сохранить ли её
         for conn in self.list_conns.values():
             conn.close()
+        if self.team:
+            self.team.close()
         self.root.destroy()
 
 

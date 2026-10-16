@@ -74,6 +74,7 @@ def connect(path=None, timeout=5):
     for name, decl in NEW_COLUMNS:
         if name not in existing:
             conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {decl}")
+    conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
 
     # Статусы — это колонки канбан-доски. Их можно добавлять, удалять и перекрашивать.
     # is_done = 1 — задачи в этой колонке считаются выполненными.
@@ -96,14 +97,15 @@ def connect(path=None, timeout=5):
     # Задачам без статуса (из старых версий) назначаем: выполненным — первую «выполненную»
     # колонку, остальным — первую невыполненную, кроме самой первой («Новая»), если она есть:
     # раньше такие задачи показывались как «В работе».
-    open_ids = [r[0] for r in conn.execute("SELECT id FROM statuses WHERE is_done = 0 ORDER BY position")]
-    done_ids = [r[0] for r in conn.execute("SELECT id FROM statuses WHERE is_done = 1 ORDER BY position")]
-    in_work = open_ids[1] if len(open_ids) > 1 else (open_ids or done_ids)[0]
-    conn.execute("UPDATE tasks SET status_id = ? WHERE status_id IS NULL AND done = 0", (in_work,))
-    conn.execute("UPDATE tasks SET status_id = ? WHERE status_id IS NULL AND done = 1",
-                 ((done_ids or open_ids)[0],))
-    conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
-    conn.commit()
+    if conn.execute("SELECT EXISTS (SELECT 1 FROM tasks WHERE status_id IS NULL)").fetchone()[0]:
+        open_ids = [r[0] for r in conn.execute("SELECT id FROM statuses WHERE is_done = 0 ORDER BY position")]
+        done_ids = [r[0] for r in conn.execute("SELECT id FROM statuses WHERE is_done = 1 ORDER BY position")]
+        in_work = open_ids[1] if len(open_ids) > 1 else (open_ids or done_ids)[0]
+        conn.execute("UPDATE tasks SET status_id = ? WHERE status_id IS NULL AND done = 0", (in_work,))
+        conn.execute("UPDATE tasks SET status_id = ? WHERE status_id IS NULL AND done = 1",
+                     ((done_ids or open_ids)[0],))
+    if conn.in_transaction:  # что-то действительно поменяли (новая база, новые столбцы)
+        conn.commit()
     return conn
 
 
@@ -222,24 +224,33 @@ def set_setting(conn, key, value):
         conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
 
 
+# Столбцы задачи в том порядке, в каком их ждёт программа (см. list_tasks).
+# SQLite хранит время создания в UTC, поэтому переводим его в местное время.
+TASK_COLUMNS_SQL = """
+    SELECT id, title, done,
+           strftime('%d.%m.%Y %H:%M', created_at, 'localtime'),
+           due_at, remind_before, urgent, important, body, status_id
+    FROM tasks
+"""
+
+
 def list_tasks(conn, done=None):
     """Возвращает задачи в порядке добавления:
     [(id, title, done, created, due_at, remind_before, urgent, important, body, status_id), ...].
 
     done=None — все задачи, True — только выполненные, False — только невыполненные.
     """
-    # SQLite хранит время создания в UTC, поэтому переводим его в местное время.
-    sql = """
-        SELECT id, title, done,
-               strftime('%d.%m.%Y %H:%M', created_at, 'localtime'),
-               due_at, remind_before, urgent, important, body, status_id
-        FROM tasks
-    """
+    sql = TASK_COLUMNS_SQL
     params = ()
     if done is not None:
         sql += " WHERE done = ?"
         params = (int(done),)
     return conn.execute(sql + " ORDER BY id", params).fetchall()
+
+
+def get_task_row(conn, task_id):
+    """Одна задача в том же виде, что строки list_tasks, или None."""
+    return conn.execute(TASK_COLUMNS_SQL + " WHERE id = ?", (task_id,)).fetchone()
 
 
 def get_task(conn, task_id):
@@ -309,11 +320,6 @@ def task_meta(conn, task_id):
     if row is None:
         return None
     return dict(zip(("author", "assignee", "updated_by", "updated_at", "version"), row))
-
-
-def task_assignees(conn):
-    """{id задачи: исполнитель} — там, где исполнитель назначен."""
-    return dict(conn.execute("SELECT id, assignee FROM tasks WHERE assignee IS NOT NULL AND assignee <> ''"))
 
 
 def assigned_to(conn, user):
@@ -451,9 +457,17 @@ def move_task_to(src, task_id, dst):
     return new_id
 
 
-def task_authors(conn):
-    """Кто создал задачи: {id: имя} (только там, где автор известен — в общих списках)."""
-    return dict(conn.execute("SELECT id, created_by FROM tasks WHERE created_by IS NOT NULL"))
+def task_people(conn):
+    """({id: автор}, {id: исполнитель}) — одним запросом, только где они известны."""
+    authors, assignees = {}, {}
+    for task_id, author, assignee in conn.execute(
+            "SELECT id, created_by, assignee FROM tasks "
+            "WHERE created_by IS NOT NULL OR (assignee IS NOT NULL AND assignee <> '')"):
+        if author:
+            authors[task_id] = author
+        if assignee:
+            assignees[task_id] = assignee
+    return authors, assignees
 
 
 def count_tasks(conn):

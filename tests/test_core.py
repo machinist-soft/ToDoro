@@ -1,0 +1,167 @@
+"""Автоматические проверки ToDoro (без окон): база, общие списки, CSV, обновления, поиск.
+
+Запуск из папки проекта:  python -m unittest discover tests
+Работают на временных файлах — данные пользователя не трогают.
+"""
+import shutil
+import sqlite3
+import sys
+import tempfile
+import unittest
+from datetime import datetime, timedelta
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+import db  # noqa: E402
+import team  # noqa: E402
+import updater  # noqa: E402
+
+
+class TempDir(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="todoro-test-"))
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+class DatabaseTests(TempDir):
+    def test_new_list_has_default_columns(self):
+        conn = db.connect(self.dir / "a.db")
+        self.assertEqual([s[1] for s in db.list_statuses(conn)], ["Новая", "В работе", "Выполнено"])
+
+    def test_opening_list_writes_nothing(self):
+        """Открытие списка не должно ничего записывать: в общих списках любая запись
+        заставляет программы остальных участников перечитывать список."""
+        path = self.dir / "a.db"
+        db.add_task(db.connect(path), "задача")
+        first = db.connect(path)
+        before = first.execute("PRAGMA data_version").fetchone()[0]
+        db.connect(path)  # «другой участник» открывает тот же список
+        self.assertEqual(first.execute("PRAGMA data_version").fetchone()[0], before)
+
+    def test_task_row_and_people(self):
+        conn = db.connect(self.dir / "a.db")
+        tid = db.add_task(conn, "отчёт", created_by="Анна")
+        db.set_assignee(conn, tid, "Борис", by="Анна")
+        self.assertEqual(db.get_task_row(conn, tid)[:2], (tid, "отчёт"))
+        self.assertIsNone(db.get_task_row(conn, 999))
+        self.assertEqual(db.task_people(conn), ({tid: "Анна"}, {tid: "Борис"}))
+
+    def test_version_protects_from_overwrite(self):
+        conn = db.connect(self.dir / "a.db")
+        tid = db.add_task(conn, "отчёт")
+        opened = db.task_meta(conn, tid)["version"]  # Анна открыла форму
+        db.update_task(conn, tid, "отчёт", "2030-01-01 09:00", None, by="Борис")  # Борис поменял срок
+        saved = db.update_task(conn, tid, "отчёт v2", None, None, by="Анна", version=opened)
+        self.assertFalse(saved)  # правка Анны не затёрла правку Бориса
+        meta = db.task_meta(conn, tid)
+        self.assertEqual((meta["updated_by"], db.get_task(conn, tid)[0]), ("Борис", "отчёт"))
+
+    def test_done_moves_to_done_column_and_back(self):
+        conn = db.connect(self.dir / "a.db")
+        tid = db.add_task(conn, "задача")
+        self.assertTrue(db.set_done(conn, tid, True))
+        self.assertEqual(db.count_done_today(conn), 1)
+        db.set_done(conn, tid, False)
+        self.assertEqual(db.count_done_today(conn), 0)
+
+    def test_move_task_between_lists_keeps_fields(self):
+        src, dst = db.connect(self.dir / "a.db"), db.connect(self.dir / "b.db")
+        tid = db.add_task(src, "перенести", created_by="Анна")
+        db.update_task(src, tid, "перенести", "2030-01-01 09:00", 60, True, False, "описание")
+        db.set_assignee(src, tid, "Борис")
+        new = db.move_task_to(src, tid, dst)
+        self.assertIsNone(db.get_task(src, tid))
+        self.assertEqual(db.get_task(dst, new), ("перенести", "2030-01-01 09:00", 60, 1, 0, "описание"))
+        self.assertEqual(db.task_people(dst), ({new: "Анна"}, {new: "Борис"}))
+
+    def test_shared_reminders_go_to_assignee(self):
+        conn = db.connect(self.dir / "a.db")
+        past = (datetime.now() - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M")
+        tid = db.add_task(conn, "звонок", created_by="Анна")
+        db.update_task(conn, tid, "звонок", past, 30)
+        self.assertEqual(len(db.shared_reminders(conn, "Анна")), 1)  # исполнителя нет — автору
+        db.set_assignee(conn, tid, "Борис")
+        self.assertEqual(len(db.shared_reminders(conn, "Анна")), 0)
+        self.assertEqual(len(db.shared_reminders(conn, "Борис")), 1)
+
+
+class TeamTests(TempDir):
+    def test_shared_lists_members_and_backup(self):
+        first = team.Team(self.dir)
+        item = first.add_list("Команда", "Анна")
+        second = team.Team(self.dir)  # второй участник видит список
+        second.touch_member("Борис")
+        self.assertEqual([i["name"] for i in second.lists()], ["Команда"])
+        first.rename_list(item["id"], "Команда А")
+        self.assertEqual(second.lists()[0]["name"], "Команда А")
+        self.assertEqual(second.members(), ["Борис"])
+        first.backup_daily()
+        backups = list((self.dir / "ToDoro" / "backups").iterdir())
+        self.assertEqual(len(backups), 1)
+        first.delete_list(item)
+        self.assertEqual(second.lists(), [])
+        first.close(); second.close()
+
+    def test_unreachable_folder_gives_clear_error(self):
+        blocker = self.dir / "file"
+        blocker.write_text("not a folder")
+        with self.assertRaises(team.TeamError):
+            team.Team(blocker)
+
+
+class UpdaterTests(unittest.TestCase):
+    def test_versions(self):
+        self.assertTrue(updater.is_newer("2.10", "2.9"))
+        self.assertTrue(updater.is_newer("v2.1", "2.0"))
+        self.assertFalse(updater.is_newer("2.0", "2.0"))
+        self.assertFalse(updater.is_newer("", "1.0"))
+
+    def test_feedback_url_has_version(self):
+        url = updater.feedback_url("bug", "2.2")
+        self.assertIn("template=bug_report.yml", url)
+        self.assertIn("version=2.2", url)
+
+
+class AppHelpersTests(TempDir):
+    """Функции из todoro.py, которым не нужно окно."""
+
+    @classmethod
+    def setUpClass(cls):
+        import todoro
+        cls.T = todoro
+
+    def test_search_stems(self):
+        stems = self.T.search_stems("Исполнитель отчёт")
+        self.assertTrue(all(any(s in word for s in stems[:1]) for word in ("исполнителя", "исполнителю")))
+        self.assertIn("отчё", stems[1])
+
+    def test_csv_roundtrip(self):
+        conn = db.connect(self.dir / "a.db")
+        tid = db.add_task(conn, "Сдать отчёт", created_by="Анна")
+        db.update_task(conn, tid, "Сдать отчёт", "2030-01-02 18:00", 60, True, True, "строка 1\nстрока 2")
+        db.set_assignee(conn, tid, "Борис")
+        path = self.dir / "x.csv"
+        self.T.write_csv(path, self.T.CSV_COLUMNS, self.T.export_rows(conn))
+        tasks, notes = self.T.prepare_import(conn, self.T.read_csv(path))
+        self.assertEqual(notes, [])
+        t = tasks[0]
+        self.assertEqual((t["title"], t["body"], t["due_at"], t["remind_before"], t["urgent"],
+                          t["important"], t["created_by"], t["assignee"]),
+                         ("Сдать отчёт", "строка 1\nстрока 2", "2030-01-02 18:00", 60, 1, 1, "Анна", "Борис"))
+
+    def test_csv_from_russian_excel(self):
+        """Русский Excel сохраняет CSV в кодировке Windows-1251; даты — как 5.1.2027 7:05."""
+        path = self.dir / "excel.csv"
+        path.write_bytes("Задача;Срок;Напоминание\r\nПозвонить;5.1.2027 7:05;за 1 час\r\n".encode("cp1251"))
+        conn = db.connect(self.dir / "a.db")
+        tasks, notes = self.T.prepare_import(conn, self.T.read_csv(path))
+        self.assertEqual((tasks[0]["title"], tasks[0]["due_at"], tasks[0]["remind_before"]),
+                         ("Позвонить", "2027-01-05 07:05", 60))
+
+
+if __name__ == "__main__":
+    unittest.main()
