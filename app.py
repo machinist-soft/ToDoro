@@ -10,6 +10,7 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 import db
+from examples import make_examples
 from help_text import HELP
 
 APP_NAME = "ToDoro"  # ToDo + Totoro
@@ -150,6 +151,10 @@ def setup_style(root):
               lightcolor=[("active", "#f3f5f9")], darkcolor=[("active", "#f3f5f9")],
               focuscolor=[("active", "#f3f5f9")])
     style.configure("Danger.TButton", foreground=DANGER)
+    style.configure("TMenubutton", background=SURFACE, foreground=TEXT, font=FONT_SMALL,
+                    padding=(14, 7), relief="flat", borderwidth=1, arrowcolor=MUTED,
+                    lightcolor=SURFACE, darkcolor=SURFACE)
+    style.map("TMenubutton", background=[("active", "#f3f5f9")])
 
     # Галочки «Срочно» / «Важно»
     style.configure("TCheckbutton", background=BG, foreground=TEXT, font=FONT,
@@ -587,6 +592,12 @@ class TodoApp:
             ttk.Label(header, image=IMAGES["totoro_small"]).pack(side="right")
         ttk.Button(header, text="?  Справка", command=self.show_help).pack(
             side="right", padx=(0, 14), anchor="s", pady=(0, 4))
+        more = ttk.Menubutton(header, text="☰  Ещё", style="TMenubutton", cursor="hand2")
+        more_menu = tk.Menu(more, tearoff=0)
+        more_menu.add_command(label="Добавить примеры задач", command=self.add_examples)
+        more_menu.add_command(label="Удалить примеры задач", command=self.delete_examples)
+        more["menu"] = more_menu
+        more.pack(side="right", padx=(0, 8), anchor="s", pady=(0, 4))
 
         # Поле ввода и кнопка «Добавить»
         add_row = ttk.Frame(page)
@@ -654,6 +665,9 @@ class TodoApp:
             self.tree.column(key, width=width, stretch=stretch)
         self.tree.tag_configure("done", foreground=DONE)
         self.tree.tag_configure("overdue", foreground=DANGER)
+        # У обычных строк цвет тоже задан явно: иначе в Tk 9 красный цвет
+        # просроченной строки «протекает» в правые столбцы остальных строк.
+        self.tree.tag_configure("normal", foreground=TEXT)
         self.tree.pack(side="left", fill="both", expand=True)
         self.scrollbar.config(command=self.tree.yview)
         self.empty = ttk.Label(inner, style="Empty.TLabel", compound="top",
@@ -672,9 +686,43 @@ class TodoApp:
 
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh()
+        root.after(200, self.repaint_tree)  # ещё раз, когда окно уже показано
         self.show_placeholder()
         self.entry.focus()
         root.after(1000, self.check_reminders)
+
+    def add_examples(self):
+        """Добавляет примеры задач; старые примеры при этом заменяются свежими."""
+        if db.count_examples(self.conn):
+            if not messagebox.askyesno(
+                APP_NAME, "Примеры уже есть в списке.\n\nЗаменить их свежими (со сроками от сегодняшнего дня)?",
+                parent=self.root,
+            ):
+                return
+            db.delete_examples(self.conn)
+        examples = make_examples()
+        db.add_examples(self.conn, examples)
+        self.filter.set("Все")
+        self.refresh()
+        messagebox.showinfo(
+            APP_NAME,
+            f"Добавлено примеров: {len(examples)}.\n\n"
+            "Убрать их можно в меню «☰ Ещё» → «Удалить примеры задач» — ваши задачи не пострадают.",
+            parent=self.root,
+        )
+
+    def delete_examples(self):
+        count = db.count_examples(self.conn)
+        if not count:
+            messagebox.showinfo(APP_NAME, "Примеров задач в списке нет.", parent=self.root)
+            return
+        if messagebox.askyesno(
+            "Удалить примеры?",
+            f"Удалить примеры задач ({count} шт.)?\n\nВаши собственные задачи останутся.",
+            icon="warning", default="no", parent=self.root,
+        ):
+            db.delete_examples(self.conn)
+            self.refresh()
 
     def show_help(self):
         """Открывает справку (или поднимает уже открытое окно справки)."""
@@ -726,11 +774,20 @@ class TodoApp:
 
     def update_scrollbar(self, first, last):
         """Полоса прокрутки видна, только если задачи не помещаются в окно."""
-        if float(first) <= 0 and float(last) >= 1:
-            self.scrollbar.pack_forget()
-        elif not self.scrollbar.winfo_ismapped():
-            self.scrollbar.pack(side="right", fill="y", pady=4, before=self.tree)
+        needed = not (float(first) <= 0 and float(last) >= 1)
+        if needed != self.scrollbar.winfo_ismapped():
+            if needed:
+                self.scrollbar.pack(side="right", fill="y", pady=4, before=self.tree)
+            else:
+                self.scrollbar.pack_forget()
         self.scrollbar.set(first, last)
+
+    def repaint_tree(self):
+        """Перестраивает таблицу, когда окно уже на экране. Если строить её только
+        до показа окна, в Tk 9 красный цвет просроченной строки может «протечь»
+        в правые столбцы остальных строк."""
+        sel = self.tree.selection()
+        self.refresh(select_id=sel[0] if sel else None)
 
     def refresh(self, select_id=None):
         """Перечитывает задачи из базы (с учётом фильтра) и рисует таблицу заново."""
@@ -754,7 +811,7 @@ class TodoApp:
                 "", "end", iid=iid, image=IMAGES.get(f"priority_{level}", ""),
                 values=(status_text(done), title, PRIORITY_NAMES[level],
                         format_due(due_at), remind, created),
-                tags=("done",) if done else (),
+                tags=("done",) if done else ("normal",),
             )
             if due_at and not done:
                 self.due[iid] = datetime.fromisoformat(due_at)
@@ -789,7 +846,7 @@ class TodoApp:
         for iid, due in self.due.items():
             if self.tree.exists(iid):
                 overdue = due < now
-                self.tree.item(iid, tags=("overdue",) if overdue else ())
+                self.tree.item(iid, tags=("overdue",) if overdue else ("normal",))
                 self.tree.set(iid, "status", status_text(False, overdue))
 
     def selected(self):

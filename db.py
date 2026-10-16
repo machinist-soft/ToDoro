@@ -14,6 +14,7 @@ NEW_COLUMNS = [
     ("reminded", "INTEGER NOT NULL DEFAULT 0"),  # 1 — напоминание уже показано
     ("urgent", "INTEGER NOT NULL DEFAULT 0"),    # 1 — срочно
     ("important", "INTEGER NOT NULL DEFAULT 0"), # 1 — важно
+    ("is_example", "INTEGER NOT NULL DEFAULT 0"),  # 1 — пример, добавленный кнопкой «Примеры»
 ]
 
 
@@ -97,6 +98,33 @@ def set_done(conn, task_id, done):
 def delete_task(conn, task_id):
     with conn:
         conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+
+
+def count_examples(conn):
+    return conn.execute("SELECT COUNT(*) FROM tasks WHERE is_example = 1").fetchone()[0]
+
+
+def add_examples(conn, examples):
+    """Добавляет примеры задач (см. examples.py)."""
+    with conn:
+        conn.executemany(
+            """
+            INSERT INTO tasks (title, done, due_at, remind_before, reminded,
+                               urgent, important, is_example)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+            """,
+            [
+                (ex["title"], int(ex.get("done", False)), ex["due_at"], ex["remind_before"],
+                 int(ex["reminded"]), int(ex.get("urgent", False)), int(ex.get("important", False)))
+                for ex in examples
+            ],
+        )
+
+
+def delete_examples(conn):
+    """Удаляет только примеры; задачи пользователя не трогает. Возвращает число удалённых."""
+    with conn:
+        return conn.execute("DELETE FROM tasks WHERE is_example = 1").rowcount
 
 
 def due_reminders(conn, now=None):
