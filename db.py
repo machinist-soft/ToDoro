@@ -15,6 +15,7 @@ NEW_COLUMNS = [
     ("urgent", "INTEGER NOT NULL DEFAULT 0"),    # 1 — срочно
     ("important", "INTEGER NOT NULL DEFAULT 0"), # 1 — важно
     ("is_example", "INTEGER NOT NULL DEFAULT 0"),  # 1 — пример, добавленный кнопкой «Примеры»
+    ("body", "TEXT NOT NULL DEFAULT ''"),          # описание задачи (title — её заголовок)
 ]
 
 
@@ -41,7 +42,7 @@ def connect(path=DB_PATH):
 
 def list_tasks(conn, done=None):
     """Возвращает задачи в порядке добавления:
-    [(id, title, done, created, due_at, remind_before, urgent, important), ...].
+    [(id, title, done, created, due_at, remind_before, urgent, important, body), ...].
 
     done=None — все задачи, True — только выполненные, False — только невыполненные.
     """
@@ -49,7 +50,7 @@ def list_tasks(conn, done=None):
     sql = """
         SELECT id, title, done,
                strftime('%d.%m.%Y %H:%M', created_at, 'localtime'),
-               due_at, remind_before, urgent, important
+               due_at, remind_before, urgent, important, body
         FROM tasks
     """
     params = ()
@@ -60,9 +61,9 @@ def list_tasks(conn, done=None):
 
 
 def get_task(conn, task_id):
-    """Возвращает (title, due_at, remind_before, urgent, important) одной задачи."""
+    """Возвращает (title, due_at, remind_before, urgent, important, body) одной задачи."""
     return conn.execute(
-        "SELECT title, due_at, remind_before, urgent, important FROM tasks WHERE id = ?",
+        "SELECT title, due_at, remind_before, urgent, important, body FROM tasks WHERE id = ?",
         (task_id,),
     ).fetchone()
 
@@ -74,19 +75,22 @@ def add_task(conn, title):
     return cur.lastrowid
 
 
-def update_task(conn, task_id, title, due_at, remind_before, urgent=False, important=False):
+def update_task(conn, task_id, title, due_at, remind_before, urgent=False, important=False,
+                body=None):
     # Если изменился срок или напоминание — напомнить нужно заново.
     # («IS» вместо «=» правильно сравнивает и пустые значения NULL.)
+    # body=None — описание не трогаем.
     with conn:
         conn.execute(
             """
             UPDATE tasks SET
                 reminded = CASE WHEN due_at IS ? AND remind_before IS ? THEN reminded ELSE 0 END,
-                title = ?, due_at = ?, remind_before = ?, urgent = ?, important = ?
+                title = ?, due_at = ?, remind_before = ?, urgent = ?, important = ?,
+                body = COALESCE(?, body)
             WHERE id = ?
             """,
             (due_at, remind_before, title, due_at, remind_before,
-             int(urgent), int(important), task_id),
+             int(urgent), int(important), body, task_id),
         )
 
 
@@ -110,12 +114,13 @@ def add_examples(conn, examples):
         conn.executemany(
             """
             INSERT INTO tasks (title, done, due_at, remind_before, reminded,
-                               urgent, important, is_example)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                               urgent, important, body, is_example)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
             """,
             [
                 (ex["title"], int(ex.get("done", False)), ex["due_at"], ex["remind_before"],
-                 int(ex["reminded"]), int(ex.get("urgent", False)), int(ex.get("important", False)))
+                 int(ex["reminded"]), int(ex.get("urgent", False)), int(ex.get("important", False)),
+                 ex.get("body", ""))
                 for ex in examples
             ],
         )

@@ -111,7 +111,8 @@ MONTHS = ["Январь", "Февраль", "Март", "Апрель", "Май"
           "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"]
 WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
-PLACEHOLDER = "Новая задача… (Enter — добавить)"
+PLACEHOLDER = "Заголовок новой задачи… (Enter — добавить)"
+MAILTO_LIMIT = 2000  # длиннее ссылку «создать письмо» почтовые программы могут не принять
 
 
 def setup_style(root):
@@ -151,6 +152,11 @@ def setup_style(root):
               lightcolor=[("active", "#f3f5f9")], darkcolor=[("active", "#f3f5f9")],
               focuscolor=[("active", "#f3f5f9")])
     style.configure("Danger.TButton", foreground=DANGER)
+    style.configure("Soft.TButton", background=BG, lightcolor=BG, darkcolor=BG,
+                    bordercolor=BG, focuscolor=BG, padding=(12, 6))
+    style.map("Soft.TButton", background=[("pressed", "#dfe4ec"), ("active", "#e9edf4")],
+              lightcolor=[("active", "#e9edf4")], darkcolor=[("active", "#e9edf4")],
+              bordercolor=[("active", "#e9edf4")], focuscolor=[("active", "#e9edf4")])
     style.configure("TMenubutton", background=SURFACE, foreground=TEXT, font=FONT_SMALL,
                     padding=(14, 7), relief="flat", borderwidth=1, arrowcolor=MUTED,
                     lightcolor=SURFACE, darkcolor=SURFACE)
@@ -238,15 +244,16 @@ def short_text(text, limit=60):
     return text[:limit].rsplit(" ", 1)[0].rstrip(",.;:—-") + "…"
 
 
-def build_email(title, status, priority, due, remind, created, urgent):
-    """Тема и текст письма по задаче."""
+def build_email(title, status, priority, due, remind, created, urgent, body=""):
+    """Тема и текст письма по задаче: в теме — заголовок, в тексте — описание и все поля."""
     subject = f"Задача из {APP_NAME}: {short_text(title)}"
     if urgent:
         subject = "СРОЧНО! " + subject
     level_hint = next((PRIORITY_HINTS[k] for k, v in PRIORITY_NAMES.items() if v and v == priority), "")
-    lines = [
-        f"Задача: {title}",
-        "",
+    lines = [f"Задача: {title}", ""]
+    if body.strip():
+        lines += ["Описание:", *body.strip().splitlines(), ""]
+    lines += [
         f"Статус: {status}",
         f"Приоритет: {priority} — {level_hint}" if priority else "Приоритет: обычный",
         f"Срок: {due or 'не задан'}",
@@ -388,7 +395,8 @@ class DatePicker(ttk.Frame):
 class TaskDialog(tk.Toplevel):
     """Окно редактирования задачи: текст, срок и напоминание."""
 
-    def __init__(self, parent, title, due_at, remind_before, urgent=False, important=False):
+    def __init__(self, parent, title, due_at, remind_before, urgent=False, important=False,
+                 description=""):
         super().__init__(parent)
         self.result = None
         self.title("Задача")
@@ -400,10 +408,29 @@ class TaskDialog(tk.Toplevel):
         body.pack(fill="both")
         body.columnconfigure(0, weight=1)
 
-        ttk.Label(body, text="Задача", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
-        self.title_entry = ttk.Entry(body, font=FONT, width=48)
-        self.title_entry.grid(row=1, column=0, sticky="we", pady=(4, 14))
+        head = ttk.Frame(body)
+        head.grid(row=0, column=0, sticky="we")
+        ttk.Label(head, text="Заголовок", style="Muted.TLabel").pack(anchor="w")
+        self.title_entry = ttk.Entry(head, font=FONT, width=48)
+        self.title_entry.pack(fill="x", pady=(4, 12))
         self.title_entry.insert(0, title)
+
+        ttk.Label(head, text="Описание", style="Muted.TLabel").pack(anchor="w")
+        desc_box = tk.Frame(head, bg=SURFACE, highlightthickness=1,
+                            highlightbackground=BORDER, highlightcolor=ACCENT)
+        desc_box.pack(fill="x", pady=(4, 14))
+        self.desc = tk.Text(desc_box, font=FONT, height=6, width=48, wrap="word",
+                            relief="flat", borderwidth=0, padx=8, pady=6, bg=SURFACE, fg=TEXT,
+                            insertbackground=TEXT, highlightthickness=0, undo=True)
+        desc_scroll = ttk.Scrollbar(desc_box, orient="vertical", command=self.desc.yview)
+        self.desc.configure(yscrollcommand=desc_scroll.set)
+        desc_scroll.pack(side="right", fill="y")
+        self.desc.pack(side="left", fill="both", expand=True)
+        self.desc.insert("1.0", description)
+        # В описании Enter — новая строка (а не «Сохранить»); сохранить — Ctrl+Enter
+        self.desc.bind("<Return>", lambda e: (self.desc.insert("insert", "\n"), "break")[1])
+        self.desc.bind("<Control-Return>", lambda e: (self.save(), "break")[1])
+        desc_box.bind("<FocusIn>", lambda e: self.desc.focus_set())
 
         due = datetime.fromisoformat(due_at) if due_at else None
         ttk.Label(body, text="Срок выполнения", style="Muted.TLabel").grid(row=2, column=0, sticky="w")
@@ -497,7 +524,9 @@ class TaskDialog(tk.Toplevel):
             )
             return
 
-        self.result = (title, due_at, remind_before, self.urgent.get(), self.important.get())
+        description = self.desc.get("1.0", "end-1c").strip()
+        self.result = (title, due_at, remind_before, self.urgent.get(), self.important.get(),
+                       description)
         self.destroy()
 
 
@@ -572,10 +601,12 @@ def round_rect(canvas, x1, y1, x2, y2, r, **kw):
     return canvas.create_polygon(points, smooth=True, **kw)
 
 
-class TotoroPanel(tk.Frame):
-    """Панель справа: большой Тоторо и облачко с подсказкой по задачам."""
+PANEL_WIDTH = 290
 
-    WIDTH = 240
+
+class TotoroPanel(tk.Frame):
+    """Большой Тоторо и облачко с подсказкой по задачам (когда задача не выбрана)."""
+
     BUBBLE = {  # заливка и рамка облачка в зависимости от настроения
         "normal": (BG, BORDER, TEXT),
         "alert": ("#fdeeee", "#f3c4c4", DANGER),
@@ -583,9 +614,9 @@ class TotoroPanel(tk.Frame):
     }
 
     def __init__(self, parent, on_task_click):
-        super().__init__(parent, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
+        super().__init__(parent, bg=SURFACE)
         self.on_task_click = on_task_click
-        self.canvas = tk.Canvas(self, width=self.WIDTH, bg=SURFACE, highlightthickness=0)
+        self.canvas = tk.Canvas(self, width=PANEL_WIDTH, bg=SURFACE, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Configure>", lambda e: self.draw())
         self.message = ("", None, None, "", "normal", "")
@@ -654,6 +685,168 @@ class TotoroPanel(tk.Frame):
             c.tag_bind("task", "<Leave>", lambda e: c.configure(cursor=""))
 
 
+class TaskCard(tk.Frame):
+    """Карточка выбранной задачи: заголовок, описание и все поля."""
+
+    def __init__(self, parent, on_close, on_edit, on_email):
+        super().__init__(parent, bg=SURFACE, padx=18, pady=14)
+        wrap = PANEL_WIDTH - 40
+
+        top = tk.Frame(self, bg=SURFACE)
+        top.pack(fill="x")
+        self.priority = tk.Label(top, bg=SURFACE, fg=MUTED, font=FONT_SMALL, compound="left")
+        self.priority.pack(side="left")
+        close = tk.Label(top, text="✕", bg=SURFACE, fg=MUTED, font=FONT, cursor="hand2")
+        close.pack(side="right")
+        close.bind("<Button-1>", lambda e: on_close())
+        close.bind("<Enter>", lambda e: close.configure(fg=TEXT))
+        close.bind("<Leave>", lambda e: close.configure(fg=MUTED))
+
+        self.title = tk.Label(self, bg=SURFACE, fg=TEXT, font=("Segoe UI Semibold", 14),
+                              wraplength=wrap, justify="left", anchor="w")
+        self.title.pack(fill="x", pady=(6, 2))
+        self.status = tk.Label(self, bg=SURFACE, font=FONT_SMALL, anchor="w")
+        self.status.pack(fill="x")
+
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", pady=12)
+
+        # Сроки и даты — внизу карточки
+        buttons = tk.Frame(self, bg=SURFACE)
+        buttons.pack(side="bottom", fill="x", pady=(12, 0))
+        ttk.Button(buttons, text="✎  Изменить", style="Soft.TButton", command=on_edit).pack(side="left")
+        ttk.Button(buttons, text="✉  Письмо", style="Soft.TButton", command=on_email).pack(
+            side="left", padx=(8, 0))
+        self.fields = tk.Frame(self, bg=SURFACE)
+        self.fields.pack(side="bottom", fill="x")
+        self.values = {}
+        for row, (key, label) in enumerate((("due", "Срок"), ("remind", "Напомнить"),
+                                            ("created", "Создана"))):
+            tk.Label(self.fields, text=label, bg=SURFACE, fg=MUTED, font=FONT_SMALL).grid(
+                row=row, column=0, sticky="w", pady=1)
+            value = tk.Label(self.fields, bg=SURFACE, fg=TEXT, font=FONT_SMALL)
+            value.grid(row=row, column=1, sticky="w", padx=(12, 0), pady=1)
+            self.values[key] = value
+        tk.Frame(self, bg=BORDER, height=1).pack(side="bottom", fill="x", pady=12)
+
+        # Описание (только для чтения, с прокруткой колесом)
+        tk.Label(self, text="Описание", bg=SURFACE, fg=MUTED, font=FONT_SMALL).pack(anchor="w")
+        body_box = tk.Frame(self, bg=SURFACE)
+        body_box.pack(fill="both", expand=True)
+        self.body_scroll = ttk.Scrollbar(body_box, orient="vertical")
+        self.body = tk.Text(body_box, bg=SURFACE, fg=TEXT, font=FONT, wrap="word", relief="flat",
+                            borderwidth=0, highlightthickness=0, height=4, width=1,
+                            padx=0, pady=4, cursor="arrow", spacing3=4,
+                            yscrollcommand=self.update_body_scroll)
+        self.body_scroll.configure(command=self.body.yview)
+        self.body.pack(side="left", fill="both", expand=True)
+        self.body.tag_configure("empty", foreground=DONE, font=FONT_SMALL)
+
+    def update_body_scroll(self, first, last):
+        """Полоса прокрутки описания видна, только если текст не помещается."""
+        needed = not (float(first) <= 0 and float(last) >= 1)
+        if needed and not self.body_scroll.winfo_ismapped():
+            self.body_scroll.pack(side="right", fill="y", before=self.body)
+        elif not needed and self.body_scroll.winfo_ismapped():
+            self.body_scroll.pack_forget()
+        self.body_scroll.set(first, last)
+
+    def show(self, title, body, status, overdue, done, priority_level_, priority_name,
+             due, remind, created):
+        self.priority.configure(
+            image=IMAGES.get(f"priority_{priority_level_}", ""),
+            text=f"  {priority_name}" if priority_name else "Обычный приоритет",
+        )
+        color = DANGER if overdue else DONE if done else TEXT
+        self.title.configure(text=title, fg=color)
+        status_color = DANGER if overdue else "#15803d" if done else ACCENT
+        self.status.configure(text=status, fg=status_color)
+        self.body.configure(state="normal")
+        self.body.delete("1.0", "end")
+        if body.strip():
+            self.body.insert("1.0", body)
+        else:
+            self.body.insert("1.0", "Описания нет.\nДважды щёлкните по задаче в списке, "
+                                    "чтобы его добавить.", "empty")
+        self.body.configure(state="disabled")
+        self.values["due"].configure(text=due or "не задан", fg=DANGER if overdue else TEXT)
+        self.values["remind"].configure(text=remind or "нет")
+        self.values["created"].configure(text=created)
+
+
+class SidePanel(tk.Frame):
+    """Правая панель: Тоторо, пока задача не выбрана, иначе — карточка задачи."""
+
+    def __init__(self, parent, on_task_click, on_close, on_edit, on_email):
+        super().__init__(parent, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER,
+                         width=PANEL_WIDTH)
+        self.pack_propagate(False)  # ширина панели не зависит от длины текста
+        self.totoro = TotoroPanel(self, on_task_click)
+        self.card = TaskCard(self, on_close, on_edit, on_email)
+        self.mode = None
+        self.show_totoro()
+
+    def show_totoro(self):
+        if self.mode != "totoro":
+            self.card.pack_forget()
+            self.totoro.pack(fill="both", expand=True)
+            self.mode = "totoro"
+
+    def show_task(self, **task):
+        self.card.show(**task)
+        if self.mode != "task":
+            self.totoro.pack_forget()
+            self.card.pack(fill="both", expand=True)
+            self.mode = "task"
+
+
+class CatbusRoad(tk.Canvas):
+    """Дорога в шапке: Котобус едет к остановке «Готово» — чем больше задач выполнено, тем ближе."""
+
+    HEIGHT = 74
+
+    def __init__(self, parent):
+        super().__init__(parent, height=self.HEIGHT, bg=BG, highlightthickness=0)
+        self.fraction = 0.0   # куда надо доехать (0…1)
+        self.position = 0.0   # где Котобус сейчас (для плавной анимации)
+        self.animating = False
+        self.bind("<Configure>", lambda e: self.draw())
+
+    def set_progress(self, done, total):
+        self.fraction = done / total if total else 0.0
+        if not self.animating:
+            self.animating = True
+            self.after(16, self.animate)
+
+    def animate(self):
+        step = self.fraction - self.position
+        if abs(step) < 0.003:
+            self.position = self.fraction
+            self.animating = False
+        else:
+            self.position += step * 0.15
+            self.after(16, self.animate)
+        self.draw()
+
+    def draw(self):
+        self.delete("all")
+        width = self.winfo_width()
+        bus = IMAGES.get("catbus")
+        if width < 200 or not bus:
+            return
+        road_y = self.HEIGHT - 6
+        start, stop = 6, width - 64
+        # дорога и остановка
+        self.create_line(start, road_y, stop + 30, road_y, fill="#cfd5df", width=2, dash=(6, 5))
+        self.create_line(stop + 30, road_y, stop + 30, road_y - 44, fill="#9aa3b2", width=2)
+        round_rect(self, stop + 4, road_y - 62, stop + 58, road_y - 40, 6,
+                   fill="#e8f5ec", outline="#15803d")
+        self.create_text(stop + 31, road_y - 51, text="Готово", font=("Segoe UI Semibold", 8),
+                         fill="#15803d")
+        # Котобус едет мордой вперёд, к остановке
+        x = start + self.position * (stop - start - bus.width())
+        self.create_image(x, road_y + 2, image=bus, anchor="sw")
+
+
 class TodoApp:
     def __init__(self, root):
         self.root = root
@@ -665,8 +858,8 @@ class TodoApp:
             root.iconbitmap(default=str(ICON_PATH))  # иконка для всех окон программы
         setup_style(root)
         load_images()
-        center_on_screen(root, 1240, 660)
-        root.minsize(820, 440)
+        center_on_screen(root, 1290, 700)
+        root.minsize(820, 480)
 
         page = ttk.Frame(root, padding=(24, 14, 24, 20))
         page.pack(fill="both", expand=True)
@@ -685,6 +878,9 @@ class TodoApp:
         more_menu.add_command(label="Удалить примеры задач", command=self.delete_examples)
         more["menu"] = more_menu
         more.pack(side="right", padx=(0, 8), anchor="s", pady=(0, 4))
+        # Котобус везёт выполненные задачи к остановке «Готово»
+        self.road = CatbusRoad(header)
+        self.road.pack(side="left", fill="x", expand=True, padx=(24, 24))
 
         # Поле ввода и кнопка «Добавить»
         add_row = ttk.Frame(page)
@@ -730,14 +926,15 @@ class TodoApp:
         # Середина окна: таблица задач и панель с Тоторо справа
         content = ttk.Frame(page)
         content.pack(fill="both", expand=True)
-        self.totoro_panel = TotoroPanel(content, on_task_click=self.reveal_task)
-        self.totoro_panel.pack(side="right", fill="y", padx=(12, 0))
+        self.side = SidePanel(content, on_task_click=self.reveal_task,
+                              on_close=self.clear_selection, on_edit=self.edit, on_email=self.email)
+        self.side.pack(side="right", fill="y", padx=(12, 0))
         # В узком окне панель прячется, чтобы не теснить таблицу
-        content.bind("<Configure>", self.fit_totoro_panel)
+        content.bind("<Configure>", self.fit_side_panel)
 
         card = tk.Frame(content, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
         card.pack(fill="both", expand=True)
-        self.card = card
+        self.table_card = card
         inner = ttk.Frame(card, style="Card.TFrame", padding=(6, 4, 4, 6))
         inner.pack(fill="both", expand=True)
         self.scrollbar = ttk.Scrollbar(inner, orient="vertical")
@@ -774,6 +971,10 @@ class TodoApp:
         self.tree.bind("<Control-E>", lambda e: self.email())
         self.tree.bind("<Button-3>", self.show_menu)  # правая кнопка мыши
         self.tree.bind("<App>", self.show_menu_for_selected)  # клавиша контекстного меню
+        # Выбор задачи показывает её карточку справа; щелчок мимо строк или Esc — снова Тоторо
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self.update_side())
+        self.tree.bind("<Button-1>", self.click_empty_space, add="+")
+        self.tree.bind("<Escape>", lambda e: self.clear_selection())
 
         root.bind("<F1>", lambda e: self.show_help())
         self.help_window = None
@@ -785,15 +986,40 @@ class TodoApp:
         self.entry.focus()
         root.after(1000, self.check_reminders)
 
-    # --- Тоторо-помощник ---
+    # --- правая панель: Тоторо или карточка задачи ---
 
-    def fit_totoro_panel(self, event):
+    def fit_side_panel(self, event):
         wide_enough = event.width >= 1000
-        shown = self.totoro_panel.winfo_ismapped()
+        shown = self.side.winfo_ismapped()
         if wide_enough and not shown:
-            self.totoro_panel.pack(side="right", fill="y", padx=(12, 0), before=self.card)
+            self.side.pack(side="right", fill="y", padx=(12, 0), before=self.table_card)
         elif not wide_enough and shown:
-            self.totoro_panel.pack_forget()
+            self.side.pack_forget()
+
+    def update_side(self):
+        """Выбрана задача — показываем её карточку, иначе — Тоторо."""
+        sel = self.tree.selection()
+        task = db.get_task(self.conn, int(sel[0])) if sel else None
+        if not task:
+            self.side.show_totoro()
+            return
+        title, _, _, urgent, important, body = task
+        tags = self.tree.item(sel[0], "tags")
+        values = self.tree.set(sel[0])
+        self.side.show_task(
+            title=title, body=body, status=values["status"],
+            overdue="overdue" in tags, done="done" in tags,
+            priority_level_=priority_level(urgent, important), priority_name=values["priority"],
+            due=values["due"], remind=values["remind"], created=values["created"],
+        )
+
+    def clear_selection(self):
+        self.tree.selection_remove(*self.tree.selection())
+
+    def click_empty_space(self, event):
+        """Щелчок по пустому месту таблицы снимает выделение."""
+        if not self.tree.identify_row(event.y) and self.tree.identify_region(event.x, event.y) != "heading":
+            self.clear_selection()
 
     def update_buddy(self):
         """Выбирает, что скажет Тоторо: о просроченной задаче, о задачах на сегодня и т. д."""
@@ -812,7 +1038,7 @@ class TodoApp:
             (len(today), f"на сегодня: {len(today)}"),
         ) if count)
 
-        panel = self.totoro_panel
+        panel = self.side.totoro
         if not rows:
             panel.show("Привет! Я Тоторо.", tail="Добавь первую задачу — я присмотрю за ней.")
         elif overdue:
@@ -947,6 +1173,7 @@ class TodoApp:
         rows = db.list_tasks(self.conn)
         active = sum(1 for row in rows if not row[2])
         self.counter.configure(text=f"{active} в работе  ·  {len(rows) - active} выполнено")
+        self.road.set_progress(len(rows) - active, len(rows))
 
         wanted = FILTERS[self.filter.get()]
         rows = [row for row in rows if wanted is None or bool(row[2]) == wanted]
@@ -954,7 +1181,7 @@ class TodoApp:
 
         self.tree.delete(*self.tree.get_children())
         self.due = {}
-        for task_id, title, done, created, due_at, remind_before, urgent, important in rows:
+        for task_id, title, done, created, due_at, remind_before, urgent, important, _ in rows:
             remind = REMIND_LABELS.get(remind_before, f"за {remind_before} мин") if due_at else ""
             if remind == "Не напоминать":
                 remind = ""
@@ -980,10 +1207,11 @@ class TodoApp:
             self.tree.selection_set(str(select_id))
             self.tree.see(str(select_id))
         self.update_buddy()
+        self.update_side()
 
     def sort_key(self, row):
         """Выполненные всегда внизу; дальше — по выбранной сортировке."""
-        task_id, _, done, _, due_at, _, urgent, important = row
+        task_id, _, done, _, due_at, _, urgent, important, _ = row
         level = priority_level(urgent, important)
         no_due = due_at is None
         due = due_at or ""
@@ -1073,7 +1301,7 @@ class TodoApp:
         )
 
     def build_menu(self, task_id):
-        title, due_at, remind_before, urgent, important = db.get_task(self.conn, task_id)
+        title, due_at, remind_before, urgent, important, body = db.get_task(self.conn, task_id)
         done = "done" in self.tree.item(str(task_id), "tags")
 
         menu = tk.Menu(self.root, tearoff=0)
@@ -1118,13 +1346,14 @@ class TodoApp:
 
         menu.add_separator()
         menu.add_command(label="Создать письмо…", accelerator="Ctrl+E", command=self.email)
-        menu.add_command(label="Копировать текст", command=lambda: self.copy_text(title))
+        menu.add_command(label="Копировать текст",
+                         command=lambda: self.copy_text(f"{title}\n\n{body}".strip()))
         menu.add_command(label="Удалить", accelerator="Del", command=self.delete)
         return menu
 
     def quick_due(self, task_id, days):
         """Быстрая смена срока из меню. Время сохраняется прежним (или 09:00)."""
-        title, due_at, remind_before, urgent, important = db.get_task(self.conn, task_id)
+        title, due_at, remind_before, urgent, important, _ = db.get_task(self.conn, task_id)
         if days is None:
             due_at, remind_before = None, None
         else:
@@ -1134,12 +1363,12 @@ class TodoApp:
         self.refresh(select_id=task_id)
 
     def quick_remind(self, task_id, minutes):
-        title, due_at, _, urgent, important = db.get_task(self.conn, task_id)
+        title, due_at, _, urgent, important, _ = db.get_task(self.conn, task_id)
         db.update_task(self.conn, task_id, title, due_at, minutes, urgent, important)
         self.refresh(select_id=task_id)
 
     def quick_priority(self, task_id):
-        title, due_at, remind_before, _, _ = db.get_task(self.conn, task_id)
+        title, due_at, remind_before, _, _, _ = db.get_task(self.conn, task_id)
         db.update_task(self.conn, task_id, title, due_at, remind_before,
                        self.urgent_choice.get(), self.important_choice.get())
         self.refresh(select_id=task_id)
@@ -1154,14 +1383,27 @@ class TodoApp:
         if task is None:
             return
         task_id = task[0]
-        _, _, _, urgent, _ = db.get_task(self.conn, task_id)
+        title, _, _, urgent, _, description = db.get_task(self.conn, task_id)
         values = self.tree.set(str(task_id))
         status = values["status"].split(None, 1)[-1]  # без значка ○ ✔ ⚠
-        subject, body = build_email(values["title"], status, values["priority"], values["due"],
-                                    values["remind"], values["created"], urgent)
+        subject, body = build_email(title, status, values["priority"], values["due"],
+                                    values["remind"], values["created"], urgent, description)
         url = f"mailto:?subject={quote(subject, safe='')}&body={quote(body, safe='')}"
+        too_long = len(url) > MAILTO_LIMIT
+        if too_long:
+            # Почтовые программы не принимают слишком длинные ссылки: откроем письмо
+            # с темой, а текст положим в буфер обмена.
+            url = f"mailto:?subject={quote(subject, safe='')}"
+            self.copy_text(body)
         try:
             os.startfile(url)  # откроет почтовую программу по умолчанию (например, Outlook)
+            if too_long:
+                messagebox.showinfo(
+                    APP_NAME,
+                    "Описание задачи длинное, поэтому текст письма скопирован.\n\n"
+                    "Щёлкните в тексте письма и нажмите Ctrl+V.",
+                    parent=self.root,
+                )
         except OSError:
             self.copy_text(f"{subject}\n\n{body}")
             messagebox.showwarning(
@@ -1177,6 +1419,7 @@ class TodoApp:
         """Раз в 30 секунд проверяет, не пора ли о чём-то напомнить."""
         self.mark_overdue()
         self.update_buddy()
+        self.update_side()
         due = db.due_reminders(self.conn)
         if due:
             for task_id, _, _ in due:
