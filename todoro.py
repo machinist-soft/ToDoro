@@ -6,8 +6,10 @@ import math
 import os
 import re
 import tempfile
+import threading
 import time as time_module
 import tkinter as tk
+import webbrowser
 from email import policy as email_policy
 from email.message import EmailMessage
 from urllib.parse import quote
@@ -16,11 +18,12 @@ from pathlib import Path
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import db
+import updater
 from examples import make_examples
 from help_text import HELP
 
 APP_NAME = "ToDoro"  # ToDo + Totoro
-APP_VERSION = "1.0"  # номер версии — меняется здесь (установщик берёт его отсюда)
+APP_VERSION = "1.1"  # номер версии — меняется здесь (установщик берёт его отсюда)
 APP_YEAR = 2026
 COPYRIGHT_HOLDER = "Machinist"  # автор — имя меняется здесь и в файле LICENSE
 COPYRIGHT = f"© {APP_YEAR} {COPYRIGHT_HOLDER}"
@@ -1550,6 +1553,138 @@ class CardFieldsDialog(ModernDialog):
         self.destroy()
 
 
+def in_background(root, work, done):
+    """Выполняет work() в отдельном потоке (чтобы окно не «зависало»), а done(результат, ошибка)
+    вызывает уже в основном потоке — Tk можно трогать только из него."""
+    box = {}
+
+    def run():
+        try:
+            box["result"] = work()
+        except Exception as error:  # noqa: BLE001 — ошибку покажем пользователю
+            box["error"] = error
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+
+    def poll():
+        if thread.is_alive():
+            root.after(100, poll)
+        else:
+            done(box.get("result"), box.get("error"))
+    root.after(100, poll)
+
+
+class UpdateDialog(tk.Toplevel):
+    """«Вышла новая версия»: что нового и кнопка «Обновить» (скачать и установить)."""
+
+    def __init__(self, parent, release, on_close_app):
+        super().__init__(parent)
+        self.release = release
+        self.on_close_app = on_close_app
+        self.title("Обновление ToDoro")
+        self.configure(bg=SURFACE)
+        self.resizable(False, False)
+        self.transient(parent)
+        body = tk.Frame(self, bg=SURFACE, padx=26, pady=20)
+        body.pack(fill="both", expand=True)
+
+        top = tk.Frame(body, bg=SURFACE)
+        top.pack(fill="x")
+        if "totoro_small" in IMAGES:
+            tk.Label(top, image=IMAGES["totoro_small"], bg=SURFACE).pack(side="left", padx=(0, 14))
+        titles = tk.Frame(top, bg=SURFACE)
+        titles.pack(side="left", anchor="center")
+        tk.Label(titles, text=f"Вышла версия {release['version']}!", bg=SURFACE, fg=TEXT,
+                 font=("Segoe UI Semibold", 14)).pack(anchor="w")
+        tk.Label(titles, text=f"У вас сейчас версия {APP_VERSION}. Ваши задачи при обновлении "
+                 "сохранятся.", bg=SURFACE, fg=MUTED, font=FONT_SMALL, wraplength=380,
+                 justify="left").pack(anchor="w")
+
+        tk.Label(body, text="Что нового:", bg=SURFACE, fg=TEXT, font=FONT_BOLD).pack(anchor="w", pady=(16, 4))
+        notes_box = tk.Frame(body, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
+        notes_box.pack(fill="both", expand=True)
+        notes = tk.Text(notes_box, width=60, height=12, wrap="word", font=FONT_SMALL, bg=SURFACE,
+                        fg=TEXT, relief="flat", padx=10, pady=8, borderwidth=0)
+        scroll = ttk.Scrollbar(notes_box, orient="vertical", command=notes.yview)
+        notes.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        notes.pack(side="left", fill="both", expand=True)
+        # Описание выпуска — в разметке Markdown; убираем из него значки разметки
+        text = re.sub(r"^#+\s*", "", release["notes"] or "Описание не указано.", flags=re.M)
+        text = re.sub(r"\*\*|`", "", text).replace("\n- ", "\n• ")
+        notes.insert("1.0", text.split("\n---", 1)[0].strip())
+        notes.configure(state="disabled")
+        notes.mark_set("insert", "1.0")
+        self.after(50, lambda: notes.yview_moveto(0))  # показывать с начала, а не с конца
+
+        self.status = tk.Label(body, text="", bg=SURFACE, fg=MUTED, font=FONT_SMALL, anchor="w")
+        self.status.pack(fill="x", pady=(12, 0))
+        self.progress = ttk.Progressbar(body, mode="determinate", maximum=100)
+
+        buttons = tk.Frame(body, bg=SURFACE)
+        buttons.pack(fill="x", pady=(14, 0))
+        self.self_update = updater.can_self_update() and release.get("asset_url")
+        self.ok_button = ttk.Button(
+            buttons, text="Обновить" if self.self_update else "Открыть страницу выпуска",
+            style="Accent.TButton", command=self.update_now)
+        self.ok_button.pack(side="right")
+        self.later_button = ttk.Button(buttons, text="Позже", style="Soft.TButton", command=self.destroy)
+        self.later_button.pack(side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda e: self.destroy() if self.later_button.instate(["!disabled"]) else None)
+        self.bind("<Return>", lambda e: self.update_now() if self.ok_button.instate(["!disabled"]) else None)
+        center_on_screen(self)
+        self.focus_force()
+
+    def update_now(self):
+        if not self.self_update:
+            webbrowser.open(self.release["url"])
+            self.destroy()
+            return
+        for button in (self.ok_button, self.later_button):
+            button.state(["disabled"])
+        self.protocol("WM_DELETE_WINDOW", lambda: None)  # не закрывать посреди скачивания
+        self.progress.pack(fill="x", pady=(6, 0), before=self.status)
+        self.status.configure(text="Скачиваю обновление…")
+        shown = {"done": 0, "total": 0}
+
+        def progress(done, total):
+            shown.update(done=done, total=total)
+
+        def tick():
+            if not self.winfo_exists():
+                return
+            if shown["total"]:
+                self.progress["value"] = 100 * shown["done"] / shown["total"]
+                self.status.configure(text=f"Скачиваю обновление… {shown['done'] // 1048576} из "
+                                      f"{shown['total'] // 1048576} МБ")
+            if self.downloading:
+                self.after(150, tick)
+
+        def finished(path, error):
+            self.downloading = False
+            if error:
+                self.protocol("WM_DELETE_WINDOW", self.destroy)
+                for button in (self.ok_button, self.later_button):
+                    button.state(["!disabled"])
+                self.progress.pack_forget()
+                message = str(error) if isinstance(error, updater.UpdateError) else f"Ошибка: {error}"
+                self.status.configure(text=message, fg=DANGER)
+                return
+            self.status.configure(text="Устанавливаю… ToDoro закроется и откроется снова.")
+            self.update_idletasks()
+            try:
+                updater.run_installer(path)
+            except OSError as error:
+                self.status.configure(text=f"Не удалось запустить установщик: {error}", fg=DANGER)
+                return
+            self.after(500, self.on_close_app)
+
+        self.downloading = True
+        tick()
+        in_background(self, lambda: updater.download(self.release, progress), finished)
+
+
 class CatbusRun(tk.Toplevel):
     """Котобус проезжает по низу окна и «увозит» выполненную задачу.
 
@@ -2154,6 +2289,7 @@ class TodoApp:
         self.show_placeholder()
         self.entry.focus()
         root.after(1000, self.check_reminders)
+        root.after(4000, self.auto_check_update)  # раз в день — нет ли новой версии
 
     # --- список или доска ---
 
@@ -2238,6 +2374,10 @@ class TodoApp:
         return (PopupMenu()
                 .command("Справка", self.show_help, accel="F1")
                 .command("Лицензия (MIT)…", self.show_license)
+                .separator()
+                .command("Проверить обновления…", self.check_update_now)
+                .command("Проверять обновления автоматически", self.toggle_auto_update,
+                         checked=self.auto_update_enabled())
                 .separator()
                 .command(f"О программе {APP_NAME}…", self.show_about))
 
@@ -3065,6 +3205,38 @@ class TodoApp:
             messagebox.showinfo("Напоминание", "Напоминаю о задачах:\n\n" + "\n".join(lines), parent=self.root)
             self.root.attributes("-topmost", False)
         self.root.after(CHECK_EVERY_MS, self.check_reminders)
+
+    # --- обновления ---
+
+    def auto_update_enabled(self):
+        return db.get_setting(self.conn, "update_auto", "1") == "1"
+
+    def toggle_auto_update(self):
+        db.set_setting(self.conn, "update_auto", "0" if self.auto_update_enabled() else "1")
+
+    def auto_check_update(self):
+        """При запуске, не чаще раза в день. Без интернета — молча пропускаем."""
+        today = date.today().isoformat()
+        if not self.auto_update_enabled() or db.get_setting(self.conn, "update_checked") == today:
+            return
+
+        def done(release, error):
+            if error:
+                return
+            db.set_setting(self.conn, "update_checked", today)
+            if updater.is_newer(release["version"], APP_VERSION):
+                UpdateDialog(self.root, release, self.close)
+        in_background(self.root, updater.fetch_latest, done)
+
+    def check_update_now(self):
+        def done(release, error):
+            if error:
+                messagebox.showwarning(APP_NAME, str(error), parent=self.root)
+            elif updater.is_newer(release["version"], APP_VERSION):
+                UpdateDialog(self.root, release, self.close)
+            else:
+                messagebox.showinfo(APP_NAME, f"У вас последняя версия — {APP_VERSION}.", parent=self.root)
+        in_background(self.root, updater.fetch_latest, done)
 
     def close(self):
         self.conn.close()

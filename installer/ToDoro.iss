@@ -52,6 +52,7 @@ Name: "{autoprograms}\ToDoro"; Filename: "{app}\ToDoro.exe"; AppUserModelID: "To
 Name: "{autodesktop}\ToDoro"; Filename: "{app}\ToDoro.exe"; AppUserModelID: "ToDoro.App"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\ToDoro.exe"; Description: "{cm:LaunchProgram,ToDoro}"; Flags: nowait postinstall skipifsilent
+; Без skipifsilent: при обновлении из программы (тихая установка) новая версия запускается сама
+Filename: "{app}\ToDoro.exe"; Description: "{cm:LaunchProgram,ToDoro}"; Flags: nowait postinstall
 
 ; Задачи (%APPDATA%\ToDoro\todoro.db) при удалении программы НЕ удаляются.
