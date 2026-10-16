@@ -1,8 +1,10 @@
 """ToDoro — список дел с Тоторо."""
 import calendar
 import ctypes
+import os
 import re
 import tkinter as tk
+from urllib.parse import quote
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -221,6 +223,35 @@ def center_on_screen(window, width=None, height=None):
 def format_due(due_at):
     """'2026-10-16 09:00' -> '16.10.2026 09:00'."""
     return datetime.fromisoformat(due_at).strftime("%d.%m.%Y %H:%M") if due_at else ""
+
+
+def short_text(text, limit=60):
+    """Обрезает длинный текст по границе слова: «Очень длинная задача…»."""
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0].rstrip(",.;:—-") + "…"
+
+
+def build_email(title, status, priority, due, remind, created, urgent):
+    """Тема и текст письма по задаче."""
+    subject = f"Задача из {APP_NAME}: {short_text(title)}"
+    if urgent:
+        subject = "СРОЧНО! " + subject
+    level_hint = next((PRIORITY_HINTS[k] for k, v in PRIORITY_NAMES.items() if v and v == priority), "")
+    lines = [
+        f"Задача: {title}",
+        "",
+        f"Статус: {status}",
+        f"Приоритет: {priority} — {level_hint}" if priority else "Приоритет: обычный",
+        f"Срок: {due or 'не задан'}",
+        f"Напоминание: {remind or 'нет'}",
+        f"Создана: {created}",
+        "",
+        "—",
+        f"Отправлено из {APP_NAME}",
+    ]
+    return subject, "\r\n".join(lines)
 
 
 def status_text(done, overdue=False):
@@ -592,9 +623,10 @@ class TodoApp:
         bottom.pack(side="bottom", fill="x", pady=(14, 0))
         ttk.Button(bottom, text="✔  Выполнено / не выполнено", command=self.toggle).pack(side="left")
         ttk.Button(bottom, text="✎  Изменить", command=self.edit).pack(side="left", padx=(8, 0))
+        ttk.Button(bottom, text="✉  Письмо", command=self.email).pack(side="left", padx=(8, 0))
         ttk.Button(bottom, text="Удалить", style="Danger.TButton",
                    command=self.delete).pack(side="right")
-        ttk.Label(bottom, text="Двойной щелчок — изменить · правая кнопка — меню · F1 — справка",
+        ttk.Label(bottom, text="ПКМ — меню · F1 — справка",
                   style="Muted.TLabel").pack(side="right", padx=(0, 14))
 
         # Карточка с таблицей задач
@@ -630,6 +662,8 @@ class TodoApp:
         self.tree.bind("<F2>", lambda e: self.edit())
         self.tree.bind("<space>", lambda e: self.toggle())
         self.tree.bind("<Delete>", lambda e: self.delete())
+        self.tree.bind("<Control-e>", lambda e: self.email())
+        self.tree.bind("<Control-E>", lambda e: self.email())
         self.tree.bind("<Button-3>", self.show_menu)  # правая кнопка мыши
         self.tree.bind("<App>", self.show_menu_for_selected)  # клавиша контекстного меню
 
@@ -872,6 +906,7 @@ class TodoApp:
         )
 
         menu.add_separator()
+        menu.add_command(label="Создать письмо…", accelerator="Ctrl+E", command=self.email)
         menu.add_command(label="Копировать текст", command=lambda: self.copy_text(title))
         menu.add_command(label="Удалить", accelerator="Del", command=self.delete)
         return menu
@@ -901,6 +936,29 @@ class TodoApp:
     def copy_text(self, text):
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
+
+    def email(self):
+        """Открывает новое письмо в почтовой программе с данными выбранной задачи."""
+        task = self.selected()
+        if task is None:
+            return
+        task_id = task[0]
+        _, _, _, urgent, _ = db.get_task(self.conn, task_id)
+        values = self.tree.set(str(task_id))
+        status = values["status"].split(None, 1)[-1]  # без значка ○ ✔ ⚠
+        subject, body = build_email(values["title"], status, values["priority"], values["due"],
+                                    values["remind"], values["created"], urgent)
+        url = f"mailto:?subject={quote(subject, safe='')}&body={quote(body, safe='')}"
+        try:
+            os.startfile(url)  # откроет почтовую программу по умолчанию (например, Outlook)
+        except OSError:
+            self.copy_text(f"{subject}\n\n{body}")
+            messagebox.showwarning(
+                APP_NAME,
+                "Не удалось открыть почтовую программу.\n\n"
+                "Тема и текст письма скопированы — вставьте их в письмо вручную (Ctrl+V).",
+                parent=self.root,
+            )
 
     # --- напоминания ---
 
