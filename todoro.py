@@ -1676,12 +1676,18 @@ class UpdateDialog(tk.Toplevel):
         notes.mark_set("insert", "1.0")
         self.after(50, lambda: notes.yview_moveto(0))  # показывать с начала, а не с конца
 
-        self.status = tk.Label(body, text="", bg=SURFACE, fg=MUTED, font=FONT_SMALL, anchor="w")
-        self.status.pack(fill="x", pady=(12, 0))
-        self.progress = ttk.Progressbar(body, mode="determinate", maximum=100)
+        # Место под полосу прогресса и строку состояния отведено заранее: высота окна задана
+        # при открытии, и без запаса появившаяся полоса вытеснила бы кнопки за край окна
+        footer = tk.Frame(body, bg=SURFACE, height=64)
+        footer.pack(fill="x", pady=(12, 0))
+        footer.pack_propagate(False)
+        self.progress = ttk.Progressbar(footer, mode="determinate", maximum=100)
+        self.status = tk.Label(footer, text="", bg=SURFACE, fg=MUTED, font=FONT_SMALL, anchor="nw",
+                               justify="left", wraplength=440)
+        self.status.pack(fill="x", side="bottom")
 
         buttons = tk.Frame(body, bg=SURFACE)
-        buttons.pack(fill="x", pady=(14, 0))
+        buttons.pack(fill="x", pady=(8, 0))
         self.self_update = updater.can_self_update() and release.get("asset_url")
         self.ok_button = ttk.Button(
             buttons, text="Обновить" if self.self_update else "Открыть страницу выпуска",
@@ -1702,7 +1708,7 @@ class UpdateDialog(tk.Toplevel):
         for button in (self.ok_button, self.later_button):
             button.state(["disabled"])
         self.protocol("WM_DELETE_WINDOW", lambda: None)  # не закрывать посреди скачивания
-        self.progress.pack(fill="x", pady=(6, 0), before=self.status)
+        self.progress.pack(fill="x", side="top", pady=(4, 0))
         self.status.configure(text="Скачиваю обновление…")
         shown = {"done": 0, "total": 0}
 
@@ -1710,14 +1716,14 @@ class UpdateDialog(tk.Toplevel):
             shown.update(done=done, total=total)
 
         def tick():
-            if not self.winfo_exists():
+            # скачивание закончилось — не затираем сообщение об ошибке или «Устанавливаю…»
+            if not self.winfo_exists() or not self.downloading:
                 return
             if shown["total"]:
                 self.progress["value"] = 100 * shown["done"] / shown["total"]
                 self.status.configure(text=f"Скачиваю обновление… {shown['done'] // 1048576} из "
                                       f"{shown['total'] // 1048576} МБ")
-            if self.downloading:
-                self.after(150, tick)
+            self.after(150, tick)
 
         def finished(path, error):
             self.downloading = False
