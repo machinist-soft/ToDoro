@@ -1642,7 +1642,11 @@ class UpdateDialog(tk.Toplevel):
         notes.pack(side="left", fill="both", expand=True)
         # Описание выпуска — в разметке Markdown; убираем из него значки разметки
         text = re.sub(r"^#+\s*", "", release["notes"] or "Описание не указано.", flags=re.M)
+        text = re.sub(r"^>[ \t]?", "", text, flags=re.M)        # цитаты «> …»
+        text = re.sub(r"\n[ \t]+(?=\S)", " ", text)             # перенесённые строки пункта — в одну
         text = re.sub(r"\*\*|`", "", text).replace("\n- ", "\n• ")
+        if text.startswith("- "):
+            text = "• " + text[2:]
         notes.insert("1.0", text.split("\n---", 1)[0].strip())
         notes.configure(state="disabled")
         notes.mark_set("insert", "1.0")
