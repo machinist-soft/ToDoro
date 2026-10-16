@@ -15,14 +15,21 @@ from help_text import HELP
 
 APP_NAME = "ToDoro"  # ToDo + Totoro
 APP_YEAR = 2026
-COPYRIGHT_HOLDER = "amfil"  # правообладатель — имя меняется только здесь
+COPYRIGHT_HOLDER = "Machinist"  # автор — имя меняется здесь и в файле LICENSE
 COPYRIGHT = f"© {APP_YEAR} {COPYRIGHT_HOLDER}"
-ABOUT_TEXT = (
-    f"{APP_NAME} — список дел с Тоторо.\n\n"
-    f"{COPYRIGHT}. Все права защищены.\n\n"
-    "Тоторо и Котобус — персонажи студии Ghibli (© Studio Ghibli). "
-    "Их изображения в программе — любительские рисунки; "
-    "программа не связана со студией Ghibli и не одобрена ею."
+LICENSE_PATH = Path(__file__).with_name("LICENSE")
+LICENSE_SUMMARY = (
+    "Программа распространяется по лицензии MIT — это свободная лицензия открытого кода:\n"
+    "• пользоваться можно бесплатно, в том числе в работе и в коммерческих целях;\n"
+    "• можно копировать, изменять, дополнять и распространять — целиком или частями;\n"
+    "• единственное условие: сохранять указание автора (строку «Copyright (c) "
+    f"{APP_YEAR} {COPYRIGHT_HOLDER}») и текст лицензии во всех копиях;\n"
+    "• программа предоставляется «как есть», без каких-либо гарантий."
+)
+GHIBLI_NOTE = (
+    "Тоторо и Котобус — персонажи студии Ghibli (© Studio Ghibli). Их изображения "
+    "в программе — любительские рисунки; лицензия MIT на самих персонажей не распространяется. "
+    "Программа не связана со студией Ghibli и не одобрена ею."
 )
 ICON_PATH = Path(__file__).with_name("icon.ico")
 IMAGES_DIR = Path(__file__).with_name("images")
@@ -141,6 +148,7 @@ def setup_style(root):
         troughcolor=BG, selectbackground=ACCENT, selectforeground="white",
     )
     style.configure("Card.TFrame", background=SURFACE)
+    style.configure("CardMuted.TLabel", background=SURFACE, foreground=MUTED, font=FONT_SMALL)
     style.configure("Muted.TLabel", foreground=MUTED, font=FONT_SMALL)
     style.configure("Title.TLabel", font=FONT_TITLE)
     style.configure("Empty.TLabel", background=SURFACE, foreground=MUTED, font=FONT)
@@ -181,6 +189,8 @@ def setup_style(root):
               indicatorbackground=[("selected", ACCENT), ("active", ACCENT_SOFT)],
               upperbordercolor=[("selected", ACCENT)], lowerbordercolor=[("selected", ACCENT)],
               background=[("active", BG)])
+    style.configure("Card.TCheckbutton", background=SURFACE)
+    style.map("Card.TCheckbutton", background=[("active", SURFACE)])
     style.configure("Icon.TButton", padding=(6, 3), font=FONT)
 
     # Поля ввода и выпадающие списки
@@ -409,100 +419,119 @@ class DatePicker(ttk.Frame):
                        fg=MUTED, font=FONT_SMALL).pack(side="right")
 
 
-class TaskDialog(tk.Toplevel):
-    """Окно редактирования задачи: текст, срок и напоминание."""
+class TaskForm(ttk.Frame):
+    """Форма задачи: заголовок, описание, статус, срок, приоритет, напоминание.
 
-    def __init__(self, parent, title, due_at, remind_before, urgent=False, important=False,
-                 description=""):
-        super().__init__(parent)
-        self.result = None
-        self.title("Задача")
-        self.configure(bg=BG)
-        self.resizable(False, False)
-        self.transient(parent)
+    Встраивается в правую панель (compact=True) или в запасное окно TaskDialog.
+    on_save получает словарь с новыми значениями, on_cancel вызывается при отмене.
+    """
 
-        body = ttk.Frame(self, padding=(20, 18, 20, 6))
-        body.pack(fill="both")
-        body.columnconfigure(0, weight=1)
+    def __init__(self, parent, task, statuses, on_save, on_cancel, compact=False):
+        super().__init__(parent, style="Card.TFrame" if compact else "TFrame")
+        self.on_save, self.on_cancel = on_save, on_cancel
+        self.statuses = statuses  # [(id, название, цвет, выполнено)]
+        style_bg = SURFACE if compact else BG
+        label_style = "CardMuted.TLabel" if compact else "Muted.TLabel"
 
-        head = ttk.Frame(body)
-        head.grid(row=0, column=0, sticky="we")
-        ttk.Label(head, text="Заголовок", style="Muted.TLabel").pack(anchor="w")
-        self.title_entry = ttk.Entry(head, font=FONT, width=48)
-        self.title_entry.pack(fill="x", pady=(4, 12))
-        self.title_entry.insert(0, title)
+        def label(text, top=12):
+            ttk.Label(self, text=text, style=label_style).pack(anchor="w", pady=(top, 4))
 
-        ttk.Label(head, text="Описание", style="Muted.TLabel").pack(anchor="w")
-        desc_box = tk.Frame(head, bg=SURFACE, highlightthickness=1,
+        label("Заголовок", top=0)
+        self.title_entry = ttk.Entry(self, font=FONT, width=1 if compact else 48)
+        self.title_entry.pack(fill="x")
+        self.title_entry.insert(0, task["title"])
+
+        label("Описание")
+        desc_box = tk.Frame(self, bg=SURFACE, highlightthickness=1,
                             highlightbackground=BORDER, highlightcolor=ACCENT)
-        desc_box.pack(fill="x", pady=(4, 14))
-        self.desc = tk.Text(desc_box, font=FONT, height=6, width=48, wrap="word",
-                            relief="flat", borderwidth=0, padx=8, pady=6, bg=SURFACE, fg=TEXT,
-                            insertbackground=TEXT, highlightthickness=0, undo=True)
+        desc_box.pack(fill="x")
+        self.desc = tk.Text(desc_box, font=FONT, height=5 if compact else 6, width=1 if compact else 48,
+                            wrap="word", relief="flat", borderwidth=0, padx=8, pady=6, bg=SURFACE,
+                            fg=TEXT, insertbackground=TEXT, highlightthickness=0, undo=True)
         desc_scroll = ttk.Scrollbar(desc_box, orient="vertical", command=self.desc.yview)
         self.desc.configure(yscrollcommand=desc_scroll.set)
         desc_scroll.pack(side="right", fill="y")
         self.desc.pack(side="left", fill="both", expand=True)
-        self.desc.insert("1.0", description)
-        # В описании Enter — новая строка (а не «Сохранить»); сохранить — Ctrl+Enter
+        self.desc.insert("1.0", task["body"])
+        # В описании Enter — новая строка; сохранить — Ctrl+Enter
         self.desc.bind("<Return>", lambda e: (self.desc.insert("insert", "\n"), "break")[1])
-        self.desc.bind("<Control-Return>", lambda e: (self.save(), "break")[1])
-        desc_box.bind("<FocusIn>", lambda e: self.desc.focus_set())
 
-        due = datetime.fromisoformat(due_at) if due_at else None
-        ttk.Label(body, text="Срок выполнения", style="Muted.TLabel").grid(row=2, column=0, sticky="w")
-        due_row = ttk.Frame(body)
-        due_row.grid(row=3, column=0, sticky="w", pady=(4, 6))
+        label("Статус")
+        self.status = ttk.Combobox(self, values=[s[1] for s in statuses], state="readonly",
+                                   width=1 if compact else 24, font=FONT)
+        self.status.pack(fill="x" if compact else None, anchor="w")
+        current = next((s[1] for s in statuses if s[0] == task["status_id"]), statuses[0][1])
+        self.status.set(current)
+
+        due = datetime.fromisoformat(task["due_at"]) if task["due_at"] else None
+        label("Срок выполнения")
+        due_row = ttk.Frame(self, style=self["style"])
+        due_row.pack(fill="x")
         self.date = DatePicker(due_row, due.date() if due else None, on_change=self.date_changed)
+        self.date.configure(style=self["style"])
         self.date.pack(side="left")
-        ttk.Label(due_row, text="в").pack(side="left", padx=(14, 8))
-        self.hour = ttk.Combobox(due_row, values=HOURS, state="readonly", width=3, font=FONT)
+        time_row =ttk.Frame(self, style=self["style"]) if compact else due_row
+        if compact:
+            time_row.pack(fill="x", pady=(6, 0))
+        ttk.Label(time_row, text="время" if compact else "в",
+                  style=label_style if compact else "TLabel").pack(
+            side="left", padx=(0 if compact else 14, 8))
+        self.hour = ttk.Combobox(time_row, values=HOURS, state="readonly", width=3, font=FONT)
         self.hour.pack(side="left")
-        ttk.Label(due_row, text=":").pack(side="left", padx=3)
-        self.minute = ttk.Combobox(due_row, values=MINUTES, state="readonly", width=3, font=FONT)
+        ttk.Label(time_row, text=":", style=label_style if compact else "TLabel").pack(side="left", padx=3)
+        self.minute = ttk.Combobox(time_row, values=MINUTES, state="readonly", width=3, font=FONT)
         self.minute.pack(side="left")
         self.hour.set(due.strftime("%H") if due else DEFAULT_TIME[0])
         self.minute.set(due.strftime("%M") if due else DEFAULT_TIME[1])
 
-        quick = ttk.Frame(body)
-        quick.grid(row=4, column=0, sticky="w", pady=(2, 14))
-        for text, days in (("Сегодня", 0), ("Завтра", 1), ("Через неделю", 7)):
-            ttk.Button(quick, text=text, command=lambda d=days: self.set_date(d)).pack(
-                side="left", padx=(0, 6))
-        ttk.Button(quick, text="Без срока", command=lambda: self.date.set(None)).pack(side="left")
+        # Быстрый выбор срока — ссылками
+        quick = tk.Frame(self, bg=style_bg)
+        quick.pack(fill="x", pady=(6, 0))
+        links = (("Сегодня", lambda: self.set_date(0)), ("Завтра", lambda: self.set_date(1)),
+                 ("Через неделю", lambda: self.set_date(7)), ("Без срока", lambda: self.date.set(None)))
+        for i, (text, command) in enumerate(links):
+            link = tk.Label(quick, text=text, bg=style_bg, fg=ACCENT, font=FONT_SMALL, cursor="hand2")
+            link.grid(row=i // 2 if compact else 0, column=i % 2 if compact else i,
+                      sticky="w", padx=(0, 14), pady=1)
+            link.bind("<Button-1>", lambda e, c=command: c())
 
-        ttk.Label(body, text="Приоритет", style="Muted.TLabel").grid(row=5, column=0, sticky="w")
-        prio_row = ttk.Frame(body)
-        prio_row.grid(row=6, column=0, sticky="w", pady=(4, 14))
-        self.urgent = tk.BooleanVar(value=bool(urgent))
-        self.important = tk.BooleanVar(value=bool(important))
-        ttk.Checkbutton(prio_row, text="Срочно", variable=self.urgent,
+        label("Приоритет")
+        prio_row = ttk.Frame(self, style=self["style"])
+        prio_row.pack(fill="x")
+        self.urgent = tk.BooleanVar(value=bool(task["urgent"]))
+        self.important = tk.BooleanVar(value=bool(task["important"]))
+        check_style = "Card.TCheckbutton" if compact else "TCheckbutton"
+        ttk.Checkbutton(prio_row, text="Срочно", variable=self.urgent, style=check_style,
                         command=self.priority_changed, cursor="hand2").pack(side="left")
-        ttk.Checkbutton(prio_row, text="Важно", variable=self.important,
+        ttk.Checkbutton(prio_row, text="Важно", variable=self.important, style=check_style,
                         command=self.priority_changed, cursor="hand2").pack(side="left", padx=(18, 0))
-        self.priority_label = ttk.Label(prio_row, style="Muted.TLabel", compound="left")
-        self.priority_label.pack(side="left", padx=(22, 0))
+        self.priority_label = ttk.Label(prio_row if not compact else self, style=label_style,
+                                        compound="left")
+        self.priority_label.pack(side="left" if not compact else "top", anchor="w",
+                                 padx=(22, 0) if not compact else 0, pady=(4, 0) if compact else 0)
         self.priority_changed()
 
-        ttk.Label(body, text="Напоминание", style="Muted.TLabel").grid(row=7, column=0, sticky="w")
-        self.remind = ttk.Combobox(body, values=list(REMIND_OPTIONS), state="readonly",
-                                   width=18, font=FONT)
-        self.remind.set(REMIND_LABELS.get(remind_before, f"за {remind_before} мин"))
-        self.remind.grid(row=8, column=0, sticky="w", pady=(4, 0))
+        label("Напоминание")
+        self.remind = ttk.Combobox(self, values=list(REMIND_OPTIONS), state="readonly",
+                                   width=1 if compact else 18, font=FONT)
+        self.remind.pack(fill="x" if compact else None, anchor="w")
+        self.remind.set(REMIND_LABELS.get(task["remind_before"], f"за {task['remind_before']} мин"))
 
-        buttons = ttk.Frame(self, padding=(20, 16, 20, 18))
-        buttons.pack(fill="x")
-        ttk.Button(buttons, text="Сохранить", style="Accent.TButton",
-                   command=self.save).pack(side="right")
-        ttk.Button(buttons, text="Отмена", command=self.destroy).pack(side="right", padx=(0, 8))
+        buttons = ttk.Frame(self, style=self["style"])
+        buttons.pack(fill="x", pady=(18, 0))
+        ttk.Button(buttons, text="Сохранить", style="Accent.TButton", command=self.save).pack(side="right")
+        ttk.Button(buttons, text="Отмена", style="Soft.TButton" if compact else "TButton",
+                   command=on_cancel).pack(side="right", padx=(0, 8))
 
-        self.bind("<Return>", lambda e: self.save())
-        self.bind("<Escape>", lambda e: self.destroy())
         self.date_changed()
-        self.title_entry.focus()
+        self.initial = self.values()
+        bind_tree(self, "<Control-Return>", lambda e: (self.save(), "break")[1])
+        bind_tree(self, "<Escape>", lambda e: (self.on_cancel(), "break")[1])
+        self.title_entry.bind("<Return>", lambda e: self.save())
+
+    def focus_title(self):
+        self.title_entry.focus_set()
         self.title_entry.icursor("end")
-        center_on_screen(self)
-        self.grab_set()
 
     def set_date(self, days):
         self.date.set(date.today() + timedelta(days=days))
@@ -523,27 +552,52 @@ class TaskDialog(tk.Toplevel):
         if not has_date:
             self.remind.set("Не напоминать")
 
-    def save(self):
-        title = self.title_entry.get().strip()
-        if not title:
-            messagebox.showwarning("Задача", "Текст задачи не может быть пустым.", parent=self)
-            return
-
+    def values(self):
+        """Текущие значения формы (без проверки)."""
         due_at = None
         if self.date.value:
             due = datetime.combine(self.date.value, time(int(self.hour.get()), int(self.minute.get())))
             due_at = due.strftime("%Y-%m-%d %H:%M")
+        status_id = next(s[0] for s in self.statuses if s[1] == self.status.get())
+        return dict(title=self.title_entry.get().strip(), body=self.desc.get("1.0", "end-1c").strip(),
+                    status_id=status_id, due_at=due_at,
+                    remind_before=REMIND_OPTIONS.get(self.remind.get()),
+                    urgent=self.urgent.get(), important=self.important.get())
 
-        remind_before = REMIND_OPTIONS.get(self.remind.get())
-        if remind_before is not None and due_at is None:
-            messagebox.showwarning(
-                "Задача", "Чтобы напомнить о задаче, укажите срок.", parent=self,
-            )
+    def dirty(self):
+        """Есть ли несохранённые изменения."""
+        return self.values() != self.initial
+
+    def save(self):
+        result = self.values()
+        if not result["title"]:
+            messagebox.showwarning("Задача", "Заголовок задачи не может быть пустым.", parent=self)
             return
+        if result["remind_before"] is not None and result["due_at"] is None:
+            messagebox.showwarning("Задача", "Чтобы напомнить о задаче, укажите срок.", parent=self)
+            return
+        self.on_save(result)
 
-        description = self.desc.get("1.0", "end-1c").strip()
-        self.result = (title, due_at, remind_before, self.urgent.get(), self.important.get(),
-                       description)
+
+class TaskDialog(tk.Toplevel):
+    """Запасное окно с формой задачи — когда правая панель скрыта (узкое окно)."""
+
+    def __init__(self, parent, task, statuses):
+        super().__init__(parent)
+        self.result = None
+        self.title("Задача")
+        self.configure(bg=BG)
+        self.resizable(False, False)
+        self.transient(parent)
+        self.form = TaskForm(self, task, statuses, on_save=self.saved, on_cancel=self.destroy)
+        self.form.configure(padding=(20, 18, 20, 18))
+        self.form.pack(fill="both")
+        center_on_screen(self)
+        self.form.focus_title()
+        self.grab_set()
+
+    def saved(self, result):
+        self.result = result
         self.destroy()
 
 
@@ -588,7 +642,8 @@ class HelpWindow(tk.Toplevel):
             text.insert("end", "\n", kind)
 
         text.tag_configure("copyright", foreground=MUTED, font=FONT_SMALL, spacing1=24)
-        text.insert("end", ABOUT_TEXT.split("\n\n", 1)[1].replace("\n\n", "\n"), "copyright")
+        text.insert("end", f"{COPYRIGHT}. Лицензия MIT (меню «? Справка» → «Лицензия»).\n"
+                           f"{GHIBLI_NOTE}", "copyright")
 
         text.configure(state="disabled")  # только для чтения
         self.bind("<Escape>", lambda e: self.destroy())
@@ -612,6 +667,66 @@ class HelpWindow(tk.Toplevel):
                     text.image_create("end", image=image, align="center")
             else:
                 text.insert("end", part, kind)
+
+
+class AboutWindow(tk.Toplevel):
+    """«О программе»: название, автор, лицензия, примечание о персонажах Ghibli."""
+
+    def __init__(self, parent, on_license):
+        super().__init__(parent)
+        self.title(f"О программе {APP_NAME}")
+        self.configure(bg=SURFACE)
+        self.resizable(False, False)
+        self.transient(parent)
+        body = tk.Frame(self, bg=SURFACE, padx=28, pady=22)
+        body.pack(fill="both")
+        top = tk.Frame(body, bg=SURFACE)
+        top.pack(fill="x")
+        if "totoro_small" in IMAGES:
+            tk.Label(top, image=IMAGES["totoro_small"], bg=SURFACE).pack(side="left", padx=(0, 16))
+        names = tk.Frame(top, bg=SURFACE)
+        names.pack(side="left", anchor="center")
+        tk.Label(names, text=APP_NAME, bg=SURFACE, fg=TEXT, font=FONT_TITLE).pack(anchor="w")
+        tk.Label(names, text="Список дел с Тоторо", bg=SURFACE, fg=MUTED, font=FONT).pack(anchor="w")
+
+        tk.Label(body, text=COPYRIGHT, bg=SURFACE, fg=TEXT, font=FONT_BOLD).pack(anchor="w", pady=(18, 8))
+        for text, color, font in ((LICENSE_SUMMARY, TEXT, FONT_SMALL), (GHIBLI_NOTE, MUTED, FONT_SMALL)):
+            tk.Label(body, text=text, bg=SURFACE, fg=color, font=font, justify="left",
+                     wraplength=470).pack(anchor="w", pady=(0, 10))
+
+        buttons = tk.Frame(body, bg=SURFACE)
+        buttons.pack(fill="x", pady=(8, 0))
+        ttk.Button(buttons, text="Закрыть", style="Accent.TButton", command=self.destroy).pack(side="right")
+        ttk.Button(buttons, text="Текст лицензии…", style="Soft.TButton",
+                   command=lambda: (self.destroy(), on_license())).pack(side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda e: self.destroy())
+        center_on_screen(self)
+        self.focus_force()
+
+
+class LicenseWindow(tk.Toplevel):
+    """Полный текст лицензии из файла LICENSE (официальный текст MIT — на английском)."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Лицензия MIT")
+        self.configure(bg=SURFACE)
+        tk.Label(self, text="Краткий пересказ — в окне «О программе». Ниже — официальный текст "
+                            "лицензии MIT на английском, он имеет юридическую силу.",
+                 bg=SURFACE, fg=MUTED, font=FONT_SMALL, wraplength=600, justify="left").pack(
+            anchor="w", padx=24, pady=(18, 6))
+        text = tk.Text(self, wrap="word", bg=SURFACE, fg=TEXT, font=("Consolas", 10), relief="flat",
+                       highlightthickness=0, padx=24, pady=10, width=78, height=24)
+        try:
+            content = LICENSE_PATH.read_text(encoding="utf-8")
+        except OSError:
+            content = f"Файл лицензии не найден: {LICENSE_PATH}"
+        text.insert("1.0", content)
+        text.configure(state="disabled")
+        text.pack(fill="both", expand=True)
+        self.bind("<Escape>", lambda e: self.destroy())
+        center_on_screen(self)
+        self.focus_force()
 
 
 def round_rect(canvas, x1, y1, x2, y2, r, **kw):
@@ -711,6 +826,8 @@ class TaskCard(tk.Frame):
     def __init__(self, parent, on_close, on_edit, on_email):
         super().__init__(parent, bg=SURFACE, padx=18, pady=14)
         wrap = PANEL_WIDTH - 40
+        # ширину панели можно менять — заголовок переносится по её ширине
+        self.bind("<Configure>", lambda e: self.title.configure(wraplength=max(e.width - 40, 100)))
 
         top = tk.Frame(self, bg=SURFACE)
         top.pack(fill="x")
@@ -784,38 +901,103 @@ class TaskCard(tk.Frame):
         if body.strip():
             self.body.insert("1.0", body)
         else:
-            self.body.insert("1.0", "Описания нет.\nДважды щёлкните по задаче в списке, "
-                                    "чтобы его добавить.", "empty")
+            self.body.insert("1.0", "Описания нет.\nНажмите «Изменить», чтобы его добавить.",
+                             "empty")
         self.body.configure(state="disabled")
         self.values["due"].configure(text=due or "не задан", fg=DANGER if overdue else TEXT)
         self.values["remind"].configure(text=remind or "нет")
         self.values["created"].configure(text=created)
 
 
+class ScrollArea(tk.Frame):
+    """Прокручиваемая область: содержимое — во фрейме self.inner, ширина — по ширине области."""
+
+    def __init__(self, parent, bg):
+        super().__init__(parent, bg=bg)
+        self.canvas = tk.Canvas(self, bg=bg, highlightthickness=0)
+        self.bar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.update_bar)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.inner = tk.Frame(self.canvas, bg=bg)
+        window = self.canvas.create_window(0, 0, window=self.inner, anchor="nw")
+        self.inner.bind("<Configure>",
+                        lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(window, width=e.width))
+
+    def update_bar(self, first, last):
+        needed = not (float(first) <= 0 and float(last) >= 1)
+        if needed and not self.bar.winfo_ismapped():
+            self.bar.pack(side="right", fill="y", before=self.canvas)
+        elif not needed and self.bar.winfo_ismapped():
+            self.bar.pack_forget()
+        self.bar.set(first, last)
+
+    def bind_wheel(self, widget=None):
+        """Колёсико прокручивает область (поле описания прокручивается само)."""
+        widget = widget or self.inner
+        if isinstance(widget, tk.Text):
+            return
+        widget.bind("<MouseWheel>", self.on_wheel)
+        for child in widget.winfo_children():
+            self.bind_wheel(child)
+
+    def on_wheel(self, event):
+        if self.bar.winfo_ismapped():
+            self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+        return "break"  # и не меняем значение в выпадающих списках при прокрутке
+
+
 class SidePanel(tk.Frame):
-    """Правая панель: Тоторо, пока задача не выбрана, иначе — карточка задачи."""
+    """Правая панель: Тоторо, пока задача не выбрана, иначе — карточка задачи
+    или форма её изменения."""
 
     def __init__(self, parent, on_task_click, on_close, on_edit, on_email):
         super().__init__(parent, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER,
-                         width=PANEL_WIDTH)
-        self.pack_propagate(False)  # ширина панели не зависит от длины текста
+                         highlightcolor=BORDER, width=PANEL_WIDTH)
+        self.pack_propagate(False)  # ширину задаёт разделитель, а не длина текста
         self.totoro = TotoroPanel(self, on_task_click)
         self.card = TaskCard(self, on_close, on_edit, on_email)
+        self.editor = None  # ScrollArea с формой, пока задача редактируется
+        self.form = None
         self.mode = None
         self.show_totoro()
 
+    def switch(self, mode, widget):
+        if self.mode == mode:
+            return
+        for other in (self.totoro, self.card):
+            other.pack_forget()
+        if self.editor is not None and widget is not self.editor:
+            self.editor.destroy()
+            self.editor, self.form = None, None
+        widget.pack(fill="both", expand=True)
+        self.mode = mode
+
     def show_totoro(self):
-        if self.mode != "totoro":
-            self.card.pack_forget()
-            self.totoro.pack(fill="both", expand=True)
-            self.mode = "totoro"
+        self.switch("totoro", self.totoro)
 
     def show_task(self, **task):
         self.card.show(**task)
-        if self.mode != "task":
-            self.totoro.pack_forget()
-            self.card.pack(fill="both", expand=True)
-            self.mode = "task"
+        self.switch("task", self.card)
+
+    def show_form(self, task, statuses, on_save, on_cancel):
+        """Форма изменения задачи прямо в панели."""
+        if self.editor is not None:
+            self.editor.destroy()
+        self.mode = None
+        self.editor = ScrollArea(self, SURFACE)
+        head = tk.Frame(self.editor.inner, bg=SURFACE)
+        head.pack(fill="x", padx=18, pady=(14, 10))
+        tk.Label(head, text="Изменение задачи", bg=SURFACE, fg=TEXT,
+                 font=("Segoe UI Semibold", 13)).pack(side="left")
+        close = tk.Label(head, text="✕", bg=SURFACE, fg=MUTED, font=FONT, cursor="hand2")
+        close.pack(side="right")
+        close.bind("<Button-1>", lambda e: on_cancel())
+        self.form = TaskForm(self.editor.inner, task, statuses, on_save, on_cancel, compact=True)
+        self.form.pack(fill="x", padx=18, pady=(0, 16))
+        self.editor.bind_wheel()
+        self.switch("edit", self.editor)
+        self.form.focus_title()
 
 
 class CatbusRoad(tk.Canvas):
@@ -867,6 +1049,7 @@ class CatbusRoad(tk.Canvas):
 
 
 LANE_WIDTH = 250
+CARD_BORDER = "#e9ecf2"  # рамка карточки на доске (у выбранной — синяя)
 # Готовые цвета для колонок доски
 LANE_COLORS = [
     ("Синий", "#3b82f6"), ("Голубой", "#06b6d4"), ("Зелёный", "#22c55e"),
@@ -960,8 +1143,9 @@ class KanbanBoard(tk.Frame):
 
     def make_lane(self, status_id, name, color, is_done, rows, overdue_ids):
         lane_bg = tint(color, 0.9)
+        # Толщина рамки всегда 2: при подсветке меняется только цвет, и ничего не «прыгает»
         lane = tk.Frame(self.inner, bg=lane_bg, width=LANE_WIDTH,
-                        highlightthickness=1, highlightbackground=BORDER)
+                        highlightthickness=2, highlightbackground=BORDER)
         lane.pack(side="left", fill="y", padx=(0, 12), pady=(0, 4))
         lane.pack_propagate(False)
         tk.Frame(lane, bg=color, height=5).pack(fill="x")
@@ -1003,7 +1187,7 @@ class KanbanBoard(tk.Frame):
 
     def make_card(self, parent, row, lane_color, overdue):
         task_id, title, done, _, due_at, remind_before, urgent, important, body, _ = row
-        card = tk.Frame(parent, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER,
+        card = tk.Frame(parent, bg=SURFACE, highlightthickness=2, highlightbackground=CARD_BORDER,
                         cursor="hand2")
         card.pack(fill="x", pady=(0, 8))
         tk.Frame(card, bg=lane_color, width=4).pack(side="left", fill="y")
@@ -1043,47 +1227,89 @@ class KanbanBoard(tk.Frame):
 
     def highlight_selected(self):
         for task_id, card in self.cards.items():
-            chosen = task_id == self.selected_id
-            card.configure(highlightbackground=ACCENT if chosen else BORDER,
-                           highlightthickness=2 if chosen else 1)
+            card.configure(highlightbackground=ACCENT if task_id == self.selected_id else CARD_BORDER)
 
     # --- перетаскивание карточек ---
+    # Карточку «берут» за то место, где нажали; за курсором едет её полупрозрачная копия.
+    # Движения мыши сглаживаются: окно-копия передвигается не чаще одного раза за кадр.
 
     def on_press(self, event, task_id):
-        self.drag = {"id": task_id, "x": event.x_root, "y": event.y_root, "ghost": None}
+        card = self.cards[task_id]
+        self.drag = {"id": task_id, "start": (event.x_root, event.y_root),
+                     "offset": (event.x_root - card.winfo_rootx(), event.y_root - card.winfo_rooty()),
+                     "ghost": None, "target": None, "pos": None, "pending": False}
         self.app.select_task(task_id)
 
     def on_motion(self, event):
-        if not self.drag:
+        drag = self.drag
+        if not drag:
             return
-        if self.drag["ghost"] is None:
-            if abs(event.x_root - self.drag["x"]) + abs(event.y_root - self.drag["y"]) < 6:
+        if drag["ghost"] is None:
+            sx, sy = drag["start"]
+            if abs(event.x_root - sx) + abs(event.y_root - sy) < 6:
                 return  # ещё не тащим — это просто щелчок
-            ghost = tk.Toplevel(self)
-            ghost.overrideredirect(True)
-            ghost.attributes("-alpha", 0.85)
-            ghost.attributes("-topmost", True)
-            title = db.get_task(self.app.conn, self.drag["id"])[0]
-            tk.Label(ghost, text=short_text(title, 40), bg=SURFACE, fg=TEXT, font=FONT_BOLD,
-                     padx=12, pady=8, highlightthickness=2, highlightbackground=ACCENT).pack()
-            self.drag["ghost"] = ghost
-        self.drag["ghost"].geometry(f"+{event.x_root + 12}+{event.y_root + 8}")
-        target = self.lane_at(event.x_root, event.y_root)
-        for status_id, lane, _ in self.lanes:
-            lane.configure(highlightbackground=ACCENT if status_id == target else BORDER,
-                           highlightthickness=2 if status_id == target else 1)
+            drag["ghost"] = self.make_ghost(drag["id"])
+            self.cards[drag["id"]].configure(highlightbackground=ACCENT)
+            self.configure(cursor="fleur")
+        drag["pos"] = (event.x_root, event.y_root)
+        if not drag["pending"]:
+            drag["pending"] = True
+            self.after(10, self.follow_mouse)
+
+    def make_ghost(self, task_id):
+        """Полупрозрачная копия карточки того же размера."""
+        card = self.cards[task_id]
+        title = db.get_task(self.app.conn, task_id)[0]
+        status_color = next((c for sid, (n, c, d) in self.app.statuses.items()
+                             if sid == self.app.task_info(task_id)["status_id"]), ACCENT)
+        ghost = tk.Toplevel(self)
+        ghost.withdraw()
+        ghost.overrideredirect(True)
+        ghost.attributes("-alpha", 0.9)
+        ghost.attributes("-topmost", True)
+        frame = tk.Frame(ghost, bg=SURFACE, highlightthickness=2, highlightbackground=ACCENT,
+                         width=card.winfo_width(), height=card.winfo_height())
+        frame.pack()
+        frame.pack_propagate(False)
+        tk.Frame(frame, bg=status_color, width=4).pack(side="left", fill="y")
+        tk.Label(frame, text=title, bg=SURFACE, fg=TEXT, font=FONT_BOLD, justify="left",
+                 anchor="nw", wraplength=card.winfo_width() - 40).pack(
+            side="left", fill="both", expand=True, padx=10, pady=8)
+        ox, oy = self.drag["offset"]
+        sx, sy = self.drag["start"]
+        ghost.geometry(f"+{sx - ox}+{sy - oy}")
+        ghost.deiconify()
+        return ghost
+
+    def follow_mouse(self):
+        drag = self.drag
+        if not drag or drag["ghost"] is None:
+            return
+        drag["pending"] = False
+        x, y = drag["pos"]
+        ox, oy = drag["offset"]
+        drag["ghost"].geometry(f"+{x - ox}+{y - oy}")
+        target = self.lane_at(x, y)
+        if target != drag["target"]:  # подсветку меняем, только когда сменилась колонка
+            for status_id, lane, _ in self.lanes:
+                if status_id in (target, drag["target"]):
+                    lane.configure(highlightbackground=ACCENT if status_id == target else BORDER)
+            drag["target"] = target
 
     def on_release(self, event):
         drag, self.drag = self.drag, None
         if not drag or drag["ghost"] is None:
             return
         drag["ghost"].destroy()
+        self.configure(cursor="")
         for _, lane, _ in self.lanes:
-            lane.configure(highlightbackground=BORDER, highlightthickness=1)
+            lane.configure(highlightbackground=BORDER)
         target = self.lane_at(event.x_root, event.y_root)
-        if target is not None:
+        if target is not None and target != self.app.task_info(drag["id"])["status_id"]:
             # Доску перестраиваем после выхода из обработчика события
             self.after_idle(lambda: self.app.move_task(drag["id"], target))
+        else:
+            self.highlight_selected()
 
     def lane_at(self, x, y):
         for status_id, lane, _ in self.lanes:
@@ -1118,16 +1344,20 @@ class TodoApp:
         ttk.Label(header, text=APP_NAME, style="Title.TLabel").pack(side="left", anchor="s")
         self.counter = ttk.Label(header, style="Muted.TLabel")
         self.counter.pack(side="left", padx=(14, 0), pady=(0, 6), anchor="s")
-        ttk.Button(header, text="?  Справка", command=self.show_help).pack(
-            side="right", anchor="s", pady=(0, 4))
+        info = ttk.Menubutton(header, text="?  Справка", style="TMenubutton", cursor="hand2")
+        info_menu = tk.Menu(info, tearoff=0)
+        info_menu.add_command(label="Справка", accelerator="F1", command=self.show_help)
+        info_menu.add_command(label="Лицензия (MIT)…", command=self.show_license)
+        info_menu.add_separator()
+        info_menu.add_command(label=f"О программе {APP_NAME}…", command=self.show_about)
+        info["menu"] = info_menu
+        info.pack(side="right", anchor="s", pady=(0, 4))
         more = ttk.Menubutton(header, text="☰  Ещё", style="TMenubutton", cursor="hand2")
         more_menu = tk.Menu(more, tearoff=0)
         more_menu.add_command(label="Добавить колонку на доску…", command=self.add_lane)
         more_menu.add_separator()
         more_menu.add_command(label="Добавить примеры задач", command=self.add_examples)
         more_menu.add_command(label="Удалить примеры задач", command=self.delete_examples)
-        more_menu.add_separator()
-        more_menu.add_command(label="О программе", command=self.show_about)
         more["menu"] = more_menu
         more.pack(side="right", padx=(0, 8), anchor="s", pady=(0, 4))
         # Котобус везёт выполненные задачи к остановке «Готово»
@@ -1181,16 +1411,20 @@ class TodoApp:
                    command=self.delete).pack(side="right")
         ttk.Label(bottom, text="ПКМ — меню · F1 — справка",
                   style="Muted.TLabel").pack(side="right", padx=(0, 14))
-        ttk.Label(bottom, text=COPYRIGHT, style="Muted.TLabel").pack(side="right", padx=(0, 14))
 
-        # Середина окна: таблица или доска, справа — Тоторо или карточка задачи
-        content = ttk.Frame(page)
+        # Середина окна: таблица или доска, справа — Тоторо, карточка или форма задачи.
+        # Между ними — разделитель: потянув его мышью, можно менять ширину правой панели.
+        content = tk.PanedWindow(page, orient="horizontal", bg=BG, bd=0, sashwidth=12,
+                                 sashrelief="flat", opaqueresize=True, sashcursor="sb_h_double_arrow")
         content.pack(fill="both", expand=True)
+        self.paned = content
         self.side = SidePanel(content, on_task_click=self.reveal_task,
                               on_close=self.clear_selection, on_edit=self.edit, on_email=self.email)
-        self.side.pack(side="right", fill="y", padx=(12, 0))
+        self.panel_width = int(db.get_setting(self.conn, "panel_width", PANEL_WIDTH))
         # В узком окне панель прячется, чтобы не теснить таблицу
         content.bind("<Configure>", self.fit_side_panel)
+        content.bind("<ButtonRelease-1>", lambda e: self.save_panel_width())
+        self.editing = None  # id задачи, которая сейчас редактируется в правой панели
 
         card = tk.Frame(content, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
         self.table_card = card
@@ -1252,10 +1486,22 @@ class TodoApp:
     def main_widget(self):
         return self.board if self.view.get() == "board" else self.table_card
 
+    def in_paned(self, widget):
+        return str(widget) in (str(p) for p in self.paned.panes())
+
     def show_main_widget(self):
+        """Слева в разделителе — таблица или доска, справа — панель."""
         other = self.table_card if self.view.get() == "board" else self.board
-        other.pack_forget()
-        self.main_widget().pack(fill="both", expand=True)
+        if self.in_paned(other):
+            self.paned.forget(other)
+        main = self.main_widget()
+        if not self.in_paned(main):
+            if self.in_paned(self.side):
+                self.paned.add(main, before=self.side, stretch="always", minsize=420)
+            else:
+                self.paned.add(main, stretch="always", minsize=420)
+        if not self.in_paned(self.side):
+            self.paned.add(self.side, stretch="never", minsize=240, width=self.panel_width)
 
     def switch_view(self):
         db.set_setting(self.conn, "view", self.view.get())
@@ -1318,11 +1564,60 @@ class TodoApp:
 
     def fit_side_panel(self, event):
         wide_enough = event.width >= 1000
-        shown = self.side.winfo_ismapped()
+        shown = self.in_paned(self.side)
         if wide_enough and not shown:
-            self.side.pack(side="right", fill="y", padx=(12, 0), before=self.main_widget())
+            self.paned.add(self.side, stretch="never", minsize=240, width=self.panel_width)
         elif not wide_enough and shown:
-            self.side.pack_forget()
+            self.save_panel_width()
+            self.paned.forget(self.side)
+
+    def save_panel_width(self):
+        """Ширина правой панели запоминается (её меняют, потянув за разделитель)."""
+        if self.in_paned(self.side) and self.side.winfo_width() > 1:
+            self.panel_width = self.side.winfo_width()
+            db.set_setting(self.conn, "panel_width", str(self.panel_width))
+
+    # --- изменение задачи в правой панели ---
+
+    def form_data(self, task_id):
+        title, due_at, remind_before, urgent, important, body = db.get_task(self.conn, task_id)
+        return dict(title=title, due_at=due_at, remind_before=remind_before, urgent=urgent,
+                    important=important, body=body, status_id=self.task_info(task_id)["status_id"])
+
+    def apply_edit(self, task_id, result, refresh=True):
+        db.update_task(self.conn, task_id, result["title"], result["due_at"], result["remind_before"],
+                       result["urgent"], result["important"], result["body"])
+        if result["status_id"] != self.task_info(task_id)["status_id"]:
+            db.set_task_status(self.conn, task_id, result["status_id"])
+        if refresh:
+            self.refresh(select_id=task_id)
+
+    def save_edit(self, task_id, result):
+        self.editing = None
+        self.apply_edit(task_id, result)
+
+    def cancel_edit(self):
+        self.editing = None
+        self.update_side()
+
+    def finish_editing(self):
+        """Уходим из формы (выбрали другую задачу и т. п.): если есть несохранённые
+        изменения — спрашиваем, сохранить ли их."""
+        if self.editing is None:
+            return
+        task_id, form, self.editing = self.editing, self.side.form, None
+        if not form or not form.dirty() or db.get_task(self.conn, task_id) is None:
+            return
+        result = form.values()
+        if not result["title"]:
+            return
+        if result["due_at"] is None:
+            result["remind_before"] = None
+        if messagebox.askyesno("Сохранить изменения?",
+                               f"В задаче «{short_text(result['title'], 50)}» есть несохранённые "
+                               "изменения. Сохранить их?", parent=self.root):
+            self.apply_edit(task_id, result, refresh=False)
+            self.root.after_idle(lambda: self.refresh(select_id=self.current_id()))
 
     def task_info(self, task_id):
         """Всё о задаче для карточки справа и письма."""
@@ -1340,8 +1635,13 @@ class TodoApp:
                     remind=remind, created=created, urgent=urgent)
 
     def update_side(self):
-        """Выбрана задача — показываем её карточку, иначе — Тоторо."""
+        """Выбрана задача — показываем её карточку, иначе — Тоторо.
+        Если задача редактируется, форма остаётся на месте."""
         task_id = self.current_id()
+        if self.editing is not None:
+            if task_id == self.editing and self.side.mode == "edit":
+                return
+            self.finish_editing()
         info = self.task_info(task_id) if task_id is not None else None
         if not info:
             self.side.show_totoro()
@@ -1478,6 +1778,7 @@ class TodoApp:
             self.refresh(select_id=self.current_id())
 
     def move_task(self, task_id, status_id):
+        self.finish_editing()
         db.set_task_status(self.conn, task_id, status_id)
         self.refresh(select_id=task_id)
 
@@ -1526,7 +1827,10 @@ class TodoApp:
         self.help_window = HelpWindow(self.root)
 
     def show_about(self):
-        messagebox.showinfo(f"О программе {APP_NAME}", ABOUT_TEXT, parent=self.root)
+        AboutWindow(self.root, on_license=self.show_license)
+
+    def show_license(self):
+        LicenseWindow(self.root)
 
     # --- подсказка в пустом поле ввода ---
 
@@ -1680,17 +1984,30 @@ class TodoApp:
         if task is None:
             return
         task_id = task[0]
-        dialog = TaskDialog(self.root, *db.get_task(self.conn, task_id))
+        statuses = db.list_statuses(self.conn)
+        if self.in_paned(self.side):
+            # Изменяем прямо в правой панели
+            if self.editing == task_id:
+                self.side.form.focus_title()
+                return
+            self.finish_editing()
+            self.editing = task_id
+            self.side.show_form(self.form_data(task_id), statuses,
+                                on_save=lambda result: self.save_edit(task_id, result),
+                                on_cancel=self.cancel_edit)
+            return
+        # Окно узкое и панель скрыта — открываем форму в отдельном окне
+        dialog = TaskDialog(self.root, self.form_data(task_id), statuses)
         self.root.wait_window(dialog)
         if dialog.result:
-            db.update_task(self.conn, task_id, *dialog.result)
-            self.refresh(select_id=task_id)
+            self.apply_edit(task_id, dialog.result)
 
     def toggle(self):
         task = self.selected()
         if task is None:
             return
-        task_id, done = task
+        self.finish_editing()
+        task_id, done = task[0], self.task_info(task[0])["done"]
         if not db.set_done(self.conn, task_id, not done):
             messagebox.showinfo(
                 APP_NAME,
@@ -1713,6 +2030,8 @@ class TodoApp:
             icon="warning", default="no", parent=self.root,
         ):
             return
+        if self.editing == task[0]:
+            self.editing = None  # задача удалена — сохранять в ней нечего
         db.delete_task(self.conn, task[0])
         self.clear_selection()
         self.refresh()
@@ -1798,6 +2117,7 @@ class TodoApp:
 
     def quick_due(self, task_id, days):
         """Быстрая смена срока из меню. Время сохраняется прежним (или 09:00)."""
+        self.finish_editing()
         title, due_at, remind_before, urgent, important, _ = db.get_task(self.conn, task_id)
         if days is None:
             due_at, remind_before = None, None
@@ -1808,11 +2128,13 @@ class TodoApp:
         self.refresh(select_id=task_id)
 
     def quick_remind(self, task_id, minutes):
+        self.finish_editing()
         title, due_at, _, urgent, important, _ = db.get_task(self.conn, task_id)
         db.update_task(self.conn, task_id, title, due_at, minutes, urgent, important)
         self.refresh(select_id=task_id)
 
     def quick_priority(self, task_id):
+        self.finish_editing()
         title, due_at, remind_before, _, _, _ = db.get_task(self.conn, task_id)
         db.update_task(self.conn, task_id, title, due_at, remind_before,
                        self.urgent_choice.get(), self.important_choice.get())
