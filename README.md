@@ -1,11 +1,13 @@
 # ToDoro
 
-Простой список дел и канбан-доска для Windows с Тоторо-помощником.
-A simple to-do list and kanban board for Windows with a Totoro helper.
+Список дел и канбан-доска для Windows — для себя и для небольшой команды — с Тоторо-помощником.
+*A to-do list and kanban board for Windows — for yourself and a small team — with a Totoro helper.*
 
-**[⬇ Скачать установщик / Download](https://github.com/machinist-soft/ToDoro/releases/latest)**
+**[⬇ Скачать установщик / Download](https://github.com/machinist-soft/ToDoro/releases/latest)** ·
+[Что нового / What's new](RELEASE_NOTES.md) ·
+[Сообщить об ошибке / Report a bug](https://github.com/machinist-soft/ToDoro/issues/new?template=bug_report.yml)
 
-![Список задач и Тоторо-помощник / Task list with the Totoro helper](docs/screenshots/list.png)
+![Общий список команды: исполнители, авторы и Тоторо-помощник / Team list with assignees, authors and the Totoro helper](docs/screenshots/list.png)
 
 > **Фан-проект / Fan project**
 >
@@ -25,55 +27,90 @@ A simple to-do list and kanban board for Windows with a Totoro helper.
 
 ## Возможности / Features
 
-**Котобус увозит выполненную задачу** — отметьте задачу выполненной, и по низу окна проедет Котобус.
-*The Catbus carries away a finished task.*
+- **Задачи**: заголовок и описание, срок с календарём, напоминания, приоритет «Срочно / Важно»
+  (матрица Эйзенхауэра), номер у каждой задачи.
+- **Список и канбан-доска**: свои колонки-статусы с цветами, перетаскивание карточек и колонок,
+  фильтры «Все / Активные / Выполненные / Просроченные», сортировка по любому столбцу.
+- **Несколько списков**: личные и **общие для команды** — в общей сетевой папке, в том числе
+  через VPN.
+- **Командная работа**: автор и исполнитель задачи, «Мои задачи», уведомление «Вам назначены
+  задачи», «кто и когда изменил», защита от затирания чужих правок.
+- **Тоторо-помощник** подсказывает, что просрочено и что важнее всего, а **Котобус** увозит
+  выполненные задачи.
+- Экспорт и импорт **CSV (Excel)**, письмо по задаче, подробная справка (F1).
+- **Обновления в один клик**: программа сама сообщает о новой версии и ставит её — задачи
+  сохраняются.
+
+*Tasks with due dates, reminders and urgent / important priority · list and kanban board with
+custom columns, filters and column sorting · several lists, personal and shared with a team via a
+network folder (VPN works) · author and assignee, “My tasks”, “assigned to you” notices, last
+editor, protection against overwriting others’ edits · Totoro hints and the Catbus · CSV export /
+import, e-mail a task, built-in help · one-click updates.*
+
+### Котобус увозит выполненную задачу / The Catbus carries away a finished task
 
 ![Котобус увозит выполненную задачу / The Catbus carries away a finished task](docs/screenshots/catbus.gif)
 
-**Канбан-доска** — колонки-статусы со своими цветами, карточки и колонки перетаскиваются мышью.
-*Kanban board with colored status columns; drag cards and columns with the mouse.*
+### Канбан-доска / Kanban board
+
+Колонки-статусы со своими цветами; на карточках — срок, исполнитель и автор.
+*Colored status columns; cards show the due date, assignee and author.*
 
 ![Канбан-доска / Kanban board](docs/screenshots/board.png)
 
-**Карточка задачи** — описание, срок, напоминание и кнопки действий в правой панели.
-*Task card with description, due date, reminder and actions in the side panel.*
+### Карточка и изменение задачи / Task card and editing
+
+В правой панели — всё о задаче: описание, срок, напоминание, автор, исполнитель, кто изменил.
+Изменяется задача тут же — с выбором исполнителя из участников.
+*The side panel shows everything about a task; edit it right there and pick an assignee.*
 
 ![Карточка задачи / Task card](docs/screenshots/card.png)
 
-**Изменение задачи** — заголовок, описание, статус, срок с календарём, приоритет «Срочно / Важно»,
-напоминание.
-*Edit a task: title, description, status, due date with a calendar, urgent / important priority,
-reminder.*
-
 ![Форма изменения задачи / Task edit form](docs/screenshots/form.png)
 
-**Обновления в один клик** — программа сама сообщает о новой версии и ставит её, задачи сохраняются.
-*One-click updates: the app tells you about a new version and installs it, keeping your tasks.*
+## Совместная работа / Teamwork
+
+Задачи можно раскладывать по спискам: «Личный» и другие — только у вас, **общие** — видят и
+меняют все участники.
+*Keep tasks in several lists: personal ones are yours only, shared ones are visible to everyone.*
+
+![Меню списков: личные и общие / Lists menu: personal and shared](docs/screenshots/lists.png)
+
+**Как начать работать вместе / How to start:**
+
+1. Установите ToDoro на каждом компьютере.
+2. **☰ Меню → Настройки → Совместная работа**: укажите общую сетевую папку (одну и ту же у всех,
+   например `\\сервер\Общая`) и своё имя, нажмите «Проверить подключение» и «Сохранить».
+3. Меню списков → **Новый список** → **Общий — видят и меняют все участники**.
+
+Изменения других участников появляются сами через несколько секунд. Каждый день программа
+сохраняет резервные копии общих списков (за 14 дней).
+*Set the same network folder and your name in Settings → Teamwork, then create a shared list.
+Others’ changes show up within seconds; shared lists are backed up daily.*
+
+![Настройки — совместная работа / Settings — teamwork](docs/screenshots/settings.png)
+
+## Установка и обновление / Install and update
+
+Скачайте `ToDoro-Setup-*.exe` в разделе [Releases](https://github.com/machinist-soft/ToDoro/releases/latest)
+и запустите — права администратора не нужны. Дальше программа сама предложит обновиться, когда
+выйдет новая версия.
+*Download the installer from Releases and run it — no admin rights needed. The app offers updates
+by itself.*
 
 ![Окно обновления / Update dialog](docs/screenshots/update.png)
 
-**Совместная работа** — несколько списков задач (личные и общие для команды в сетевой папке),
-автор и исполнитель задачи, «Мои задачи», защита от затирания чужих правок.
-*Teamwork: several task lists (personal and shared via a network folder), author and assignee,
-“My tasks”, protection against overwriting others’ edits.*
+Если Windows покажет «Система Windows защитила ваш компьютер» — нажмите «Подробнее» →
+«Выполнить в любом случае» (у установщика нет платной цифровой подписи).
 
-А ещё: экспорт и импорт задач в CSV (Excel), сортировка по столбцам, напоминания, письмо по задаче,
-подробная справка (F1).
-*Also: CSV export / import (Excel), column sorting, reminders, e-mail a task, built-in help (F1).*
-
-## Запуск / Running
-
-Проще всего — скачать установщик `ToDoro-Setup-*.exe` в разделе [Releases](https://github.com/machinist-soft/ToDoro/releases).
-Easiest: download the installer from [Releases](https://github.com/machinist-soft/ToDoro/releases).
+Личные задачи хранятся в `%APPDATA%\ToDoro` и не удаляются вместе с программой.
+*Personal tasks are stored in `%APPDATA%\ToDoro` and are kept if the app is uninstalled.*
 
 Из исходного кода нужен Python 3 с Tkinter / From source, requires Python 3 with Tkinter:
 
 ```
 python todoro.py
 ```
-
-Задачи хранятся в файле `%APPDATA%\ToDoro\todoro.db`.
-Tasks are stored in `%APPDATA%\ToDoro\todoro.db`.
 
 ## Нашли ошибку? / Found a bug?
 
@@ -82,10 +119,6 @@ Tasks are stored in `%APPDATA%\ToDoro\todoro.db`.
 прямо из программы: **☰ Меню → Обратная связь**.
 *[Report a bug](https://github.com/machinist-soft/ToDoro/issues/new?template=bug_report.yml) or
 [suggest a feature](https://github.com/machinist-soft/ToDoro/issues/new?template=feature_request.yml).*
-
-## Что нового / Release notes
-
-См. [RELEASE_NOTES.md](RELEASE_NOTES.md). Установщик — в разделе [Releases](https://github.com/machinist-soft/ToDoro/releases).
 
 ## Лицензия / License
 

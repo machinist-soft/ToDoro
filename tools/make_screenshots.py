@@ -1,7 +1,8 @@
 """Скриншоты ToDoro для README: docs/screenshots/*.png и анимация Котобуса catbus.gif.
 
-Снимает на отдельной временной базе с примерами задач — данные пользователя не попадают в кадр.
-Окно на время съёмки встаёт поверх остальных; мышь лучше не трогать (~15 секунд).
+Снимает на отдельных временных данных: личный список и общий список «Команда» с примерами задач
+во временной «общей папке» — данные пользователя не попадают в кадр.
+Окно на время съёмки встаёт поверх остальных; мышь лучше не трогать (~20 секунд).
 Запуск из папки проекта:  python tools/make_screenshots.py
 Нужен Pillow:  pip install pillow
 """
@@ -23,45 +24,95 @@ import db  # noqa: E402
 work = Path(tempfile.mkdtemp(prefix="todoro-shots-"))
 out = ROOT / "docs" / "screenshots"
 out.mkdir(parents=True, exist_ok=True)
-dbfile = work / "shots.db"
-for suffix in ("", "-journal"):
-    Path(str(dbfile) + suffix).unlink(missing_ok=True)
-db.DB_PATH = dbfile
+db.DATA_DIR = work
+db.DB_PATH = work / "todoro.db"
+db.LISTS_DIR = work / "lists"
 db.OLD_DB_PATHS = []
 
+import team  # noqa: E402
 import todoro as T  # noqa: E402
 from examples import make_examples  # noqa: E402
 
-conn = db.connect()
-db.add_examples(conn, make_examples())
-for key, value in (("update_auto", "0"), ("start_mode", "window"), ("view", "list"),
-                   ("update_checked", "2099-01-01")):
-    db.set_setting(conn, key, value)
-with conn:
-    conn.execute("UPDATE tasks SET reminded = 1")  # чтобы окно напоминания не попало в кадр
-ids = {title: tid for tid, title, *_ in db.list_tasks(conn)}
-conn.close()
+ME = "Андрей"
+TEAM = ["Мария", "Олег", "Светлана"]
+# кто создал и кому поручено (по заголовку примера); остальные — без исполнителя
+PEOPLE = {
+    "Оплатить интернет": ("Мария", ME),
+    "Сдать квартальный отчёт": (ME, ME),
+    "Подготовить презентацию для клиента": ("Олег", "Мария"),
+    "Продлить страховку автомобиля": (ME, "Олег"),
+    "Записаться к стоматологу": ("Светлана", None),
+    "Ответить на письмо от бухгалтерии": ("Мария", "Светлана"),
+    "Купить продукты на неделю": (ME, ME),
+    "Разобрать фотографии с отпуска": ("Олег", None),
+    "Подарки на Новый год": ("Светлана", "Мария"),
+    "Позвонить маме": (ME, ME),
+    "Забрать посылку на почте": ("Мария", "Олег"),
+}
 
+# Личный список (основной файл) — с примерами; ещё один личный список «Дом»
+prefs = db.connect()
+db.add_examples(prefs, make_examples())
+db.save_registry(prefs, db.list_registry(prefs) + [{"id": "home", "name": "Дом", "file": "home.db"}])
+db.connect(db.LISTS_DIR.mkdir(parents=True, exist_ok=True) or db.LISTS_DIR / "home.db").close()
+
+# Общий список «Команда» во временной общей папке
+share = team.Team(work / "share")
+for name in [ME] + TEAM:
+    share.touch_member(name)
+item = share.add_list("Команда", ME)
+share.add_list("Проект «Альфа»", "Мария")
+shared = db.connect(share.path(item))
+db.add_examples(shared, make_examples())
+with shared:
+    for title, (author, assignee) in PEOPLE.items():
+        shared.execute("UPDATE tasks SET created_by = ?, assignee = ?, updated_by = ?, "
+                       "updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime', '-1 hour') "
+                       "WHERE title = ?", (author, assignee, author, title))
+    shared.execute("UPDATE tasks SET reminded = 1")
+ids = {title: tid for tid, title, *_ in db.list_tasks(shared)}
+shared.close()
+share.close()
+
+for key, value in (("update_auto", "0"), ("start_mode", "window"), ("view", "list"),
+                   ("update_checked", "2099-01-01"), ("shared_folder", str(work / "share")),
+                   ("user_name", ME), ("current_list", item["id"])):
+    db.set_setting(prefs, key, value)
+# уже «видели» все назначенные задачи — чтобы окно «Вам назначены задачи» не попало в кадр
+db.set_json_setting(prefs, "assigned_seen_lists", [item["id"]])
+db.set_json_setting(prefs, "known_assigned", [f"{item['id']}|{tid}" for tid in ids.values()])
+with prefs:
+    prefs.execute("UPDATE tasks SET reminded = 1")
+prefs.close()
+
+T.TodoApp.check_reminders = lambda self: None  # окна напоминаний не должны попасть в кадр
 root = tk.Tk()
 app = T.TodoApp(root)
-T.center_on_screen(root, 1440, 800)  # пошире, чтобы названия задач не обрезались
+T.center_on_screen(root, 1560, 860)  # пошире, чтобы названия задач и все столбцы помещались
+# ширины столбцов для снимка: место — названию задачи, остальным — по содержимому
+for column, width in (("num", 48), ("status", 112), ("title", 268), ("priority", 128), ("due", 122),
+                      ("remind", 112), ("assignee", 124), ("author", 90), ("created", 116)):
+    app.tree.column(column, width=width)
+app.columns_fitted = True
 root.attributes("-topmost", True)
 T.updater.can_self_update = lambda: True  # на снимке окна обновления — кнопка «Обновить»
 
 
-def frame_box():
+def frame_box(window=None):
     """Окно вместе с заголовком, без невидимой тени Windows 10."""
-    hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+    hwnd = ctypes.windll.user32.GetParent((window or root).winfo_id())
     rect = wintypes.RECT()
     ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(rect), ctypes.sizeof(rect))
     return rect.left, rect.top, rect.right, rect.bottom
 
 
-def grab(name, box=None):
-    root.update()
-    time.sleep(0.25)
-    root.update()
-    ImageGrab.grab(box or frame_box(), include_layered_windows=True).save(out / name, optimize=True)
+def grab(name, box=None, window=None):
+    """Снимок окна (по умолчанию главного). Координаты берём уже после того, как окно
+    появилось на экране — иначе в кадр попадёт то, что под ним."""
+    for _ in range(3):
+        root.update()
+        time.sleep(0.25)
+    ImageGrab.grab(box or frame_box(window), include_layered_windows=True).save(out / name, optimize=True)
     print("saved", name)
 
 
@@ -71,26 +122,45 @@ def select(title):
 
 
 def run():
-    # 1. Список с Тоторо
+    # 1. Общий список команды с Тоторо: исполнители, авторы
     app.clear_selection()
+    for _ in range(6):  # даём окну полностью перерисоваться после смены размера
+        root.update()
+        time.sleep(0.2)
     grab("list.png")
-    # 2. Карточка задачи справа
+    # 2. Меню списков: личные и общие
+    app.show_lists_menu()
+    root.update()
+    menu = [w for w in root.winfo_children() if isinstance(w, T._MenuWindow)][-1]
+    menu.update()
+    left, top, _, _ = frame_box()
+    grab("lists.png", (left, top, left + 620, menu.winfo_rooty() + menu.winfo_height() + 16))
+    menu.close()
+    # 3. Карточка задачи справа
     select("Сдать квартальный отчёт")
     grab("card.png")
-    # 3. Форма изменения задачи
+    # 4. Форма изменения задачи (с исполнителем)
     select("Подготовить презентацию для клиента")
     app.edit()
     grab("form.png")
     app.cancel_edit()
     app.clear_selection()
-    # 4. Доска
+    # 5. Доска
     app.view.set("board")
     app.switch_view()
     grab("board.png")
     app.view.set("list")
     app.switch_view()
     app.clear_selection()
-    # 5. Окно обновления: последний выпущенный раздел RELEASE_NOTES.md («Не выпущено» пропускаем),
+    # 6. Настройки — раздел «Совместная работа»
+    dialog = T.SettingsDialog(root, "window", app.card_fields, True, r"\\server\Общая\ToDoro", ME,
+                              ("ok", "Подключено. Участники: " + ", ".join([ME] + TEAM)), "sharing",
+                              check_folder=app.check_folder, check_update=app.check_update_inline)
+    T.center_on_screen(dialog)
+    dialog.attributes("-topmost", True)
+    grab("settings.png", window=dialog)
+    dialog.destroy()
+    # 7. Окно обновления: последний выпущенный раздел RELEASE_NOTES.md («Не выпущено» пропускаем),
     # «текущая» версия — предыдущий выпуск (подменяется только для снимка)
     notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
     sections = [part for part in notes.split("\n## ")[1:] if part[:1].isdigit()]
@@ -98,15 +168,9 @@ def run():
     T.APP_VERSION = sections[1].split(" ", 1)[0] if len(sections) > 1 else "—"
     dialog = T.UpdateDialog(root, dict(version=version, notes=section, url="", asset_url="x"), lambda: None)
     dialog.attributes("-topmost", True)
-    root.update()
-    time.sleep(0.4)
-    dialog.update()
-    hwnd = ctypes.windll.user32.GetParent(dialog.winfo_id())
-    rect = wintypes.RECT()
-    ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(rect), ctypes.sizeof(rect))
-    grab("update.png", (rect.left, rect.top, rect.right, rect.bottom))
+    grab("update.png", window=dialog)
     dialog.destroy()
-    # 6. Котобус: отмечаем задачу выполненной и снимаем кадры в отдельном потоке
+    # 8. Котобус: отмечаем задачу выполненной и снимаем кадры в отдельном потоке
     select("Купить продукты на неделю")
     box = frame_box()
     frames = []
