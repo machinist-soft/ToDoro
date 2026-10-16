@@ -1655,68 +1655,306 @@ CARD_FIELDS = {
 DEFAULT_CARD_FIELDS = ["number", "priority", "body", "due", "author"]
 
 
-# Как открывать окно при запуске: значение настройки -> подпись
-START_MODES = {"window": "Обычным окном", "maximized": "Развёрнутым на весь экран"}
+class Toggle(tk.Canvas):
+    """Переключатель «вкл/выкл» (как в Windows 11 и телефонах) вместо галочки."""
+
+    W, H = 40, 22
+
+    def __init__(self, parent, variable, command=None, bg=SURFACE):
+        super().__init__(parent, width=self.W, height=self.H, bg=bg, highlightthickness=0,
+                         cursor="hand2", takefocus=True)
+        self.variable, self.command = variable, command
+        self.bind("<Button-1>", lambda e: self.flip())
+        self.bind("<space>", lambda e: self.flip())
+        self.bind("<FocusIn>", lambda e: self.draw())
+        self.bind("<FocusOut>", lambda e: self.draw())
+        variable.trace_add("write", lambda *a: self.draw())
+        self.draw()
+
+    def flip(self):
+        self.variable.set(not self.variable.get())
+        if self.command:
+            self.command()
+
+    def draw(self):
+        self.delete("all")
+        on = self.variable.get()
+        focus = self.focus_get() is self
+        round_rect(self, 1, 1, self.W - 1, self.H - 1, (self.H - 2) // 2,
+                   fill=ACCENT if on else "#cfd5df", outline=ACCENT_HOVER if focus else "")
+        x = self.W - self.H // 2 - 1 if on else self.H // 2
+        self.create_oval(x - 7, self.H // 2 - 7, x + 7, self.H // 2 + 7, fill="white", outline="")
 
 
-class SettingsDialog(ModernDialog):
-    """Настройки: запуск программы, поля карточек на доске, совместная работа, обновления.
+class SettingsDialog(tk.Toplevel):
+    """Настройки в стиле Windows 11: слева разделы, справа — карточки с настройками.
     result — dict(start_mode, card_fields, update_auto, shared_folder, user_name) или None."""
 
+    # Значки — из шрифта Windows «Segoe MDL2 Assets» (так нарисованы значки в настройках Windows)
+    ICON_FONT = ("Segoe MDL2 Assets", 12)
+    PAGES = [("general", "", "Общие"), ("board", "", "Доска"),
+             ("sharing", "", "Совместная работа"), ("updates", "", "Обновления")]
+
     def __init__(self, parent, start_mode, card_fields, update_auto, shared_folder="", user_name="",
-                 team_status=""):
-        super().__init__(parent, "Настройки", "Настройки")
+                 team_status=None, page="general", check_folder=None, check_update=None):
+        super().__init__(parent)
+        self.result = None
+        self.update_found = None  # найденная новая версия: откроется после закрытия настроек
+        self.check_folder, self.check_update = check_folder, check_update
+        self.title("Настройки")
+        self.configure(bg=BG)
+        self.resizable(False, False)
+        self.transient(parent)
 
-        self.section("Запуск программы", "Как открывать окно ToDoro.")
         self.start_mode = tk.StringVar(value=start_mode)
-        for value, label in START_MODES.items():
-            ttk.Radiobutton(self.content, text=label, value=value, variable=self.start_mode,
-                            style="Card.TRadiobutton").pack(anchor="w", pady=2)
-
-        self.section("Карточки на доске", "Что показывать на карточках. Заголовок виден всегда.")
-        grid = tk.Frame(self.content, bg=SURFACE)
-        grid.pack(anchor="w")
-        self.fields = {}
-        for i, (key, label) in enumerate(CARD_FIELDS.items()):
-            var = tk.BooleanVar(value=key in card_fields)
-            ttk.Checkbutton(grid, text=label, variable=var, style="Card.TCheckbutton").grid(
-                row=i // 2, column=i % 2, sticky="w", padx=(0, 28), pady=2)
-            self.fields[key] = var
-
-        self.section("Совместная работа", "Общие списки хранятся в сетевой папке, которую видят "
-                     "все участники. Укажите её и своё имя — его увидят другие.")
-        row = tk.Frame(self.content, bg=SURFACE)
-        row.pack(fill="x", pady=(0, 4))
-        tk.Label(row, text="Общая папка", bg=SURFACE, fg=TEXT, font=FONT_SMALL, width=12,
-                 anchor="w").pack(side="left")
-        self.folder = ttk.Entry(row, font=FONT_SMALL, width=34)
-        self.folder.insert(0, shared_folder)
-        self.folder.pack(side="left", fill="x", expand=True)
-        ttk.Button(row, text="Обзор…", style="Soft.TButton", cursor="hand2",
-                   command=self.browse).pack(side="left", padx=(6, 0))
-        row = tk.Frame(self.content, bg=SURFACE)
-        row.pack(fill="x", pady=(0, 4))
-        tk.Label(row, text="Ваше имя", bg=SURFACE, fg=TEXT, font=FONT_SMALL, width=12,
-                 anchor="w").pack(side="left")
-        self.name = ttk.Entry(row, font=FONT_SMALL, width=34)
-        self.name.insert(0, user_name)
-        self.name.pack(side="left", fill="x", expand=True)
-        if team_status:
-            tk.Label(self.content, text=team_status, bg=SURFACE, fg=MUTED, font=FONT_SMALL,
-                     wraplength=440, justify="left").pack(anchor="w", pady=(2, 0))
-
-        self.section("Обновления", f"Установлена версия {APP_VERSION}. Проверить вручную: "
-                     "☰ Меню → Проверить обновления.")
+        self.fields = {key: tk.BooleanVar(value=key in card_fields) for key in CARD_FIELDS}
         self.update_auto = tk.BooleanVar(value=update_auto)
-        ttk.Checkbutton(self.content, text="Проверять обновления автоматически (раз в день)",
-                        variable=self.update_auto, style="Card.TCheckbutton").pack(anchor="w", pady=2)
 
-    def section(self, title, hint):
-        first = not self.content.winfo_children()
-        tk.Label(self.content, text=title, bg=SURFACE, fg=TEXT, font=FONT_BOLD).pack(
-            anchor="w", pady=(0 if first else 16, 0))
-        tk.Label(self.content, text=hint, bg=SURFACE, fg=MUTED, font=FONT_SMALL, wraplength=420,
-                 justify="left").pack(anchor="w", pady=(0, 6))
+        body = tk.Frame(self, bg=BG)
+        body.pack(fill="both", expand=True)
+        nav = tk.Frame(body, bg=BG, width=200)
+        nav.pack(side="left", fill="y", padx=(14, 0), pady=16)
+        nav.pack_propagate(False)
+        tk.Label(nav, text="Настройки", bg=BG, fg=TEXT, font=("Segoe UI Semibold", 15)).pack(
+            anchor="w", padx=10, pady=(0, 14))
+        self.nav_items = {}
+        for key, icon, label in self.PAGES:
+            item = tk.Frame(nav, bg=BG, cursor="hand2", padx=10, pady=7)
+            item.pack(fill="x", pady=1)
+            mark = tk.Label(item, text=icon, bg=BG, fg=MUTED, font=self.ICON_FONT, width=2)
+            mark.pack(side="left")
+            text = tk.Label(item, text=label, bg=BG, fg=TEXT, font=FONT_SMALL)
+            text.pack(side="left", padx=(8, 0))
+            for widget in (item, mark, text):
+                widget.bind("<Button-1>", lambda e, k=key: self.show_page(k))
+                widget.bind("<Enter>", lambda e, k=key: self.paint_nav(k, hover=True))
+                widget.bind("<Leave>", lambda e, k=key: self.paint_nav(k))
+            self.nav_items[key] = (item, mark, text)
+
+        self.content = tk.Frame(body, bg=BG, width=560, height=440)
+        self.content.pack(side="left", fill="both", expand=True, padx=(10, 22), pady=16)
+        self.content.pack_propagate(False)
+        self.pages = {
+            "general": self.page_general(),
+            "board": self.page_board(),
+            "sharing": self.page_sharing(shared_folder, user_name, team_status),
+            "updates": self.page_updates(),
+        }
+
+        bar = tk.Frame(self, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
+        bar.pack(fill="x", side="bottom")
+        ttk.Button(bar, text="Сохранить", style="Accent.TButton", command=self.ok).pack(
+            side="right", padx=(0, 18), pady=12)
+        ttk.Button(bar, text="Отмена", style="Soft.TButton", command=self.destroy).pack(
+            side="right", padx=(0, 8), pady=12)
+
+        self.page = None
+        self.show_page(page)
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    # --- оформление ---
+
+    def paint_nav(self, key, hover=False):
+        item, mark, text = self.nav_items[key]
+        if key == self.page:
+            bg, fg, font = ACCENT_SOFT, ACCENT, ("Segoe UI Semibold", 10)
+        else:
+            bg, fg, font = ("#e9edf4" if hover else BG), TEXT, FONT_SMALL
+        for widget in (item, mark, text):
+            widget.configure(bg=bg)
+        mark.configure(fg=ACCENT if key == self.page else MUTED)
+        text.configure(fg=fg, font=font)
+
+    def show_page(self, key):
+        if self.page:
+            self.pages[self.page].pack_forget()
+        self.page = key
+        self.pages[key].pack(fill="both", expand=True)
+        for k in self.nav_items:
+            self.paint_nav(k)
+
+    def new_page(self, title, hint):
+        page = tk.Frame(self.content, bg=BG)
+        tk.Label(page, text=title, bg=BG, fg=TEXT, font=("Segoe UI Semibold", 13)).pack(anchor="w")
+        tk.Label(page, text=hint, bg=BG, fg=MUTED, font=FONT_SMALL, wraplength=540,
+                 justify="left").pack(anchor="w", pady=(2, 12))
+        return page
+
+    def card(self, parent, **pack):
+        frame = tk.Frame(parent, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
+        frame.pack(fill="x", **pack)
+        return frame
+
+    def row(self, card, title, hint="", first=False):
+        """Строка карточки: название и пояснение слева; возвращает фрейм для элемента справа."""
+        if not first:
+            tk.Frame(card, bg=BORDER, height=1).pack(fill="x", padx=14)
+        line = tk.Frame(card, bg=SURFACE)
+        line.pack(fill="x", padx=14, pady=9)
+        text = tk.Frame(line, bg=SURFACE)
+        text.pack(side="left", fill="x", expand=True)
+        tk.Label(text, text=title, bg=SURFACE, fg=TEXT, font=FONT_SMALL).pack(anchor="w")
+        if hint:
+            tk.Label(text, text=hint, bg=SURFACE, fg=MUTED, font=("Segoe UI", 9), wraplength=360,
+                     justify="left").pack(anchor="w")
+        control = tk.Frame(line, bg=SURFACE)
+        control.pack(side="right")
+        return control
+
+    # --- страницы ---
+
+    def page_general(self):
+        page = self.new_page("Общие", "Как открывается окно программы.")
+        card = self.card(page)
+        control = self.row(card, "Запуск программы", "Каким открывать окно ToDoro при запуске.",
+                           first=True)
+        segments = ttk.Frame(control, style="Segments.TFrame", padding=3)
+        segments.pack()
+        for value, label in (("window", "Окном"), ("maximized", "На весь экран")):
+            ttk.Radiobutton(segments, text=label, value=value, variable=self.start_mode,
+                            style="Segment.TRadiobutton", cursor="hand2").pack(side="left")
+        return page
+
+    def page_board(self):
+        page = self.new_page("Доска", "Что показывать на карточках задач. Заголовок виден всегда.")
+        columns = tk.Frame(page, bg=BG)
+        columns.pack(fill="both", expand=True)
+        card = self.card(columns, side="left", anchor="n")
+        card.pack_configure(fill="none")
+        for i, (key, label) in enumerate(CARD_FIELDS.items()):
+            control = self.row(card, label.replace(" (в общих списках)", ""),
+                               "только в общих списках" if key == "author" else "", first=i == 0)
+            Toggle(control, self.fields[key], command=self.update_preview).pack()
+        # Образец карточки справа — сразу видно, как будет выглядеть
+        side = tk.Frame(columns, bg=BG)
+        side.pack(side="left", anchor="n", padx=(18, 0))
+        tk.Label(side, text="Образец", bg=BG, fg=MUTED, font=FONT_SMALL).pack(anchor="w", pady=(0, 6))
+        self.preview = tk.Frame(side, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER,
+                                width=210)
+        self.preview.pack(anchor="w")
+        self.update_preview()
+        return page
+
+    def update_preview(self):
+        for child in self.preview.winfo_children():
+            child.destroy()
+        on = {key for key, var in self.fields.items() if var.get()}
+        holder = tk.Frame(self.preview, bg=SURFACE)
+        holder.pack(fill="both")
+        tk.Frame(holder, bg="#3b82f6", width=4).pack(side="left", fill="y")
+        inner = tk.Frame(holder, bg=SURFACE, padx=12, pady=10)
+        inner.pack(side="left", fill="both")
+        top = tk.Frame(inner, bg=SURFACE)
+        top.pack(fill="x")
+        if "priority" in on and "priority_1" in IMAGES:
+            tk.Label(top, image=IMAGES["priority_1"], bg=SURFACE).pack(side="left", padx=(0, 6))
+        tk.Label(top, text="Сдать отчёт", bg=SURFACE, fg=TEXT, font=FONT_BOLD).pack(side="left")
+        if "number" in on:
+            tk.Label(top, text="#12", bg=SURFACE, fg=DONE, font=FONT_SMALL).pack(side="right",
+                                                                               padx=(16, 0))
+        if "body" in on:
+            tk.Label(inner, text="Свести продажи по регионам\nи добавить графики…", bg=SURFACE,
+                     fg=MUTED, font=FONT_SMALL, justify="left").pack(anchor="w", pady=(4, 0))
+        extra = [text for key, text in (("due", "срок 17.10 18:00"), ("remind", "напомнить за 1 час"),
+                                        ("created", "создана 16.10"), ("author", "автор Мария"))
+                 if key in on]
+        if extra:
+            tk.Label(inner, text="\n".join(extra), bg=SURFACE, fg=MUTED, font=("Segoe UI", 9),
+                     justify="left").pack(anchor="w", pady=(6, 0))
+
+    def page_sharing(self, shared_folder, user_name, team_status):
+        page = self.new_page("Совместная работа",
+                             "Общие списки хранятся в сетевой папке, которую видят все участники. "
+                             "Укажите её и своё имя — его увидят другие.")
+        card = self.card(page)
+        status = tk.Frame(card, bg=SURFACE)
+        status.pack(fill="x", padx=14, pady=(12, 10))
+        self.status_dot = tk.Label(status, text="●", bg=SURFACE, font=("Segoe UI", 14))
+        self.status_dot.pack(side="left")
+        self.status_text = tk.Label(status, bg=SURFACE, fg=TEXT, font=FONT_SMALL, wraplength=470,
+                                    justify="left", anchor="w")
+        self.status_text.pack(side="left", padx=(6, 0), fill="x")
+        self.set_status(*(team_status or ("off", "Не подключено")))
+
+        tk.Frame(card, bg=BORDER, height=1).pack(fill="x", padx=14)
+        form = tk.Frame(card, bg=SURFACE)
+        form.pack(fill="x", padx=14, pady=12)
+        form.columnconfigure(1, weight=1)
+        tk.Label(form, text="Общая папка", bg=SURFACE, fg=TEXT, font=FONT_SMALL).grid(
+            row=0, column=0, sticky="w", padx=(0, 12))
+        self.folder = ttk.Entry(form, font=FONT_SMALL)
+        self.folder.insert(0, shared_folder)
+        self.folder.xview_moveto(0)
+        self.folder.grid(row=0, column=1, sticky="we")
+        ttk.Button(form, text="Обзор…", style="Soft.TButton", cursor="hand2",
+                   command=self.browse).grid(row=0, column=2, padx=(6, 0))
+        tk.Label(form, text="Например: \\\\сервер\\общая папка", bg=SURFACE, fg=DONE,
+                 font=("Segoe UI", 9)).grid(row=1, column=1, sticky="w", pady=(2, 8))
+        tk.Label(form, text="Ваше имя", bg=SURFACE, fg=TEXT, font=FONT_SMALL).grid(
+            row=2, column=0, sticky="w", padx=(0, 12))
+        self.name = ttk.Entry(form, font=FONT_SMALL)
+        self.name.insert(0, user_name)
+        self.name.grid(row=2, column=1, sticky="we")
+
+        buttons = tk.Frame(page, bg=BG)
+        buttons.pack(fill="x", pady=(10, 0))
+        self.check_button = ttk.Button(buttons, text="Проверить подключение", style="TButton",
+                                       cursor="hand2", command=self.run_folder_check)
+        self.check_button.pack(side="left")
+        if not self.check_folder:
+            self.check_button.state(["disabled"])
+        return page
+
+    def set_status(self, kind, text):
+        color = {"ok": "#16a34a", "error": DANGER, "busy": "#f59e0b"}.get(kind, DONE)
+        self.status_dot.configure(fg=color)
+        self.status_text.configure(text=text)
+
+    def run_folder_check(self):
+        folder = self.folder.get().strip()
+        if not folder:
+            self.set_status("error", "Укажите общую папку.")
+            return
+        self.set_status("busy", "Проверяю…")
+        self.check_button.state(["disabled"])
+
+        def done(status):
+            if self.winfo_exists():
+                self.check_button.state(["!disabled"])
+                self.set_status(*status)
+        self.check_folder(folder, done)
+
+    def page_updates(self):
+        page = self.new_page("Обновления", "ToDoro сам узнаёт о новых версиях и предлагает "
+                             "обновиться — задачи при этом сохраняются.")
+        card = self.card(page)
+        control = self.row(card, f"Установлена версия {APP_VERSION}", "", first=True)
+        self.update_button = ttk.Button(control, text="Проверить сейчас", style="Soft.TButton",
+                                        cursor="hand2", command=self.run_update_check)
+        self.update_button.pack()
+        if not self.check_update:
+            self.update_button.state(["disabled"])
+        control = self.row(card, "Проверять обновления автоматически",
+                           "При запуске программы, не чаще раза в день.")
+        Toggle(control, self.update_auto).pack()
+        self.update_text = tk.Label(page, text="", bg=BG, fg=MUTED, font=FONT_SMALL, wraplength=540,
+                                    justify="left")
+        self.update_text.pack(anchor="w", pady=(10, 0))
+        return page
+
+    def run_update_check(self):
+        self.update_button.state(["disabled"])
+        self.update_text.configure(text="Проверяю…", fg=MUTED)
+
+        def done(text, release=None):
+            if not self.winfo_exists():
+                return
+            self.update_button.state(["!disabled"])
+            self.update_text.configure(text=text, fg=ACCENT if release else MUTED)
+            self.update_found = release
+        self.check_update(done)
+
+    # --- кнопки ---
 
     def browse(self):
         folder = filedialog.askdirectory(parent=self, title="Общая папка для списков",
@@ -1728,13 +1966,22 @@ class SettingsDialog(ModernDialog):
     def ok(self):
         folder, name = self.folder.get().strip(), " ".join(self.name.get().split())
         if folder and not name:
+            self.show_page("sharing")
             messagebox.showwarning("Настройки", "Укажите своё имя — по нему другие участники "
                                    "увидят, кто создал или изменил задачу.", parent=self)
+            self.name.focus_set()
             return
         self.result = dict(start_mode=self.start_mode.get(),
                            card_fields=[key for key, var in self.fields.items() if var.get()],
                            update_auto=self.update_auto.get(), shared_folder=folder, user_name=name)
         self.destroy()
+
+    def show(self):
+        center_on_screen(self)
+        self.grab_set()
+        self.focus_force()
+        self.wait_window()
+        return self.result
 
 
 class NameDialog(ModernDialog):
@@ -2626,20 +2873,29 @@ class TodoApp:
         if not self.in_paned(self.side):
             self.paned.add(self.side, stretch="never", minsize=240, width=self.panel_width)
 
-    def show_settings(self):
+    def show_settings(self, page="general"):
         if self.team:
-            status = "Подключено. Участники: " + ", ".join(self.team.members())
+            status = ("ok", "Подключено. Участники: " + ", ".join(self.team.members()))
         elif self.team_error:
-            status = "⚠ " + " ".join(self.team_error.split())
+            status = ("error", " ".join(self.team_error.split()))
         else:
-            status = ""
-        result = SettingsDialog(self.root, db.get_setting(self.prefs, "start_mode", "window"),
-                                self.card_fields, self.auto_update_enabled(),
-                                db.get_setting(self.prefs, "shared_folder", ""),
-                                db.get_setting(self.prefs, "user_name", "") or os.environ.get("USERNAME", ""),
-                                status).show()
+            status = ("off", "Не подключено — общие списки недоступны.")
+        dialog = SettingsDialog(
+            self.root, db.get_setting(self.prefs, "start_mode", "window"), self.card_fields,
+            self.auto_update_enabled(), db.get_setting(self.prefs, "shared_folder", ""),
+            db.get_setting(self.prefs, "user_name", "") or os.environ.get("USERNAME", ""),
+            status, page, check_folder=self.check_folder, check_update=self.check_update_inline)
+        result = dialog.show()
+        if dialog.update_found:  # нашли новую версию кнопкой в настройках
+            UpdateDialog(self.root, dialog.update_found, self.close)
         if result is None:
             return
+        db.set_setting(self.prefs, "start_mode", result["start_mode"])
+        db.set_setting(self.prefs, "update_auto", "1" if result["update_auto"] else "0")
+        if result["card_fields"] != self.card_fields:
+            self.card_fields = result["card_fields"]
+            db.set_json_setting(self.prefs, "card_fields", self.card_fields)
+            self.refresh(select_id=self.current_id())
         old = (db.get_setting(self.prefs, "shared_folder", ""), db.get_setting(self.prefs, "user_name", ""))
         if (result["shared_folder"], result["user_name"]) != old:
             db.set_setting(self.prefs, "shared_folder", result["shared_folder"])
@@ -2658,12 +2914,36 @@ class TodoApp:
             elif self.team:
                 messagebox.showinfo(APP_NAME, "Общая папка подключена. Общие списки — в меню "
                                     "списков (кнопка с названием списка вверху).", parent=self.root)
-        db.set_setting(self.prefs, "start_mode", result["start_mode"])
-        db.set_setting(self.prefs, "update_auto", "1" if result["update_auto"] else "0")
-        if result["card_fields"] != self.card_fields:
-            self.card_fields = result["card_fields"]
-            db.set_json_setting(self.prefs, "card_fields", self.card_fields)
-            self.refresh(select_id=self.current_id())
+
+    def check_folder(self, folder, done):
+        """Кнопка «Проверить подключение» в настройках: открывается ли папка и кто в ней."""
+        def work():
+            test = team.Team(folder)
+            try:
+                return test.members()
+            finally:
+                test.close()
+
+        def finished(members, error):
+            if error:
+                done(("error", " ".join(str(error).split())))
+            elif members:
+                done(("ok", "Папка доступна. Участники: " + ", ".join(members)))
+            else:
+                done(("ok", "Папка доступна. Участников пока нет — вы будете первым."))
+        in_background(self.root, work, finished)
+
+    def check_update_inline(self, done):
+        """Кнопка «Проверить сейчас» в настройках."""
+        def finished(release, error):
+            if error:
+                done(str(error))
+            elif updater.is_newer(release["version"], APP_VERSION):
+                done(f"Доступна версия {release['version']}. Окно обновления откроется, когда вы "
+                     "закроете настройки.", release)
+            else:
+                done(f"У вас последняя версия — {APP_VERSION}.")
+        in_background(self.root, updater.fetch_latest, finished)
 
     # Единственное меню «☰ Меню»: сверху действия, потом настройки, внизу справка и сведения
     def build_main_menu(self):
@@ -3674,9 +3954,9 @@ class TodoApp:
             if not shared:
                 menu.command("пока нет — создайте первый", None, enabled=False)
         elif self.team_error:
-            menu.command("Общая папка недоступна…", self.show_settings)
+            menu.command("Общая папка недоступна…", lambda: self.show_settings("sharing"))
         else:
-            menu.command("Подключить общие списки…", self.show_settings)
+            menu.command("Подключить общие списки…", lambda: self.show_settings("sharing"))
         personal = self.list_id == db.PERSONAL
         (menu.separator()
              .command("Новый список…", self.new_list)
