@@ -1,58 +1,48 @@
-"""Рисует иконку приложения icon.ico: Тоторо, у которого живот — листок со списком дел.
+"""Рисует иконку приложения icon.ico в стиле Arduino IDE: бирюзовый закруглённый квадрат,
+в нём белый силуэт Тоторо, на животе — галочка (список дел).
 
 Запуск:  python tools/make_icon.py icon.ico preview.png
-Для маленьких размеров (16–24 px) рисунок упрощается: меньше деталей и строк в списке.
+Для маленьких размеров (16–24 px) рисунок упрощается: без усов, галочка толще.
 """
 import struct
 import sys
 
-from make_images import (OUTLINE, T_BODY, WHITE, outlined, png, render, sd_ellipse,
-                         sd_round_rect, sd_segment, smin)
+from make_images import png, render, sd_ellipse, sd_round_rect, sd_segment, smin
 
-PAPER = (252, 250, 242)
-LINE = (170, 176, 186)
-CHECK = (34, 160, 90)
+BG = (0, 151, 140)      # бирюзовый фон
+WHITE = (255, 255, 255)
 
 
 def icon_shape(size):
     small = size <= 24
-    ow = 0.06 if small else 0.035 if size <= 48 else 0.022
-    rows = (0.64, 0.82) if small else (0.6, 0.72, 0.84)
+    check_w = 0.045 if small else 0.032
 
     def shape(u, v):
-        # строки списка: квадратик с галочкой (или пустой) и линия текста
-        for i, ry in enumerate(rows):
-            checked = i < len(rows) - 1
-            box = sd_round_rect(u, v, 0.29, ry - 0.045, 0.38, ry + 0.045, 0.015)
-            if checked and (sd_segment(u, v, 0.30, ry, 0.33, ry + 0.035) < ow * 0.6
-                            or sd_segment(u, v, 0.33, ry + 0.035, 0.40, ry - 0.05) < ow * 0.6):
-                return CHECK
-            if box < 0:
-                return OUTLINE if box > -ow * 0.7 else PAPER
-            if sd_segment(u, v, 0.45, ry, 0.70 - 0.06 * i, ry) < ow * 0.55:
-                return LINE
-        # листок-живот
-        paper = sd_round_rect(u, v, 0.22, 0.5, 0.78, 0.93, 0.07)
-        if paper < 0:
-            return outlined(paper, PAPER, ow)
-        # глаза и нос
-        for cx in (0.37, 0.63):
-            if not small and sd_ellipse(u, v, cx + (0.012 if cx < 0.5 else -0.012), 0.335, 0.03, 0.03) < 0:
-                return OUTLINE
-            eye = sd_ellipse(u, v, cx, 0.33, 0.065 if not small else 0.075, 0.065 if not small else 0.075)
-            if eye < 0:
-                return OUTLINE if small else outlined(eye, WHITE, ow * 0.8)
-        if not small and sd_ellipse(u, v, 0.5, 0.41, 0.045, 0.02) < 0:
-            return OUTLINE
-        # силуэт Тоторо: голова, тело, уши
-        head = sd_ellipse(u, v, 0.5, 0.42, 0.37, 0.3)
-        body = sd_ellipse(u, v, 0.5, 0.7, 0.47, 0.29)
-        ears = min(sd_ellipse(u, v, 0.31, 0.15, 0.065, 0.15, -12),
-                   sd_ellipse(u, v, 0.69, 0.15, 0.065, 0.15, 12))
-        silhouette = smin(smin(head, body, 0.1), ears, 0.05)
+        if sd_round_rect(u, v, 0.03, 0.03, 0.97, 0.97, 0.2) >= 0:
+            return None  # прозрачные углы
+        # силуэт Тоторо: голова, тело, острые ушки
+        head = sd_ellipse(u, v, 0.5, 0.42, 0.24, 0.19)
+        body = sd_ellipse(u, v, 0.5, 0.64, 0.33, 0.25)
+        ears = min(sd_ellipse(u, v, 0.37, 0.235, 0.038, 0.085, -10),
+                   sd_ellipse(u, v, 0.63, 0.235, 0.038, 0.085, 10))
+        silhouette = smin(smin(head, body, 0.08), ears, 0.03)
         if silhouette < 0:
-            return outlined(silhouette, T_BODY, ow)
-        return None
+            # живот — «окошко» цвета фона, в нём белая галочка
+            if sd_ellipse(u, v, 0.5, 0.68, 0.2, 0.15) < 0:
+                check = min(sd_segment(u, v, 0.41, 0.68, 0.475, 0.745),
+                            sd_segment(u, v, 0.475, 0.745, 0.6, 0.61))
+                return WHITE if check < check_w else BG
+            # глаза
+            if min(sd_ellipse(u, v, 0.42, 0.39, 0.03, 0.03), sd_ellipse(u, v, 0.58, 0.39, 0.03, 0.03)) < 0:
+                return BG
+            return WHITE
+        # усы
+        if not small:
+            whiskers = min(sd_segment(u, v, 0.30, 0.44, 0.13, 0.41), sd_segment(u, v, 0.30, 0.48, 0.13, 0.50),
+                           sd_segment(u, v, 0.70, 0.44, 0.87, 0.41), sd_segment(u, v, 0.70, 0.48, 0.87, 0.50))
+            if whiskers < 0.012:
+                return WHITE
+        return BG
     return shape
 
 

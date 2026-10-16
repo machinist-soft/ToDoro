@@ -21,14 +21,21 @@ A simple to-do list and kanban board for Windows with a Totoro helper.
 
 ## Запуск / Running
 
-Нужен Python 3 с Tkinter / Requires Python 3 with Tkinter:
+Проще всего — скачать установщик `ToDoro-Setup-*.exe` в разделе [Releases](https://github.com/amfilippov/ToDoro/releases).
+Easiest: download the installer from [Releases](https://github.com/amfilippov/ToDoro/releases).
+
+Из исходного кода нужен Python 3 с Tkinter / From source, requires Python 3 with Tkinter:
 
 ```
 python todoro.py
 ```
 
-Задачи хранятся в файле `todoro.db` рядом с программой.
-Tasks are stored in `todoro.db` next to the program.
+Задачи хранятся в файле `%APPDATA%ToDoro	odoro.db`.
+Tasks are stored in `%APPDATA%ToDoro	odoro.db`.
+
+## Что нового / Release notes
+
+См. [RELEASE_NOTES.md](RELEASE_NOTES.md). Установщик — в разделе [Releases](https://github.com/amfilippov/ToDoro/releases).
 
 ## Лицензия / License
 
