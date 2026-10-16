@@ -41,6 +41,7 @@ GHIBLI_NOTE = (
     "в программе — любительские рисунки; лицензия MIT на самих персонажей не распространяется. "
     "Программа не связана со студией Ghibli и не одобрена ею."
 )
+PROJECT_URL = updater.PROJECT_URL  # страница проекта на GitHub
 ICON_PATH = Path(__file__).with_name("icon.ico")
 IMAGES_DIR = Path(__file__).with_name("images")
 
@@ -799,7 +800,7 @@ class TaskDialog(tk.Toplevel):
 class HelpWindow(tk.Toplevel):
     """Окно справки: оформленный текст из help_text.py."""
 
-    MARKUP = re.compile(r"(\*\*.+?\*\*|\[[^\]]+\]|\{p[123]\})")
+    MARKUP = re.compile(r"(\*\*.+?\*\*|\[[^\]]+\]|\{p[123]\}|\{github\})")
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -836,6 +837,11 @@ class HelpWindow(tk.Toplevel):
             self.insert_marked(text, line, kind)
             text.insert("end", "\n", kind)
 
+        # ссылка на страницу проекта: синяя, подчёркнутая, открывается в браузере
+        text.tag_configure("link", foreground=ACCENT, underline=True)
+        text.tag_bind("link", "<Button-1>", lambda e: webbrowser.open(PROJECT_URL))
+        text.tag_bind("link", "<Enter>", lambda e: text.configure(cursor="hand2"))
+        text.tag_bind("link", "<Leave>", lambda e: text.configure(cursor=""))
         text.tag_configure("copyright", foreground=MUTED, font=FONT_SMALL, spacing1=24)
         text.insert("end", f"{COPYRIGHT}. Лицензия MIT (☰ Меню → О программе → Лицензия).\n"
                            f"{GHIBLI_NOTE}", "copyright")
@@ -860,6 +866,8 @@ class HelpWindow(tk.Toplevel):
                 image = IMAGES.get(f"priority_{part[2]}")
                 if image:
                     text.image_create("end", image=image, align="center")
+            elif part == "{github}":
+                text.insert("end", PROJECT_URL.removeprefix("https://"), (kind, "link"))
             else:
                 text.insert("end", part, kind)
 
@@ -884,7 +892,11 @@ class AboutWindow(tk.Toplevel):
         tk.Label(names, text=APP_NAME, bg=SURFACE, fg=TEXT, font=FONT_TITLE).pack(anchor="w")
         tk.Label(names, text=f"Список дел с Тоторо · версия {APP_VERSION}", bg=SURFACE, fg=MUTED, font=FONT).pack(anchor="w")
 
-        tk.Label(body, text=COPYRIGHT, bg=SURFACE, fg=TEXT, font=FONT_BOLD).pack(anchor="w", pady=(18, 8))
+        tk.Label(body, text=COPYRIGHT, bg=SURFACE, fg=TEXT, font=FONT_BOLD).pack(anchor="w", pady=(18, 2))
+        link = tk.Label(body, text=PROJECT_URL.removeprefix("https://"), bg=SURFACE, fg=ACCENT,
+                        font=(*FONT_SMALL, "underline"), cursor="hand2")
+        link.pack(anchor="w", pady=(0, 10))
+        link.bind("<Button-1>", lambda e: webbrowser.open(PROJECT_URL))
         for text, color, font in ((LICENSE_SUMMARY, TEXT, FONT_SMALL), (GHIBLI_NOTE, MUTED, FONT_SMALL)):
             tk.Label(body, text=text, bg=SURFACE, fg=color, font=font, justify="left",
                      wraplength=470).pack(anchor="w", pady=(0, 10))

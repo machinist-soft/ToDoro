@@ -14,6 +14,7 @@ import urllib.request
 from pathlib import Path
 
 REPO = "amfilippov/ToDoro"
+PROJECT_URL = f"https://github.com/{REPO}"
 LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
 RELEASES_LIST = f"https://github.com/{REPO}/releases"  # все выпуски со списками изменений
