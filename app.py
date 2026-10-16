@@ -1,4 +1,4 @@
-"""Окно приложения «Список дел»."""
+"""ToDoro — список дел с Тоторо."""
 import calendar
 import ctypes
 import re
@@ -10,6 +10,7 @@ from tkinter import messagebox, ttk
 import db
 from help_text import HELP
 
+APP_NAME = "ToDoro"  # ToDo + Totoro
 ICON_PATH = Path(__file__).with_name("icon.ico")
 IMAGES_DIR = Path(__file__).with_name("images")
 
@@ -471,7 +472,7 @@ class HelpWindow(tk.Toplevel):
 
     def __init__(self, parent):
         super().__init__(parent)
-        self.title("Справка — Список дел")
+        self.title(f"Справка — {APP_NAME}")
         self.configure(bg=SURFACE)
         self.minsize(520, 400)
 
@@ -534,7 +535,7 @@ class TodoApp:
         self.conn = db.connect()
         self.due = {}  # id задачи -> срок (для подсветки просроченных)
 
-        root.title("Список дел")
+        root.title(APP_NAME)
         if ICON_PATH.exists():
             root.iconbitmap(default=str(ICON_PATH))  # иконка для всех окон программы
         setup_style(root)
@@ -548,7 +549,7 @@ class TodoApp:
         # Заголовок, счётчик задач и Тоторо
         header = ttk.Frame(page)
         header.pack(fill="x")
-        ttk.Label(header, text="Список дел", style="Title.TLabel").pack(side="left", anchor="s")
+        ttk.Label(header, text=APP_NAME, style="Title.TLabel").pack(side="left", anchor="s")
         self.counter = ttk.Label(header, style="Muted.TLabel")
         self.counter.pack(side="left", padx=(14, 0), pady=(0, 6), anchor="s")
         if "totoro_small" in IMAGES:
@@ -761,7 +762,7 @@ class TodoApp:
         """Возвращает (id, выполнена ли) выбранной задачи или None."""
         sel = self.tree.selection()
         if not sel:
-            messagebox.showinfo("Список дел", "Сначала выберите задачу в списке.")
+            messagebox.showinfo(APP_NAME, "Сначала выберите задачу в списке.")
             return None
         return int(sel[0]), "done" in self.tree.item(sel[0], "tags")
 
@@ -796,6 +797,13 @@ class TodoApp:
     def delete(self):
         task = self.selected()
         if task is None:
+            return
+        title = self.tree.set(str(task[0]), "title")
+        if not messagebox.askyesno(
+            "Удалить задачу?",
+            f"Удалить задачу «{title}»?\n\nВернуть её будет нельзя.",
+            icon="warning", default="no", parent=self.root,
+        ):
             return
         db.delete_task(self.conn, task[0])
         self.refresh()
@@ -921,7 +929,7 @@ class TodoApp:
 if __name__ == "__main__":
     # Чтобы на панели задач была наша иконка, а не значок Python.
     try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("TodoList.App")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ToDoro.App")
     except (AttributeError, OSError):
         pass
     root = tk.Tk()
