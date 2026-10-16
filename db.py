@@ -4,19 +4,26 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# Файл базы лежит рядом с программой. Если его нет, SQLite создаст его сам.
-DB_PATH = Path(__file__).with_name("todoro.db")
-OLD_DB_PATH = Path(__file__).with_name("todo.db")  # так база называлась в первых версиях
+# Файл базы лежит в личной папке пользователя (%APPDATA%\ToDoro): в папку установленной
+# программы (Program Files) писать нельзя. Если файла нет, SQLite создаст его сам.
+DATA_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "ToDoro"
+DB_PATH = DATA_DIR / "todoro.db"
+# Раньше база лежала рядом с программой (сначала под именем todo.db)
+OLD_DB_PATHS = [Path(__file__).with_name("todoro.db"), Path(__file__).with_name("todo.db")]
 
 
 def default_path():
-    """todoro.db; старый todo.db при первом запуске переименовывается.
+    """todoro.db в DATA_DIR; старая база из папки программы при первом запуске переносится туда.
     Если старый файл сейчас занят (открыт другой копией программы) — работаем с ним."""
-    if not DB_PATH.exists() and OLD_DB_PATH.exists():
-        try:
-            os.replace(OLD_DB_PATH, DB_PATH)
-        except OSError:
-            return OLD_DB_PATH
+    if not DB_PATH.exists():
+        old = next((p for p in OLD_DB_PATHS if p.exists()), None)
+        if old:
+            try:
+                DATA_DIR.mkdir(parents=True, exist_ok=True)
+                os.replace(old, DB_PATH)
+            except OSError:
+                return old
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     return DB_PATH
 
 # Столбцы, которые появились в новых версиях программы.

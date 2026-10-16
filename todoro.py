@@ -20,6 +20,7 @@ from examples import make_examples
 from help_text import HELP
 
 APP_NAME = "ToDoro"  # ToDo + Totoro
+APP_VERSION = "1.0"  # номер версии — меняется здесь (установщик берёт его отсюда)
 APP_YEAR = 2026
 COPYRIGHT_HOLDER = "Machinist"  # автор — имя меняется здесь и в файле LICENSE
 COPYRIGHT = f"© {APP_YEAR} {COPYRIGHT_HOLDER}"
@@ -819,7 +820,7 @@ class HelpWindow(tk.Toplevel):
         if "totoro_small" in IMAGES:
             text.image_create("end", image=IMAGES["totoro_small"], padx=0)
             text.insert("end", "\n")
-        folder = str(Path(__file__).parent)
+        folder = str(db.DATA_DIR)
         for kind, line in HELP:
             line = line.replace("{folder}", folder)
             if kind == "li":
@@ -873,7 +874,7 @@ class AboutWindow(tk.Toplevel):
         names = tk.Frame(top, bg=SURFACE)
         names.pack(side="left", anchor="center")
         tk.Label(names, text=APP_NAME, bg=SURFACE, fg=TEXT, font=FONT_TITLE).pack(anchor="w")
-        tk.Label(names, text="Список дел с Тоторо", bg=SURFACE, fg=MUTED, font=FONT).pack(anchor="w")
+        tk.Label(names, text=f"Список дел с Тоторо · версия {APP_VERSION}", bg=SURFACE, fg=MUTED, font=FONT).pack(anchor="w")
 
         tk.Label(body, text=COPYRIGHT, bg=SURFACE, fg=TEXT, font=FONT_BOLD).pack(anchor="w", pady=(18, 8))
         for text, color, font in ((LICENSE_SUMMARY, TEXT, FONT_SMALL), (GHIBLI_NOTE, MUTED, FONT_SMALL)):
