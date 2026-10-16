@@ -1294,7 +1294,10 @@ class _MenuWindow(tk.Toplevel):
         self.deiconify()
 
         if parent is None:
-            # Щелчок мимо меню закрывает его (пока меню открыто, все щелчки приходят сюда)
+            # Щелчок мимо меню закрывает его (пока меню открыто, все щелчки приходят сюда).
+            # Если меню открыто из окна-диалога, захват потом нужно вернуть этому окну.
+            self.previous_grab = self.grab_current()
+            self.previous_focus = self.focus_get()
             self.grab_set()
             self.bind("<ButtonPress>", self.click_outside)
             self.bind("<FocusOut>", lambda e: self.after(120, self.check_focus))
@@ -1372,6 +1375,12 @@ class _MenuWindow(tk.Toplevel):
         self.close_child()
         try:
             self.grab_release()
+            previous = getattr(self, "previous_grab", None)
+            if previous is not None and previous.winfo_exists():
+                previous.grab_set()  # диалог, из которого открыли меню, снова модальный
+            focus = getattr(self, "previous_focus", None)
+            if focus is not None and focus.winfo_exists():
+                focus.focus_set()
         except tk.TclError:
             pass
         self.destroy()
@@ -1433,6 +1442,79 @@ class _MenuWindow(tk.Toplevel):
             win.parent.close_child()
         else:
             self.close()
+
+
+# Буфер обмена в полях ввода. В Tk сочетания Ctrl+C/V/X/A работают только в английской
+# раскладке, а меню по правой кнопке у полей ввода нет вовсе — добавляем и то и другое.
+EDIT_CLASSES = ("TEntry", "Entry", "Text")
+EDIT_KEYCODES = {86: "<<Paste>>", 67: "<<Copy>>", 88: "<<Cut>>", 65: "select_all"}  # V C X A
+
+
+def select_all(widget):
+    if isinstance(widget, tk.Text):
+        widget.tag_add("sel", "1.0", "end-1c")
+    else:
+        widget.select_range(0, "end")
+        widget.icursor("end")
+
+
+def editable(widget):
+    try:
+        state = str(widget.cget("state"))
+    except tk.TclError:
+        return False
+    return state == "normal" and not (isinstance(widget, ttk.Entry) and widget.instate(["readonly"]))
+
+
+def has_selection(widget):
+    if isinstance(widget, tk.Text):
+        return bool(widget.tag_ranges("sel"))
+    return widget.selection_present()
+
+
+def clipboard_has_text(widget):
+    try:
+        return bool(widget.clipboard_get())
+    except tk.TclError:
+        return False
+
+
+def edit_shortcut(event):
+    """Ctrl+C/V/X/A в поле ввода — по физической клавише, при любой раскладке."""
+    action = EDIT_KEYCODES.get(event.keycode)
+    if action is None:
+        return None
+    if action == "select_all":  # в Tk Ctrl+A — «в начало строки»; в Windows привычнее «выделить всё»
+        select_all(event.widget)
+        return "break"
+    if event.keysym.lower() in ("v", "c", "x"):
+        return None  # английская раскладка — Tk справляется сам
+    event.widget.event_generate(action)
+    return "break"
+
+
+def edit_menu(event):
+    """Меню по правой кнопке в поле ввода: вырезать, копировать, вставить, выделить всё."""
+    w = event.widget
+    w.focus_set()
+    can_edit = editable(w)
+    (PopupMenu()
+     .command("Вырезать", lambda: w.event_generate("<<Cut>>"), accel="Ctrl+X",
+              enabled=can_edit and has_selection(w))
+     .command("Копировать", lambda: w.event_generate("<<Copy>>"), accel="Ctrl+C",
+              enabled=has_selection(w))
+     .command("Вставить", lambda: w.event_generate("<<Paste>>"), accel="Ctrl+V",
+              enabled=can_edit and clipboard_has_text(w))
+     .separator()
+     .command("Выделить всё", lambda: select_all(w), accel="Ctrl+A")
+     ).popup(w.winfo_toplevel(), event.x_root, event.y_root)
+    return "break"
+
+
+def setup_text_editing(root):
+    for cls in EDIT_CLASSES:
+        root.bind_class(cls, "<Control-KeyPress>", edit_shortcut, add="+")
+        root.bind_class(cls, "<Button-3>", edit_menu, add="+")
 
 
 def menu_button(parent, text, build_menu):
@@ -2297,6 +2379,7 @@ class TodoApp:
         if ICON_PATH.exists():
             root.iconbitmap(default=str(ICON_PATH))  # иконка для всех окон программы
         setup_style(root)
+        setup_text_editing(root)
         load_images()
         center_on_screen(root, 1290, 720)
         root.minsize(820, 480)
