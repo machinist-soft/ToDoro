@@ -5,6 +5,7 @@ import ctypes
 import math
 import os
 import re
+import sqlite3
 import tempfile
 import threading
 import time as time_module
@@ -18,6 +19,7 @@ from pathlib import Path
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import db
+import team
 import updater
 from examples import make_examples
 from help_text import HELP
@@ -135,6 +137,7 @@ def load_images():
 
 DEFAULT_TIME = ("09", "00")  # время срока по умолчанию
 CHECK_EVERY_MS = 30_000      # как часто проверять напоминания (30 секунд)
+WATCH_EVERY_MS = 3_000       # как часто смотреть, не изменил ли кто-то общий список
 
 HOURS = [f"{h:02d}" for h in range(24)]
 MINUTES = [f"{m:02d}" for m in range(0, 60, 5)]
@@ -1565,10 +1568,11 @@ START_MODES = {"window": "Обычным окном", "maximized": "Развёр
 
 
 class SettingsDialog(ModernDialog):
-    """Настройки: запуск программы, поля карточек на доске, обновления.
-    result — dict(start_mode, card_fields, update_auto) или None (отмена)."""
+    """Настройки: запуск программы, поля карточек на доске, совместная работа, обновления.
+    result — dict(start_mode, card_fields, update_auto, shared_folder, user_name) или None."""
 
-    def __init__(self, parent, start_mode, card_fields, update_auto):
+    def __init__(self, parent, start_mode, card_fields, update_auto, shared_folder="", user_name="",
+                 team_status=""):
         super().__init__(parent, "Настройки", "Настройки")
 
         self.section("Запуск программы", "Как открывать окно ToDoro.")
@@ -1587,6 +1591,28 @@ class SettingsDialog(ModernDialog):
                 row=i // 2, column=i % 2, sticky="w", padx=(0, 28), pady=2)
             self.fields[key] = var
 
+        self.section("Совместная работа", "Общие списки хранятся в сетевой папке, которую видят "
+                     "все участники. Укажите её и своё имя — его увидят другие.")
+        row = tk.Frame(self.content, bg=SURFACE)
+        row.pack(fill="x", pady=(0, 4))
+        tk.Label(row, text="Общая папка", bg=SURFACE, fg=TEXT, font=FONT_SMALL, width=12,
+                 anchor="w").pack(side="left")
+        self.folder = ttk.Entry(row, font=FONT_SMALL, width=34)
+        self.folder.insert(0, shared_folder)
+        self.folder.pack(side="left", fill="x", expand=True)
+        ttk.Button(row, text="Обзор…", style="Soft.TButton", cursor="hand2",
+                   command=self.browse).pack(side="left", padx=(6, 0))
+        row = tk.Frame(self.content, bg=SURFACE)
+        row.pack(fill="x", pady=(0, 4))
+        tk.Label(row, text="Ваше имя", bg=SURFACE, fg=TEXT, font=FONT_SMALL, width=12,
+                 anchor="w").pack(side="left")
+        self.name = ttk.Entry(row, font=FONT_SMALL, width=34)
+        self.name.insert(0, user_name)
+        self.name.pack(side="left", fill="x", expand=True)
+        if team_status:
+            tk.Label(self.content, text=team_status, bg=SURFACE, fg=MUTED, font=FONT_SMALL,
+                     wraplength=440, justify="left").pack(anchor="w", pady=(2, 0))
+
         self.section("Обновления", f"Установлена версия {APP_VERSION}. Проверить вручную: "
                      "☰ Меню → Проверить обновления.")
         self.update_auto = tk.BooleanVar(value=update_auto)
@@ -1600,10 +1626,22 @@ class SettingsDialog(ModernDialog):
         tk.Label(self.content, text=hint, bg=SURFACE, fg=MUTED, font=FONT_SMALL, wraplength=420,
                  justify="left").pack(anchor="w", pady=(0, 6))
 
+    def browse(self):
+        folder = filedialog.askdirectory(parent=self, title="Общая папка для списков",
+                                         initialdir=self.folder.get() or None)
+        if folder:
+            self.folder.delete(0, "end")
+            self.folder.insert(0, str(Path(folder)))
+
     def ok(self):
+        folder, name = self.folder.get().strip(), " ".join(self.name.get().split())
+        if folder and not name:
+            messagebox.showwarning("Настройки", "Укажите своё имя — по нему другие участники "
+                                   "увидят, кто создал или изменил задачу.", parent=self)
+            return
         self.result = dict(start_mode=self.start_mode.get(),
                            card_fields=[key for key, var in self.fields.items() if var.get()],
-                           update_auto=self.update_auto.get())
+                           update_auto=self.update_auto.get(), shared_folder=folder, user_name=name)
         self.destroy()
 
 
@@ -1628,6 +1666,33 @@ class NameDialog(ModernDialog):
             return
         self.result = name
         self.destroy()
+
+
+class NewListDialog(NameDialog):
+    """Новый список: название и где он живёт — только у меня или общий для команды.
+    result — (название, общий ли) или None."""
+
+    def __init__(self, parent, can_share):
+        super().__init__(parent, "Новый список", "Новый список", "",
+                         "Например: «Команда», «Дом», «Проект Альфа».", "Создать")
+        self.shared = tk.BooleanVar(value=False)
+        box = tk.Frame(self.content, bg=SURFACE)
+        box.pack(anchor="w", pady=(14, 0))
+        ttk.Radiobutton(box, text="Только у меня", value=False, variable=self.shared,
+                        style="Card.TRadiobutton").pack(anchor="w", pady=2)
+        shared = ttk.Radiobutton(box, text="Общий — видят и меняют все участники", value=True,
+                                 variable=self.shared, style="Card.TRadiobutton")
+        shared.pack(anchor="w", pady=2)
+        if not can_share:
+            shared.state(["disabled"])
+            tk.Label(box, text="Чтобы создавать общие списки, укажите общую папку:\n"
+                     "☰ Меню → Настройки → Совместная работа.", bg=SURFACE, fg=MUTED,
+                     font=FONT_SMALL, justify="left").pack(anchor="w", padx=(22, 0))
+
+    def ok(self):
+        super().ok()
+        if self.result:
+            self.result = (self.result, self.shared.get())
 
 
 def in_background(root, work, done):
@@ -2213,11 +2278,17 @@ class TodoApp:
         # self.prefs — основной файл: настройки и личный список; self.conn — текущий список задач
         self.prefs = db.connect()
         self.list_conns = {db.PERSONAL: self.prefs}  # открытые списки: id -> соединение
-        self.lists = db.list_registry(self.prefs)
+        self.team, self.team_error = None, None      # общая папка (team.Team), если подключена
+        self.connect_team()
+        self.load_lists()
         self.list_id = db.get_setting(self.prefs, "current_list", db.PERSONAL)
-        if not any(item["id"] == self.list_id for item in self.lists):
-            self.list_id = db.PERSONAL
-        self.conn = self.list_conn(self.list_id)
+        self.watch = None  # «отпечаток» открытого общего списка — чтобы заметить чужие изменения
+        try:
+            self.conn = self.list_conn(self.list_id)
+            db.list_statuses(self.conn)
+        except (StopIteration, sqlite3.Error):  # списка больше нет или общая папка недоступна
+            self.forget_list(self.list_id)
+            self.list_id, self.conn = db.PERSONAL, self.prefs
         self.due = {}         # id строки таблицы -> срок (для подсветки просроченных)
         self.row_status = {}  # id строки таблицы -> название статуса
         self.statuses = {}    # id статуса -> (название, цвет, выполнено ли)
@@ -2381,6 +2452,7 @@ class TodoApp:
         self.help_window = None
 
         root.protocol("WM_DELETE_WINDOW", self.close)
+        root.report_callback_exception = self.on_error
         self.show_main_widget()
         self.show_list_name()
         self.refresh()
@@ -2394,6 +2466,7 @@ class TodoApp:
         self.show_placeholder()
         self.entry.focus()
         root.after(1000, self.check_reminders)
+        root.after(WATCH_EVERY_MS, self.watch_changes)  # изменения других участников в общих списках
         root.after(4000, self.auto_check_update)  # раз в день — нет ли новой версии
 
     # --- список или доска ---
@@ -2452,10 +2525,37 @@ class TodoApp:
             self.paned.add(self.side, stretch="never", minsize=240, width=self.panel_width)
 
     def show_settings(self):
+        if self.team:
+            status = "Подключено. Участники: " + ", ".join(self.team.members())
+        elif self.team_error:
+            status = "⚠ " + " ".join(self.team_error.split())
+        else:
+            status = ""
         result = SettingsDialog(self.root, db.get_setting(self.prefs, "start_mode", "window"),
-                                self.card_fields, self.auto_update_enabled()).show()
+                                self.card_fields, self.auto_update_enabled(),
+                                db.get_setting(self.prefs, "shared_folder", ""),
+                                db.get_setting(self.prefs, "user_name", "") or os.environ.get("USERNAME", ""),
+                                status).show()
         if result is None:
             return
+        old = (db.get_setting(self.prefs, "shared_folder", ""), db.get_setting(self.prefs, "user_name", ""))
+        if (result["shared_folder"], result["user_name"]) != old:
+            db.set_setting(self.prefs, "shared_folder", result["shared_folder"])
+            db.set_setting(self.prefs, "user_name", result["user_name"])
+            for item in [i for i in self.lists if i["shared"]]:
+                if item["id"] != self.list_id:
+                    self.forget_list(item["id"])
+            error = self.connect_team()
+            self.load_lists()
+            if not any(i["id"] == self.list_id for i in self.lists):  # открытый общий список пропал
+                self.forget_list(self.list_id)
+                self.list_id = None
+                self.switch_list(db.PERSONAL)
+            if error:
+                messagebox.showerror(APP_NAME, error, parent=self.root)
+            elif self.team:
+                messagebox.showinfo(APP_NAME, "Общая папка подключена. Общие списки — в меню "
+                                    "списков (кнопка с названием списка вверху).", parent=self.root)
         db.set_setting(self.prefs, "start_mode", result["start_mode"])
         db.set_setting(self.prefs, "update_auto", "1" if result["update_auto"] else "0")
         if result["card_fields"] != self.card_fields:
@@ -2884,7 +2984,7 @@ class TodoApp:
             text += f"\n\nЗамечания:\n{shown}{more}"
         if not messagebox.askyesno("Импорт задач", text, parent=self.root):
             return
-        db.import_tasks(self.conn, tasks)
+        db.import_tasks(self.conn, tasks, created_by=self.created_by())
         self.filter.set("Все")
         self.refresh()
         messagebox.showinfo(APP_NAME, f"Добавлено задач: {len(tasks)}.", parent=self.root)
@@ -3136,7 +3236,7 @@ class TodoApp:
         title = self.entry_text()
         if not title:
             return
-        task_id = db.add_task(self.conn, title)
+        task_id = db.add_task(self.conn, title, created_by=self.created_by())
         self.entry.delete(0, "end")
         self.show_placeholder()
         if FILTERS[self.filter.get()] not in (None, False):
@@ -3354,12 +3454,26 @@ class TodoApp:
         self.update_side()
         # Напоминания — по задачам из всех списков, не только из открытого
         lines = []
+        reminded = set(db.get_json_setting(self.prefs, "shared_reminded", []))
         for item in self.lists:
-            conn = self.list_conn(item["id"])
             where = "" if item["id"] == self.list_id else f"  (список «{item['name']}»)"
-            for task_id, title, due_at in db.due_reminders(conn):
-                db.mark_reminded(conn, task_id)
-                lines.append(f"• {title} — срок {format_due(due_at)}{where}")
+            try:
+                conn = self.list_conn(item["id"])
+                if not item["shared"]:
+                    for task_id, title, due_at in db.due_reminders(conn):
+                        db.mark_reminded(conn, task_id)
+                        lines.append(f"• {title} — срок {format_due(due_at)}{where}")
+                    continue
+                # Общий список: напоминаем о задачах, которые создал этот участник;
+                # о чём уже напомнили — помним у себя (флаг в общем файле один на всех)
+                for key, _, title, due_at in db.shared_reminders(conn, self.user_name()):
+                    if f"{item['id']}|{key}" not in reminded:
+                        reminded.add(f"{item['id']}|{key}")
+                        lines.append(f"• {title} — срок {format_due(due_at)}{where}")
+            except (sqlite3.Error, StopIteration):
+                continue  # общая папка сейчас недоступна — напомним, когда появится связь
+        if lines:
+            db.set_json_setting(self.prefs, "shared_reminded", sorted(reminded)[-500:])
         if lines:
             # Показываем окно поверх всех остальных, даже если оно было свёрнуто.
             self.root.deiconify()
@@ -3371,27 +3485,88 @@ class TodoApp:
         self.root.after(CHECK_EVERY_MS, self.check_reminders)
 
     # --- списки задач ---
+    # Личные списки хранятся у себя (self.prefs + папка lists), общие — в сетевой папке (self.team).
+
+    def connect_team(self):
+        """Подключает общую папку из настроек. Возвращает текст ошибки или None."""
+        if self.team:
+            self.team.close()
+        self.team, self.team_error = None, None
+        folder = db.get_setting(self.prefs, "shared_folder", "")
+        if not folder:
+            return None
+        try:
+            self.team = team.Team(folder)
+            self.team.touch_member(self.user_name())
+            self.team_version = self.team.version()
+            in_background(self.root, self.team.backup_daily, lambda result, error: None)
+        except (team.TeamError, sqlite3.Error, OSError) as error:
+            self.team, self.team_error = None, str(error)
+        return self.team_error
+
+    def user_name(self):
+        return db.get_setting(self.prefs, "user_name", "") or os.environ.get("USERNAME", "Я")
+
+    def load_lists(self):
+        """Все списки: сначала личные, потом общие."""
+        lists = [dict(item, shared=False) for item in db.list_registry(self.prefs)]
+        if self.team:
+            try:
+                lists += self.team.lists()
+            except sqlite3.Error as error:
+                self.team, self.team_error = None, str(error)
+        self.lists = lists
 
     def list_conn(self, list_id):
         """Соединение с файлом списка (открывается один раз и потом переиспользуется)."""
         if list_id not in self.list_conns:
             item = next(i for i in self.lists if i["id"] == list_id)
-            self.list_conns[list_id] = db.connect(db.list_path(item))
+            if item["shared"]:
+                self.list_conns[list_id] = db.connect(self.team.path(item), timeout=team.TIMEOUT)
+            else:
+                self.list_conns[list_id] = db.connect(db.list_path(item))
         return self.list_conns[list_id]
+
+    def forget_list(self, list_id):
+        conn = self.list_conns.pop(list_id, None)
+        if conn is not None and conn is not self.prefs:
+            conn.close()
 
     def current_list(self):
         return next(i for i in self.lists if i["id"] == self.list_id)
 
+    def created_by(self):
+        """Кто создаёт задачу: в общем списке — имя участника, в личном — никто."""
+        return self.user_name() if self.current_list()["shared"] else None
+
     def show_list_name(self):
-        name = self.current_list()["name"]
-        self.list_button.configure(text=f"{name}  ▾")
-        self.root.title(f"{APP_NAME} — {name}")
+        item = self.current_list()
+        mark = "  · общий" if item["shared"] else ""
+        self.list_button.configure(text=f"{item['name']}{mark}  ▾")
+        self.root.title(f"{APP_NAME} — {item['name']}{' (общий)' if item['shared'] else ''}")
 
     def show_lists_menu(self):
+        if self.team:  # вдруг кто-то добавил общий список
+            self.load_lists()
         menu = PopupMenu()
+        menu.command("Мои списки", None, enabled=False)
         for item in self.lists:
-            menu.command(item["name"], lambda i=item["id"]: self.switch_list(i),
-                         checked=item["id"] == self.list_id)
+            if not item["shared"]:
+                menu.command(item["name"], lambda i=item["id"]: self.switch_list(i),
+                             checked=item["id"] == self.list_id)
+        menu.separator()
+        menu.command("Общие списки", None, enabled=False)
+        if self.team:
+            shared = [i for i in self.lists if i["shared"]]
+            for item in shared:
+                menu.command(item["name"], lambda i=item["id"]: self.switch_list(i),
+                             checked=item["id"] == self.list_id)
+            if not shared:
+                menu.command("пока нет — создайте первый", None, enabled=False)
+        elif self.team_error:
+            menu.command("Общая папка недоступна…", self.show_settings)
+        else:
+            menu.command("Подключить общие списки…", self.show_settings)
         personal = self.list_id == db.PERSONAL
         (menu.separator()
              .command("Новый список…", self.new_list)
@@ -3403,32 +3578,56 @@ class TodoApp:
     def switch_list(self, list_id):
         if list_id == self.list_id:
             return
-        self.finish_editing()  # спросит, сохранить ли незаконченную правку задачи
-        self.clear_selection()
-        self.list_id = list_id
-        self.conn = self.list_conn(list_id)
+        if self.list_id is not None:
+            self.finish_editing()  # спросит, сохранить ли незаконченную правку задачи
+            self.clear_selection()
+        try:
+            conn = self.list_conn(list_id)
+            db.list_statuses(conn)  # проверка, что файл читается
+        except sqlite3.Error:
+            self.forget_list(list_id)
+            messagebox.showerror(APP_NAME, "Не удалось открыть общий список — общая папка "
+                                 "сейчас недоступна. Проверьте сеть (VPN) и попробуйте ещё раз.",
+                                 parent=self.root)
+            return
+        self.list_id, self.conn = list_id, conn
+        self.watch = None
         db.set_setting(self.prefs, "current_list", list_id)
         self.show_list_name()
         self.refresh()
 
     def new_list(self):
-        name = NameDialog(self.root, "Новый список", "Новый список", "",
-                          "Например: «Команда», «Дом», «Проект Альфа».", "Создать").show()
-        if not name:
+        result = NewListDialog(self.root, can_share=self.team is not None).show()
+        if not result:
             return
-        file = db.new_list_file()
-        item = {"id": file.removesuffix(".db"), "name": name, "file": file}
-        self.lists.append(item)
-        db.save_registry(self.prefs, self.lists)
+        name, shared = result
+        if shared:
+            try:
+                item = self.team.add_list(name, self.user_name())
+            except (sqlite3.Error, OSError):
+                messagebox.showerror(APP_NAME, "Не удалось создать общий список — общая папка "
+                                     "недоступна.", parent=self.root)
+                return
+        else:
+            file = db.new_list_file()
+            item = {"id": file.removesuffix(".db"), "name": name, "file": file}
+            db.save_registry(self.prefs, db.list_registry(self.prefs) + [item])
+        self.load_lists()
         self.switch_list(item["id"])
 
     def rename_list(self):
         item = self.current_list()
         name = NameDialog(self.root, "Переименовать список", "Название списка", item["name"]).show()
-        if name and name != item["name"]:
-            item["name"] = name
-            db.save_registry(self.prefs, self.lists)
-            self.show_list_name()
+        if not name or name == item["name"]:
+            return
+        if item["shared"]:
+            self.team.rename_list(item["id"], name)
+        else:
+            registry = db.list_registry(self.prefs)
+            next(i for i in registry if i["id"] == item["id"])["name"] = name
+            db.save_registry(self.prefs, registry)
+        self.load_lists()
+        self.show_list_name()
 
     def delete_list(self):
         item = self.current_list()
@@ -3436,22 +3635,26 @@ class TodoApp:
             return
         count = db.count_tasks(self.conn)
         what = f"вместе с задачами ({count} шт.)" if count else "(задач в нём нет)"
+        everyone = "\n\nЭто общий список — он пропадёт у всех участников." if item["shared"] else ""
         if not messagebox.askyesno(
             "Удалить список?",
-            f"Удалить список «{item['name']}» {what}?\n\nВернуть его будет нельзя. Если задачи "
-            "нужны — сначала перенесите их в другой список (правая кнопка мыши → «Переместить "
-            "в список») или выгрузите в CSV.",
+            f"Удалить список «{item['name']}» {what}?{everyone}\n\nЕсли задачи нужны — сначала "
+            "перенесите их в другой список (правая кнопка мыши → «Переместить в список») или "
+            "выгрузите в CSV.",
             icon="warning", default="no", parent=self.root,
         ):
             return
         self.switch_list(db.PERSONAL)
-        self.list_conns.pop(item["id"]).close()
-        self.lists.remove(item)
-        db.save_registry(self.prefs, self.lists)
-        try:
-            db.list_path(item).unlink()
-        except OSError:
-            pass  # файл занят или уже удалён — список всё равно убран из программы
+        self.forget_list(item["id"])
+        if item["shared"]:
+            self.team.delete_list(item)
+        else:
+            db.save_registry(self.prefs, [i for i in db.list_registry(self.prefs) if i["id"] != item["id"]])
+            try:
+                db.list_path(item).unlink()
+            except OSError:
+                pass  # файл занят или уже удалён — список всё равно убран из программы
+        self.load_lists()
 
     def move_to_list(self, task_id, list_id):
         self.finish_editing()
@@ -3460,6 +3663,49 @@ class TodoApp:
         self.clear_selection()
         self.refresh()
         self.side.totoro.show(f"Задача перенесена в список «{target['name']}».", mood="done")
+
+    def on_error(self, kind, error, trace):
+        """Ошибка во время работы. Если пропала связь с общей папкой — объясняем и открываем
+        личный список, чтобы можно было продолжать работать."""
+        if isinstance(error, sqlite3.Error) and self.list_id and self.current_list()["shared"]:
+            name = self.current_list()["name"]
+            self.forget_list(self.list_id)
+            self.list_id = None
+            self.editing = None
+            self.switch_list(db.PERSONAL)
+            messagebox.showerror(
+                APP_NAME, f"Пропала связь с общим списком «{name}» — общая папка недоступна "
+                "(сеть, VPN) или файл занят слишком долго.\n\nОткрыт личный список. Последнее "
+                "действие в общем списке могло не сохраниться — проверьте его, когда связь "
+                "появится.", parent=self.root)
+            return
+        tk.Tk.report_callback_exception(self.root, kind, error, trace)
+
+    def watch_changes(self):
+        """Раз в несколько секунд: не изменил ли кто-то открытый общий список или перечень
+        общих списков. Перерисовываем, только если что-то изменилось."""
+        try:
+            if self.team:
+                version = self.team.version()
+                if version != self.team_version:
+                    self.team_version = version
+                    self.load_lists()
+                    if not any(i["id"] == self.list_id for i in self.lists):
+                        self.forget_list(self.list_id)
+                        self.list_id = None
+                        self.switch_list(db.PERSONAL)
+                        self.side.totoro.show("Общий список, который был открыт, удалил другой "
+                                              "участник.", mood="alert")
+                    else:
+                        self.show_list_name()
+            if self.current_list()["shared"]:
+                stamp = self.conn.execute("PRAGMA data_version").fetchone()[0]
+                if self.watch is not None and stamp != self.watch and not self.board.drag:
+                    self.refresh(select_id=self.current_id())
+                self.watch = stamp
+        except sqlite3.Error:
+            pass  # связь пропала — попробуем в следующий раз
+        self.root.after(WATCH_EVERY_MS, self.watch_changes)
 
     # --- обновления ---
 

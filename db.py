@@ -41,6 +41,7 @@ NEW_COLUMNS = [
     ("body", "TEXT NOT NULL DEFAULT ''"),          # описание задачи (title — её заголовок)
     ("status_id", "INTEGER"),                       # колонка доски (таблица statuses)
     ("done_at", "TEXT"),                            # когда задачу выполнили (для «сегодня выполнено»)
+    ("created_by", "TEXT"),                         # кто создал (в общих списках — имя участника)
 ]
 
 # Статусы по умолчанию: (название, цвет, «задачи здесь выполнены»)
@@ -51,8 +52,9 @@ DEFAULT_STATUSES = [
 ]
 
 
-def connect(path=None):
-    conn = sqlite3.connect(path or default_path())
+def connect(path=None, timeout=5):
+    """timeout — сколько секунд ждать, если файл сейчас пишет кто-то другой (общие списки)."""
+    conn = sqlite3.connect(path or default_path(), timeout=timeout)
     # Таблица tasks — это как лист Excel: каждая строка — одна задача.
     conn.execute(
         """
@@ -240,16 +242,16 @@ def get_task(conn, task_id):
     ).fetchone()
 
 
-def add_task(conn, title, status_id=None):
+def add_task(conn, title, status_id=None, created_by=None):
     """Новая задача попадает в первую колонку доски (обычно «Новая»)."""
     if status_id is None:
         status_id = list_statuses(conn)[0][0]
     # «with conn» сохраняет изменения в файл (commit) сразу после запроса.
     with conn:
         cur = conn.execute(
-            "INSERT INTO tasks (title, status_id, done) "
-            "VALUES (?, ?, (SELECT is_done FROM statuses WHERE id = ?))",
-            (title, status_id, status_id),
+            "INSERT INTO tasks (title, status_id, done, created_by) "
+            "VALUES (?, ?, (SELECT is_done FROM statuses WHERE id = ?), ?)",
+            (title, status_id, status_id, created_by),
         )
     return cur.lastrowid
 
@@ -340,7 +342,7 @@ def add_examples(conn, examples):
         )
 
 
-def import_tasks(conn, tasks):
+def import_tasks(conn, tasks, created_by=None):
     """Добавляет задачи из файла (см. prepare_import в todoro.py). Номера им даются новые.
     created_at=None — создана сейчас."""
     is_done = {s[0]: s[3] for s in list_statuses(conn)}
@@ -348,12 +350,12 @@ def import_tasks(conn, tasks):
         conn.executemany(
             """
             INSERT INTO tasks (title, body, status_id, done, due_at, remind_before, reminded,
-                               urgent, important, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
+                               urgent, important, created_at, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?)
             """,
             [(t["title"], t["body"], t["status_id"], is_done[t["status_id"]], t["due_at"],
               t["remind_before"], int(t["reminded"]), int(t["urgent"]), int(t["important"]),
-              t["created_at"]) for t in tasks],
+              t["created_at"], created_by) for t in tasks],
         )
 
 
@@ -388,11 +390,12 @@ def move_task_to(src, task_id, dst):
     (выполненную задачу — в «выполненную» колонку). Возвращает id задачи в новом списке."""
     row = src.execute(
         """SELECT t.title, t.body, t.done, t.created_at, t.due_at, t.remind_before, t.reminded,
-                  t.urgent, t.important, t.done_at, s.name
+                  t.urgent, t.important, t.done_at, s.name, t.created_by
            FROM tasks t LEFT JOIN statuses s ON s.id = t.status_id WHERE t.id = ?""",
         (task_id,),
     ).fetchone()
-    title, body, done, created, due_at, remind_before, reminded, urgent, important, done_at, status = row
+    (title, body, done, created, due_at, remind_before, reminded, urgent, important, done_at, status,
+     created_by) = row
     same = [sid for sid, name, _, is_done in list_statuses(dst)
             if name.strip().lower() == (status or "").strip().lower() and is_done == done]
     status_id = same[0] if same else first_status(dst, done)
@@ -402,10 +405,10 @@ def move_task_to(src, task_id, dst):
     with dst:
         new_id = dst.execute(
             """INSERT INTO tasks (title, body, done, created_at, due_at, remind_before, reminded,
-                                  urgent, important, done_at, status_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  urgent, important, done_at, status_id, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (title, body, is_done, created, due_at, remind_before, reminded, urgent, important,
-             done_at if is_done else None, status_id),
+             done_at if is_done else None, status_id, created_by),
         ).lastrowid
     delete_task(src, task_id)
     return new_id
@@ -434,6 +437,24 @@ def due_reminders(conn, now=None):
     ).fetchall()
     return [
         (task_id, title, due_at)
+        for task_id, title, due_at, remind_before in rows
+        if datetime.fromisoformat(due_at) - timedelta(minutes=remind_before) <= now
+    ]
+
+
+def shared_reminders(conn, user, now=None):
+    """Напоминания в общем списке: о невыполненных задачах, которые создал user.
+    Флаг reminded в общем файле не трогаем (он один на всех) — кому уже напомнили, программа
+    помнит у себя. Возвращает [(ключ, id, title, due_at), ...]; ключ меняется вместе со сроком."""
+    now = now or datetime.now()
+    rows = conn.execute(
+        """
+        SELECT id, title, due_at, remind_before FROM tasks
+        WHERE done = 0 AND due_at IS NOT NULL AND remind_before IS NOT NULL AND created_by = ?
+        """, (user,),
+    ).fetchall()
+    return [
+        (f"{task_id}|{due_at}|{remind_before}", task_id, title, due_at)
         for task_id, title, due_at, remind_before in rows
         if datetime.fromisoformat(due_at) - timedelta(minutes=remind_before) <= now
     ]
