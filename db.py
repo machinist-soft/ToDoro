@@ -8,6 +8,9 @@ from pathlib import Path
 # программы (Program Files) писать нельзя. Если файла нет, SQLite создаст его сам.
 DATA_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "ToDoro"
 DB_PATH = DATA_DIR / "todoro.db"
+# Остальные списки задач (кроме личного) — каждый в своём файле в этой папке
+LISTS_DIR = DATA_DIR / "lists"
+PERSONAL = "personal"  # id личного списка; его задачи — в основном файле todoro.db
 # Раньше база лежала рядом с программой (сначала под именем todo.db)
 OLD_DB_PATHS = [Path(__file__).with_name("todoro.db"), Path(__file__).with_name("todo.db")]
 
@@ -352,6 +355,64 @@ def import_tasks(conn, tasks):
               t["remind_before"], int(t["reminded"]), int(t["urgent"]), int(t["important"]),
               t["created_at"]) for t in tasks],
         )
+
+
+# ---------- списки задач ----------
+# Реестр списков хранится в настройках основного файла: [{"id", "name", "file"}, ...].
+# Личный список — это сам основной файл (file = None), остальные — файлы в LISTS_DIR.
+
+def list_registry(prefs):
+    lists = get_json_setting(prefs, "lists", [])
+    if not any(item["id"] == PERSONAL for item in lists):
+        lists.insert(0, {"id": PERSONAL, "name": "Личный", "file": None})
+    return lists
+
+
+def save_registry(prefs, lists):
+    set_json_setting(prefs, "lists", lists)
+
+
+def list_path(item):
+    return DB_PATH if item["file"] is None else LISTS_DIR / item["file"]
+
+
+def new_list_file():
+    """Имя файла для нового списка (уникальное)."""
+    import uuid
+    LISTS_DIR.mkdir(parents=True, exist_ok=True)
+    return f"{uuid.uuid4().hex[:12]}.db"
+
+
+def move_task_to(src, task_id, dst):
+    """Переносит задачу в другой список: в колонку с тем же названием, иначе в первую подходящую
+    (выполненную задачу — в «выполненную» колонку). Возвращает id задачи в новом списке."""
+    row = src.execute(
+        """SELECT t.title, t.body, t.done, t.created_at, t.due_at, t.remind_before, t.reminded,
+                  t.urgent, t.important, t.done_at, s.name
+           FROM tasks t LEFT JOIN statuses s ON s.id = t.status_id WHERE t.id = ?""",
+        (task_id,),
+    ).fetchone()
+    title, body, done, created, due_at, remind_before, reminded, urgent, important, done_at, status = row
+    same = [sid for sid, name, _, is_done in list_statuses(dst)
+            if name.strip().lower() == (status or "").strip().lower() and is_done == done]
+    status_id = same[0] if same else first_status(dst, done)
+    if status_id is None:  # нет колонки нужного вида — первая любая
+        status_id = list_statuses(dst)[0][0]
+    is_done = dst.execute("SELECT is_done FROM statuses WHERE id = ?", (status_id,)).fetchone()[0]
+    with dst:
+        new_id = dst.execute(
+            """INSERT INTO tasks (title, body, done, created_at, due_at, remind_before, reminded,
+                                  urgent, important, done_at, status_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (title, body, is_done, created, due_at, remind_before, reminded, urgent, important,
+             done_at if is_done else None, status_id),
+        ).lastrowid
+    delete_task(src, task_id)
+    return new_id
+
+
+def count_tasks(conn):
+    return conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
 
 
 def delete_examples(conn):

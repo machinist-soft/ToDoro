@@ -1607,6 +1607,29 @@ class SettingsDialog(ModernDialog):
         self.destroy()
 
 
+class NameDialog(ModernDialog):
+    """Ввод названия (например, списка задач). result — название или None."""
+
+    def __init__(self, parent, title, heading, value="", hint="", ok_text="Сохранить"):
+        super().__init__(parent, title, heading, ok_text)
+        self.entry = ttk.Entry(self.content, font=FONT, width=34)
+        self.entry.insert(0, value)
+        self.entry.pack(fill="x", ipady=2)
+        self.entry.select_range(0, "end")
+        if hint:
+            tk.Label(self.content, text=hint, bg=SURFACE, fg=MUTED, font=FONT_SMALL).pack(
+                anchor="w", pady=(6, 0))
+        self.after(50, self.entry.focus_set)
+
+    def ok(self):
+        name = " ".join(self.entry.get().split())
+        if not name:
+            messagebox.showwarning(self.title(), "Название не может быть пустым.", parent=self)
+            return
+        self.result = name
+        self.destroy()
+
+
 def in_background(root, work, done):
     """Выполняет work() в отдельном потоке (чтобы окно не «зависало»), а done(результат, ошибка)
     вызывает уже в основном потоке — Tk можно трогать только из него."""
@@ -2187,7 +2210,14 @@ class TodoApp:
         self.root = root
         # Окно прячем, пока всё не построено: иначе на секунду мелькает пустое чёрное окно
         root.withdraw()
-        self.conn = db.connect()
+        # self.prefs — основной файл: настройки и личный список; self.conn — текущий список задач
+        self.prefs = db.connect()
+        self.list_conns = {db.PERSONAL: self.prefs}  # открытые списки: id -> соединение
+        self.lists = db.list_registry(self.prefs)
+        self.list_id = db.get_setting(self.prefs, "current_list", db.PERSONAL)
+        if not any(item["id"] == self.list_id for item in self.lists):
+            self.list_id = db.PERSONAL
+        self.conn = self.list_conn(self.list_id)
         self.due = {}         # id строки таблицы -> срок (для подсветки просроченных)
         self.row_status = {}  # id строки таблицы -> название статуса
         self.statuses = {}    # id статуса -> (название, цвет, выполнено ли)
@@ -2207,6 +2237,10 @@ class TodoApp:
         header = ttk.Frame(page)
         header.pack(fill="x", pady=(4, 0))
         ttk.Label(header, text=APP_NAME, style="Title.TLabel").pack(side="left")
+        # Переключатель списков: «Личный ▾», «Команда ▾» …
+        self.list_button = ttk.Button(header, style="TButton", cursor="hand2",
+                                      command=self.show_lists_menu)
+        self.list_button.pack(side="left", padx=(16, 0), pady=(4, 0))
         chips = ttk.Frame(header)
         chips.pack(side="left", padx=(18, 0), pady=(6, 0))
         self.chips = {}
@@ -2234,7 +2268,7 @@ class TodoApp:
         # Вид (список или доска), фильтр и сортировка
         toolbar = ttk.Frame(page)
         toolbar.pack(fill="x", pady=(0, 12))
-        self.view = tk.StringVar(value=db.get_setting(self.conn, "view", "list"))
+        self.view = tk.StringVar(value=db.get_setting(self.prefs, "view", "list"))
         views = ttk.Frame(toolbar, style="Segments.TFrame", padding=3)
         views.pack(side="left")
         for value, text in (("list", "☰  Список"), ("board", "▦  Доска")):
@@ -2255,7 +2289,7 @@ class TodoApp:
         self.sort.pack(side="right")
         self.sort.bind("<<ComboboxSelected>>", lambda e: self.sort_chosen())
         ttk.Label(toolbar, text="Сортировка:", style="Muted.TLabel").pack(side="right", padx=(0, 8))
-        self.card_fields = db.get_json_setting(self.conn, "card_fields", DEFAULT_CARD_FIELDS)
+        self.card_fields = db.get_json_setting(self.prefs, "card_fields", DEFAULT_CARD_FIELDS)
         self.toolbar = toolbar
 
         # Середина окна: таблица или доска, справа — Тоторо, карточка или форма задачи.
@@ -2267,7 +2301,7 @@ class TodoApp:
         self.side = SidePanel(content, on_task_click=self.reveal_task,
                               on_close=self.clear_selection, on_edit=self.edit, on_email=self.email,
                               on_toggle=self.toggle, on_delete=self.delete)
-        self.panel_width = int(db.get_setting(self.conn, "panel_width", PANEL_WIDTH))
+        self.panel_width = int(db.get_setting(self.prefs, "panel_width", PANEL_WIDTH))
         # В узком окне панель прячется, чтобы не теснить таблицу
         content.bind("<Configure>", self.fit_side_panel)
         content.bind("<ButtonRelease-1>", lambda e: self.save_panel_width())
@@ -2300,7 +2334,7 @@ class TodoApp:
         self.tree.column("#0", width=30, minwidth=30, stretch=False)
         # Ширину столбцов можно менять, потянув за разделитель в заголовке; она запоминается
         # («_v2»: ширины из прошлой версии не годятся — там «Задача» растягивалась на всё место)
-        widths = db.get_json_setting(self.conn, "list_columns_v2", {})
+        widths = db.get_json_setting(self.prefs, "list_columns_v2", {})
         self.column_titles = {key: text for key, (text, _, _) in columns.items()}
         for key, (text, width, stretch) in columns.items():
             # Щелчок по заголовку столбца сортирует по нему, повторный — в обратном порядке
@@ -2308,7 +2342,7 @@ class TodoApp:
                               command=lambda k=key: self.sort_by_column(k))
             self.tree.column(key, width=widths.get(key, width), minwidth=40, stretch=stretch)
         # Сортировка по столбцу: [столбец, по убыванию ли] или None — тогда работает список «Сортировка»
-        self.column_sort = db.get_json_setting(self.conn, "list_sort", None)
+        self.column_sort = db.get_json_setting(self.prefs, "list_sort", None)
         self.show_column_sort()
         # Пока ширины не настраивали — «Задача» занимает всё свободное место таблицы
         self.columns_fitted = bool(widths)
@@ -2348,10 +2382,11 @@ class TodoApp:
 
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.show_main_widget()
+        self.show_list_name()
         self.refresh()
         # Всё построено — показываем окно сразу готовым
         root.update_idletasks()
-        if db.get_setting(self.conn, "start_mode", "window") == "maximized":
+        if db.get_setting(self.prefs, "start_mode", "window") == "maximized":
             root.state("zoomed")  # развёрнуто на весь экран; «восстановить» вернёт обычное окно
         else:
             root.deiconify()
@@ -2399,8 +2434,8 @@ class TodoApp:
         self.resizing_column = False
         self.columns_fitted = True
         widths = {key: self.tree.column(key, "width") for key in self.tree["columns"]}
-        if widths != db.get_json_setting(self.conn, "list_columns_v2", {}):
-            db.set_json_setting(self.conn, "list_columns_v2", widths)
+        if widths != db.get_json_setting(self.prefs, "list_columns_v2", {}):
+            db.set_json_setting(self.prefs, "list_columns_v2", widths)
 
     def show_main_widget(self):
         """Слева в разделителе — таблица или доска, справа — панель."""
@@ -2417,15 +2452,15 @@ class TodoApp:
             self.paned.add(self.side, stretch="never", minsize=240, width=self.panel_width)
 
     def show_settings(self):
-        result = SettingsDialog(self.root, db.get_setting(self.conn, "start_mode", "window"),
+        result = SettingsDialog(self.root, db.get_setting(self.prefs, "start_mode", "window"),
                                 self.card_fields, self.auto_update_enabled()).show()
         if result is None:
             return
-        db.set_setting(self.conn, "start_mode", result["start_mode"])
-        db.set_setting(self.conn, "update_auto", "1" if result["update_auto"] else "0")
+        db.set_setting(self.prefs, "start_mode", result["start_mode"])
+        db.set_setting(self.prefs, "update_auto", "1" if result["update_auto"] else "0")
         if result["card_fields"] != self.card_fields:
             self.card_fields = result["card_fields"]
-            db.set_json_setting(self.conn, "card_fields", self.card_fields)
+            db.set_json_setting(self.prefs, "card_fields", self.card_fields)
             self.refresh(select_id=self.current_id())
 
     # Единственное меню «☰ Меню»: сверху действия, потом настройки, внизу справка и сведения
@@ -2477,7 +2512,7 @@ class TodoApp:
             self.root.after(150, lambda: CatbusRun(self.root, task[0]))
 
     def switch_view(self):
-        db.set_setting(self.conn, "view", self.view.get())
+        db.set_setting(self.prefs, "view", self.view.get())
         task_id = self.current_id()
         self.show_main_widget()
         self.refresh(select_id=task_id)
@@ -2548,7 +2583,7 @@ class TodoApp:
         """Ширина правой панели запоминается (её меняют, потянув за разделитель)."""
         if self.in_paned(self.side) and self.side.winfo_width() > 1:
             self.panel_width = self.side.winfo_width()
-            db.set_setting(self.conn, "panel_width", str(self.panel_width))
+            db.set_setting(self.prefs, "panel_width", str(self.panel_width))
 
     # --- изменение задачи в правой панели ---
 
@@ -2803,7 +2838,8 @@ class TodoApp:
         if not rows:
             messagebox.showinfo(APP_NAME, "Задач пока нет — выгружать нечего.", parent=self.root)
             return
-        path = self.ask_save_csv("Экспорт задач", f"{APP_NAME} задачи {date.today():%d.%m.%Y}.csv")
+        name = re.sub(r'[\\/:*?"<>|]', "_", self.current_list()["name"])  # без запрещённых в имени файла знаков
+        path = self.ask_save_csv("Экспорт задач", f"{APP_NAME} {name} {date.today():%d.%m.%Y}.csv")
         if path and self.save_file(path, CSV_COLUMNS, rows):
             messagebox.showinfo(APP_NAME, f"Выгружено задач: {len(rows)}.\n\n{path}\n\n"
                                 "Файл открывается в Excel двойным щелчком.", parent=self.root)
@@ -2840,8 +2876,8 @@ class TodoApp:
             messagebox.showwarning(APP_NAME, "В файле не найдено ни одной задачи с заголовком.",
                                    parent=self.root)
             return
-        text = f"Добавить задач из файла: {len(tasks)}?\n\nУже имеющиеся задачи останутся, " \
-               "новые получат свои номера."
+        text = (f"Добавить задач из файла: {len(tasks)} — в список «{self.current_list()['name']}»?"
+                "\n\nУже имеющиеся задачи останутся, новые получат свои номера.")
         if notes:
             shown = "\n".join("• " + n for n in notes[:8])
             more = f"\n…и ещё замечаний: {len(notes) - 8}" if len(notes) > 8 else ""
@@ -3039,14 +3075,14 @@ class TodoApp:
             self.column_sort = [column, not self.column_sort[1]]
         else:
             self.column_sort = [column, False]
-        db.set_json_setting(self.conn, "list_sort", self.column_sort)
+        db.set_json_setting(self.prefs, "list_sort", self.column_sort)
         self.show_column_sort()
         self.refresh(select_id=self.current_id())
 
     def sort_chosen(self):
         """Выбран вариант в списке «Сортировка» — сортировка по столбцу отменяется."""
         self.column_sort = None
-        db.set_json_setting(self.conn, "list_sort", None)
+        db.set_json_setting(self.prefs, "list_sort", None)
         self.show_column_sort()
         self.refresh(select_id=self.current_id())
 
@@ -3214,6 +3250,11 @@ class TodoApp:
             remind.command(label, lambda m=minutes: self.quick_remind(task_id, m),
                            checked=minutes == remind_before)
 
+        lists = PopupMenu()
+        for item in self.lists:
+            if item["id"] != self.list_id:
+                lists.command(item["name"], lambda i=item["id"]: self.move_to_list(task_id, i))
+
         return (PopupMenu()
                 .command("Изменить…", self.edit, accel="F2")
                 .command("Вернуть в работу" if info["done"] else "Отметить выполненной",
@@ -3228,6 +3269,7 @@ class TodoApp:
                 .separator()
                 .command("Создать письмо…", self.email, accel="Ctrl+E")
                 .command("Копировать текст", lambda: self.copy_text(f"{title}\n\n{body}".strip()))
+                .submenu("Переместить в список", lists, enabled=len(self.lists) > 1)
                 .separator()
                 .command("Удалить", self.delete, accel="Del", danger=True))
 
@@ -3310,11 +3352,15 @@ class TodoApp:
             self.refresh(select_id=self.current_id())
         self.update_buddy()
         self.update_side()
-        due = db.due_reminders(self.conn)
-        if due:
-            for task_id, _, _ in due:
-                db.mark_reminded(self.conn, task_id)
-            lines = [f"• {title} — срок {format_due(due_at)}" for _, title, due_at in due]
+        # Напоминания — по задачам из всех списков, не только из открытого
+        lines = []
+        for item in self.lists:
+            conn = self.list_conn(item["id"])
+            where = "" if item["id"] == self.list_id else f"  (список «{item['name']}»)"
+            for task_id, title, due_at in db.due_reminders(conn):
+                db.mark_reminded(conn, task_id)
+                lines.append(f"• {title} — срок {format_due(due_at)}{where}")
+        if lines:
             # Показываем окно поверх всех остальных, даже если оно было свёрнуто.
             self.root.deiconify()
             self.root.lift()
@@ -3324,21 +3370,112 @@ class TodoApp:
             self.root.attributes("-topmost", False)
         self.root.after(CHECK_EVERY_MS, self.check_reminders)
 
+    # --- списки задач ---
+
+    def list_conn(self, list_id):
+        """Соединение с файлом списка (открывается один раз и потом переиспользуется)."""
+        if list_id not in self.list_conns:
+            item = next(i for i in self.lists if i["id"] == list_id)
+            self.list_conns[list_id] = db.connect(db.list_path(item))
+        return self.list_conns[list_id]
+
+    def current_list(self):
+        return next(i for i in self.lists if i["id"] == self.list_id)
+
+    def show_list_name(self):
+        name = self.current_list()["name"]
+        self.list_button.configure(text=f"{name}  ▾")
+        self.root.title(f"{APP_NAME} — {name}")
+
+    def show_lists_menu(self):
+        menu = PopupMenu()
+        for item in self.lists:
+            menu.command(item["name"], lambda i=item["id"]: self.switch_list(i),
+                         checked=item["id"] == self.list_id)
+        personal = self.list_id == db.PERSONAL
+        (menu.separator()
+             .command("Новый список…", self.new_list)
+             .command("Переименовать список…", self.rename_list)
+             .command("Удалить список…", self.delete_list, enabled=not personal, danger=True))
+        b = self.list_button
+        menu.popup(self.root, b.winfo_rootx(), b.winfo_rooty() + b.winfo_height() + 4)
+
+    def switch_list(self, list_id):
+        if list_id == self.list_id:
+            return
+        self.finish_editing()  # спросит, сохранить ли незаконченную правку задачи
+        self.clear_selection()
+        self.list_id = list_id
+        self.conn = self.list_conn(list_id)
+        db.set_setting(self.prefs, "current_list", list_id)
+        self.show_list_name()
+        self.refresh()
+
+    def new_list(self):
+        name = NameDialog(self.root, "Новый список", "Новый список", "",
+                          "Например: «Команда», «Дом», «Проект Альфа».", "Создать").show()
+        if not name:
+            return
+        file = db.new_list_file()
+        item = {"id": file.removesuffix(".db"), "name": name, "file": file}
+        self.lists.append(item)
+        db.save_registry(self.prefs, self.lists)
+        self.switch_list(item["id"])
+
+    def rename_list(self):
+        item = self.current_list()
+        name = NameDialog(self.root, "Переименовать список", "Название списка", item["name"]).show()
+        if name and name != item["name"]:
+            item["name"] = name
+            db.save_registry(self.prefs, self.lists)
+            self.show_list_name()
+
+    def delete_list(self):
+        item = self.current_list()
+        if item["id"] == db.PERSONAL:
+            return
+        count = db.count_tasks(self.conn)
+        what = f"вместе с задачами ({count} шт.)" if count else "(задач в нём нет)"
+        if not messagebox.askyesno(
+            "Удалить список?",
+            f"Удалить список «{item['name']}» {what}?\n\nВернуть его будет нельзя. Если задачи "
+            "нужны — сначала перенесите их в другой список (правая кнопка мыши → «Переместить "
+            "в список») или выгрузите в CSV.",
+            icon="warning", default="no", parent=self.root,
+        ):
+            return
+        self.switch_list(db.PERSONAL)
+        self.list_conns.pop(item["id"]).close()
+        self.lists.remove(item)
+        db.save_registry(self.prefs, self.lists)
+        try:
+            db.list_path(item).unlink()
+        except OSError:
+            pass  # файл занят или уже удалён — список всё равно убран из программы
+
+    def move_to_list(self, task_id, list_id):
+        self.finish_editing()
+        target = next(i for i in self.lists if i["id"] == list_id)
+        db.move_task_to(self.conn, task_id, self.list_conn(list_id))
+        self.clear_selection()
+        self.refresh()
+        self.side.totoro.show(f"Задача перенесена в список «{target['name']}».", mood="done")
+
     # --- обновления ---
 
     def auto_update_enabled(self):
-        return db.get_setting(self.conn, "update_auto", "1") == "1"
+        return db.get_setting(self.prefs, "update_auto", "1") == "1"
 
     def auto_check_update(self):
         """При запуске, не чаще раза в день. Без интернета — молча пропускаем."""
         today = date.today().isoformat()
-        if not self.auto_update_enabled() or db.get_setting(self.conn, "update_checked") == today:
+        if not self.auto_update_enabled() or db.get_setting(self.prefs, "update_checked") == today:
             return
 
         def done(release, error):
             if error:
                 return
-            db.set_setting(self.conn, "update_checked", today)
+            db.set_setting(self.prefs, "update_checked", today)
             if updater.is_newer(release["version"], APP_VERSION):
                 UpdateDialog(self.root, release, self.close)
         in_background(self.root, updater.fetch_latest, done)
@@ -3354,7 +3491,8 @@ class TodoApp:
         in_background(self.root, updater.fetch_latest, done)
 
     def close(self):
-        self.conn.close()
+        for conn in self.list_conns.values():
+            conn.close()
         self.root.destroy()
 
 
