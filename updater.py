@@ -15,6 +15,7 @@ from pathlib import Path
 REPO = "amfilippov/ToDoro"
 LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
+RELEASES_LIST = f"https://github.com/{REPO}/releases"  # все выпуски со списками изменений
 USER_AGENT = "ToDoro-updater"
 
 

@@ -208,6 +208,8 @@ def setup_style(root):
               background=[("active", BG)])
     style.configure("Card.TCheckbutton", background=SURFACE)
     style.map("Card.TCheckbutton", background=[("active", SURFACE)])
+    style.configure("Card.TRadiobutton", background=SURFACE)
+    style.map("Card.TRadiobutton", background=[("active", SURFACE)])
     style.configure("Icon.TButton", padding=(6, 3), font=FONT)
 
     # Поля ввода и выпадающие списки
@@ -1534,22 +1536,50 @@ CARD_FIELDS = {
 DEFAULT_CARD_FIELDS = ["number", "priority", "body", "due"]
 
 
-class CardFieldsDialog(ModernDialog):
-    """Какие поля показывать на карточках доски (заголовок виден всегда)."""
+# Как открывать окно при запуске: значение настройки -> подпись
+START_MODES = {"window": "Обычным окном", "maximized": "Развёрнутым на весь экран"}
 
-    def __init__(self, parent, chosen):
-        super().__init__(parent, "Карточки на доске", "Что показывать на карточках")
-        tk.Label(self.content, text="Заголовок задачи виден всегда.", bg=SURFACE, fg=MUTED,
-                 font=FONT_SMALL).pack(anchor="w", pady=(0, 10))
-        self.vars = {}
-        for key, label in CARD_FIELDS.items():
-            var = tk.BooleanVar(value=key in chosen)
-            ttk.Checkbutton(self.content, text=label, variable=var, style="Card.TCheckbutton").pack(
-                anchor="w", pady=2)
-            self.vars[key] = var
+
+class SettingsDialog(ModernDialog):
+    """Настройки: запуск программы, поля карточек на доске, обновления.
+    result — dict(start_mode, card_fields, update_auto) или None (отмена)."""
+
+    def __init__(self, parent, start_mode, card_fields, update_auto):
+        super().__init__(parent, "Настройки", "Настройки")
+
+        self.section("Запуск программы", "Как открывать окно ToDoro.")
+        self.start_mode = tk.StringVar(value=start_mode)
+        for value, label in START_MODES.items():
+            ttk.Radiobutton(self.content, text=label, value=value, variable=self.start_mode,
+                            style="Card.TRadiobutton").pack(anchor="w", pady=2)
+
+        self.section("Карточки на доске", "Что показывать на карточках. Заголовок виден всегда.")
+        grid = tk.Frame(self.content, bg=SURFACE)
+        grid.pack(anchor="w")
+        self.fields = {}
+        for i, (key, label) in enumerate(CARD_FIELDS.items()):
+            var = tk.BooleanVar(value=key in card_fields)
+            ttk.Checkbutton(grid, text=label, variable=var, style="Card.TCheckbutton").grid(
+                row=i // 2, column=i % 2, sticky="w", padx=(0, 28), pady=2)
+            self.fields[key] = var
+
+        self.section("Обновления", f"Установлена версия {APP_VERSION}. Проверить вручную: "
+                     "? Справка → Проверить обновления.")
+        self.update_auto = tk.BooleanVar(value=update_auto)
+        ttk.Checkbutton(self.content, text="Проверять обновления автоматически (раз в день)",
+                        variable=self.update_auto, style="Card.TCheckbutton").pack(anchor="w", pady=2)
+
+    def section(self, title, hint):
+        first = not self.content.winfo_children()
+        tk.Label(self.content, text=title, bg=SURFACE, fg=TEXT, font=FONT_BOLD).pack(
+            anchor="w", pady=(0 if first else 16, 0))
+        tk.Label(self.content, text=hint, bg=SURFACE, fg=MUTED, font=FONT_SMALL, wraplength=420,
+                 justify="left").pack(anchor="w", pady=(0, 6))
 
     def ok(self):
-        self.result = [key for key, var in self.vars.items() if var.get()]
+        self.result = dict(start_mode=self.start_mode.get(),
+                           card_fields=[key for key, var in self.fields.items() if var.get()],
+                           update_auto=self.update_auto.get())
         self.destroy()
 
 
@@ -2133,6 +2163,8 @@ class TodoApp:
         load_images()
         center_on_screen(root, 1290, 720)
         root.minsize(820, 480)
+        if db.get_setting(self.conn, "start_mode", "window") == "maximized":
+            root.state("zoomed")  # развёрнуто на весь экран; «восстановить» вернёт обычное окно
 
         page = ttk.Frame(root, padding=(24, 14, 24, 20))
         page.pack(fill="both", expand=True)
@@ -2150,6 +2182,8 @@ class TodoApp:
             chip.pack(side="left", padx=(0, 6))
             self.chips[key] = chip
         menu_button(header, "?  Справка", self.build_info_menu).pack(side="right")
+        ttk.Button(header, text="⚙  Настройки", style="TButton", cursor="hand2",
+                   command=self.show_settings).pack(side="right", padx=(0, 8))
         menu_button(header, "☰  Меню", self.build_main_menu).pack(side="right", padx=(0, 8))
 
         # Поле ввода и кнопка «Добавить»
@@ -2188,10 +2222,7 @@ class TodoApp:
         self.sort.pack(side="right")
         self.sort.bind("<<ComboboxSelected>>", lambda e: self.sort_chosen())
         ttk.Label(toolbar, text="Сортировка:", style="Muted.TLabel").pack(side="right", padx=(0, 8))
-        # Настройка карточек — только на доске
         self.card_fields = db.get_json_setting(self.conn, "card_fields", DEFAULT_CARD_FIELDS)
-        self.fields_button = ttk.Button(toolbar, text="⚙  Карточки", style="Soft.TButton",
-                                        command=self.choose_card_fields, cursor="hand2")
         self.toolbar = toolbar
 
         # Середина окна: таблица или доска, справа — Тоторо, карточка или форма задачи.
@@ -2345,40 +2376,42 @@ class TodoApp:
                 self.paned.add(main, stretch="always", minsize=420)
         if not self.in_paned(self.side):
             self.paned.add(self.side, stretch="never", minsize=240, width=self.panel_width)
-        # Кнопка «⚙ Карточки» нужна только на доске
-        if self.view.get() == "board":
-            self.fields_button.pack(side="left", padx=(12, 0))
-        else:
-            self.fields_button.pack_forget()
 
-    def choose_card_fields(self):
-        chosen = CardFieldsDialog(self.root, self.card_fields).show()
-        if chosen is not None:
-            self.card_fields = chosen
-            db.set_json_setting(self.conn, "card_fields", chosen)
+    def show_settings(self):
+        result = SettingsDialog(self.root, db.get_setting(self.conn, "start_mode", "window"),
+                                self.card_fields, self.auto_update_enabled()).show()
+        if result is None:
+            return
+        db.set_setting(self.conn, "start_mode", result["start_mode"])
+        db.set_setting(self.conn, "update_auto", "1" if result["update_auto"] else "0")
+        if result["card_fields"] != self.card_fields:
+            self.card_fields = result["card_fields"]
+            db.set_json_setting(self.conn, "card_fields", self.card_fields)
             self.refresh(select_id=self.current_id())
 
+    # Меню «☰ Меню» — действия с задачами и доской; «? Справка» — справка и сведения о программе
     def build_main_menu(self):
+        examples = (PopupMenu()
+                    .command("Добавить примеры задач", self.add_examples)
+                    .command("Удалить примеры задач", self.delete_examples))
         return (PopupMenu()
                 .command("Добавить колонку на доску…", self.add_lane)
-                .command("Поля карточек на доске…", self.choose_card_fields)
                 .separator()
                 .command("Экспорт задач в CSV…", self.export_csv)
                 .command("Импорт задач из CSV…", self.import_csv)
                 .command("Шаблон для импорта…", self.save_template)
                 .separator()
-                .command("Добавить примеры задач", self.add_examples)
-                .command("Удалить примеры задач", self.delete_examples))
+                .submenu("Примеры задач", examples)
+                .separator()
+                .command("Настройки…", self.show_settings))
 
     def build_info_menu(self):
         return (PopupMenu()
                 .command("Справка", self.show_help, accel="F1")
-                .command("Лицензия (MIT)…", self.show_license)
-                .separator()
+                .command("Что нового…", lambda: webbrowser.open(updater.RELEASES_LIST))
                 .command("Проверить обновления…", self.check_update_now)
-                .command("Проверять обновления автоматически", self.toggle_auto_update,
-                         checked=self.auto_update_enabled())
                 .separator()
+                .command("Лицензия (MIT)…", self.show_license)
                 .command(f"О программе {APP_NAME}…", self.show_about))
 
     def celebrate(self, task_id):
@@ -3210,9 +3243,6 @@ class TodoApp:
 
     def auto_update_enabled(self):
         return db.get_setting(self.conn, "update_auto", "1") == "1"
-
-    def toggle_auto_update(self):
-        db.set_setting(self.conn, "update_auto", "0" if self.auto_update_enabled() else "1")
 
     def auto_check_update(self):
         """При запуске, не чаще раза в день. Без интернета — молча пропускаем."""
