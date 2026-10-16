@@ -70,6 +70,14 @@ python todoro.py
 Задачи хранятся в файле `%APPDATA%\ToDoro\todoro.db`.
 Tasks are stored in `%APPDATA%\ToDoro\todoro.db`.
 
+## Нашли ошибку? / Found a bug?
+
+[Сообщите об ошибке](https://github.com/amfilippov/ToDoro/issues/new?template=bug_report.yml) или
+[предложите идею](https://github.com/amfilippov/ToDoro/issues/new?template=feature_request.yml) —
+прямо из программы: **☰ Меню → Обратная связь**.
+*[Report a bug](https://github.com/amfilippov/ToDoro/issues/new?template=bug_report.yml) or
+[suggest a feature](https://github.com/amfilippov/ToDoro/issues/new?template=feature_request.yml).*
+
 ## Что нового / Release notes
 
 См. [RELEASE_NOTES.md](RELEASE_NOTES.md). Установщик — в разделе [Releases](https://github.com/amfilippov/ToDoro/releases).

@@ -1,0 +1,49 @@
+name: Сообщить об ошибке
+description: Что-то работает не так, как должно
+title: "Ошибка: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо, что помогаете сделать ToDoro лучше!
+        Пожалуйста, не вставляйте сюда личные данные — эта страница видна всем.
+  - type: textarea
+    id: what
+    attributes:
+      label: Что случилось?
+      description: Опишите ошибку своими словами.
+      placeholder: Например, «при перетаскивании карточки на доске она пропадает».
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как повторить ошибку
+      description: Что вы делали перед тем, как она появилась — по шагам.
+      placeholder: |
+        1. Открыл доску
+        2. Перетащил карточку в колонку «Выполнено»
+        3. ...
+  - type: textarea
+    id: expected
+    attributes:
+      label: Что должно было произойти?
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Скриншоты
+      description: Если можно — приложите снимок экрана (просто перетащите картинку сюда).
+  - type: input
+    id: version
+    attributes:
+      label: Версия ToDoro
+      description: Меню → О программе → О программе ToDoro. Если сообщаете из программы — заполнится само.
+      placeholder: "1.3"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Версия Windows
+      placeholder: Windows 10

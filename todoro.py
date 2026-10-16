@@ -2419,6 +2419,10 @@ class TodoApp:
                 .command("Экспорт задач в CSV…", self.export_csv)
                 .command("Импорт задач из CSV…", self.import_csv)
                 .command("Шаблон для импорта…", self.save_template))
+        feedback = (PopupMenu()
+                    .command("Сообщить об ошибке…", lambda: self.send_feedback("bug"))
+                    .command("Предложить улучшение…", lambda: self.send_feedback("idea"))
+                    .command("Все сообщения на GitHub…", lambda: webbrowser.open(updater.ISSUES_PAGE)))
         about = (PopupMenu()
                  .command("Что нового…", lambda: webbrowser.open(updater.RELEASES_LIST))
                  .command("Лицензия (MIT)…", self.show_license)
@@ -2432,7 +2436,21 @@ class TodoApp:
                 .separator()
                 .command("Справка", self.show_help, accel="F1")
                 .command("Проверить обновления…", self.check_update_now)
+                .submenu("Обратная связь", feedback)
                 .submenu("О программе", about))
+
+    def send_feedback(self, kind):
+        """Открывает на GitHub форму сообщения об ошибке или идеи (раздел Issues)."""
+        if not messagebox.askokcancel(
+            "Обратная связь",
+            "Откроется страница на сайте GitHub с готовой формой — номер версии ToDoro "
+            "и Windows уже подставлены, ваши задачи никуда не отправляются.\n\n"
+            "Чтобы отправить сообщение, нужно войти в GitHub (регистрация бесплатная).\n\n"
+            "Сообщение будет видно всем — не пишите в нём личных данных.",
+            parent=self.root,
+        ):
+            return
+        webbrowser.open(updater.feedback_url(kind, APP_VERSION))
 
     def celebrate(self, task_id):
         """Задача выполнена — Котобус проезжает по низу окна и увозит её."""

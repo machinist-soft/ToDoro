@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -16,6 +17,26 @@ REPO = "amfilippov/ToDoro"
 LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
 RELEASES_LIST = f"https://github.com/{REPO}/releases"  # все выпуски со списками изменений
+ISSUES_PAGE = f"https://github.com/{REPO}/issues"  # сообщения об ошибках и идеи
+
+
+def windows_name():
+    """«Windows 11 (сборка 22631)» — для формы сообщения об ошибке."""
+    try:
+        build = sys.getwindowsversion().build
+    except AttributeError:  # не Windows
+        return ""
+    return f"Windows {11 if build >= 22000 else 10} (сборка {build})"
+
+
+def feedback_url(kind, app_version):
+    """Страница GitHub с формой «Сообщить об ошибке» (kind="bug") или «Предложить улучшение»
+    (kind="idea"); версия программы и Windows подставляются в форму заранее."""
+    template = "bug_report.yml" if kind == "bug" else "feature_request.yml"
+    fields = {"template": template, "version": app_version}
+    if kind == "bug":
+        fields["windows"] = windows_name()
+    return f"https://github.com/{REPO}/issues/new?" + urllib.parse.urlencode(fields)
 USER_AGENT = "ToDoro-updater"
 
 

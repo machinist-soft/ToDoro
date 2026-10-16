@@ -1,0 +1,22 @@
+name: Предложить улучшение
+description: Идея, чего не хватает в ToDoro
+title: "Идея: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: Что хотелось бы?
+      description: Опишите идею своими словами.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Зачем это нужно?
+      description: Какую задачу это решит, в какой ситуации пригодится.
+  - type: input
+    id: version
+    attributes:
+      label: Версия ToDoro
+      placeholder: "1.3"
