@@ -17,6 +17,7 @@ NEW_COLUMNS = [
     ("is_example", "INTEGER NOT NULL DEFAULT 0"),  # 1 — пример, добавленный кнопкой «Примеры»
     ("body", "TEXT NOT NULL DEFAULT ''"),          # описание задачи (title — её заголовок)
     ("status_id", "INTEGER"),                       # колонка доски (таблица statuses)
+    ("done_at", "TEXT"),                            # когда задачу выполнили (для «сегодня выполнено»)
 ]
 
 # Статусы по умолчанию: (название, цвет, «задачи здесь выполнены»)
@@ -112,7 +113,17 @@ def set_status_done(conn, status_id, is_done):
     """Отметить колонку как «выполненную» (или нет) — вместе со всеми её задачами."""
     with conn:
         conn.execute("UPDATE statuses SET is_done = ? WHERE id = ?", (int(is_done), status_id))
-        conn.execute("UPDATE tasks SET done = ? WHERE status_id = ?", (int(is_done), status_id))
+        conn.execute(
+            f"UPDATE tasks SET done = ?, done_at = {DONE_AT_SQL} WHERE status_id = ?",
+            (int(is_done), int(is_done), status_id),
+        )
+
+
+def reorder_statuses(conn, ids):
+    """Новый порядок колонок слева направо."""
+    with conn:
+        conn.executemany("UPDATE statuses SET position = ? WHERE id = ?",
+                         [(pos, sid) for pos, sid in enumerate(ids)])
 
 
 def move_status(conn, status_id, step):
@@ -131,8 +142,8 @@ def delete_status(conn, status_id, move_to):
     """Удаляет колонку; её задачи переносятся в колонку move_to."""
     with conn:
         done = conn.execute("SELECT is_done FROM statuses WHERE id = ?", (move_to,)).fetchone()[0]
-        conn.execute("UPDATE tasks SET status_id = ?, done = ? WHERE status_id = ?",
-                     (move_to, done, status_id))
+        conn.execute(f"UPDATE tasks SET status_id = ?, done = ?, done_at = {DONE_AT_SQL} "
+                     "WHERE status_id = ?", (move_to, done, done, status_id))
         conn.execute("DELETE FROM statuses WHERE id = ?", (status_id,))
 
 
@@ -140,14 +151,30 @@ def count_in_status(conn, status_id):
     return conn.execute("SELECT COUNT(*) FROM tasks WHERE status_id = ?", (status_id,)).fetchone()[0]
 
 
+# Время выполнения: ставится, когда задача становится выполненной, и стирается,
+# когда перестаёт. Если задача уже была выполнена — время не меняется.
+# (В UPDATE слева от «=» новые значения, а в выражениях — старые значения строки.)
+DONE_AT_SQL = ("CASE WHEN ? = 0 THEN NULL WHEN done = 1 THEN done_at "
+               "ELSE strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime') END")
+
+
 def set_task_status(conn, task_id, status_id):
-    """Переносит задачу в колонку; «выполнена» ли она — решает колонка."""
+    """Переносит задачу в колонку; «выполнена» ли она — решает колонка.
+    Возвращает True, если задача только что стала выполненной."""
+    is_done = conn.execute("SELECT is_done FROM statuses WHERE id = ?", (status_id,)).fetchone()[0]
+    was_done = conn.execute("SELECT done FROM tasks WHERE id = ?", (task_id,)).fetchone()[0]
     with conn:
         conn.execute(
-            "UPDATE tasks SET status_id = ?, done = (SELECT is_done FROM statuses WHERE id = ?) "
-            "WHERE id = ?",
-            (status_id, status_id, task_id),
+            f"UPDATE tasks SET status_id = ?, done = ?, done_at = {DONE_AT_SQL} WHERE id = ?",
+            (status_id, is_done, is_done, task_id),
         )
+    return bool(is_done and not was_done)
+
+
+def count_done_today(conn):
+    return conn.execute(
+        "SELECT COUNT(*) FROM tasks WHERE done = 1 AND date(done_at) = date('now', 'localtime')"
+    ).fetchone()[0]
 
 
 # ---------- настройки (например, выбранный вид: список или доска) ----------
@@ -231,6 +258,21 @@ def set_done(conn, task_id, done):
         return False
     set_task_status(conn, task_id, status_id)
     return True
+
+
+def get_json_setting(conn, key, default):
+    """Настройка-список или словарь (хранится как JSON)."""
+    import json
+    value = get_setting(conn, key)
+    try:
+        return json.loads(value) if value else default
+    except ValueError:
+        return default
+
+
+def set_json_setting(conn, key, value):
+    import json
+    set_setting(conn, key, json.dumps(value, ensure_ascii=False))
 
 
 def delete_task(conn, task_id):

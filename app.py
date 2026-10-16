@@ -1,13 +1,14 @@
 """ToDoro — список дел с Тоторо."""
 import calendar
 import ctypes
+import math
 import os
 import re
 import tkinter as tk
 from urllib.parse import quote
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from tkinter import colorchooser, messagebox, simpledialog, ttk
+from tkinter import colorchooser, messagebox, ttk
 
 import db
 from examples import make_examples
@@ -170,15 +171,19 @@ def setup_style(root):
               lightcolor=[("active", "#f3f5f9")], darkcolor=[("active", "#f3f5f9")],
               focuscolor=[("active", "#f3f5f9")])
     style.configure("Danger.TButton", foreground=DANGER)
+    for name, fg, bg, hover in (("AccentSoft", ACCENT, ACCENT_SOFT, "#dbe6ff"),
+                                ("DangerSoft", DANGER, "#fdf0f0", "#fbe1e1")):
+        style.configure(f"{name}.TButton", foreground=fg, background=bg, lightcolor=bg,
+                        darkcolor=bg, bordercolor=bg, focuscolor=bg, padding=(12, 6),
+                        font=FONT_SMALL)
+        style.map(f"{name}.TButton", background=[("active", hover)], lightcolor=[("active", hover)],
+                  darkcolor=[("active", hover)], bordercolor=[("active", hover)],
+                  focuscolor=[("active", hover)])
     style.configure("Soft.TButton", background=BG, lightcolor=BG, darkcolor=BG,
                     bordercolor=BG, focuscolor=BG, padding=(12, 6))
     style.map("Soft.TButton", background=[("pressed", "#dfe4ec"), ("active", "#e9edf4")],
               lightcolor=[("active", "#e9edf4")], darkcolor=[("active", "#e9edf4")],
               bordercolor=[("active", "#e9edf4")], focuscolor=[("active", "#e9edf4")])
-    style.configure("TMenubutton", background=SURFACE, foreground=TEXT, font=FONT_SMALL,
-                    padding=(14, 7), relief="flat", borderwidth=1, arrowcolor=MUTED,
-                    lightcolor=SURFACE, darkcolor=SURFACE)
-    style.map("TMenubutton", background=[("active", "#f3f5f9")])
 
     # Галочки «Срочно» / «Важно»
     style.configure("TCheckbutton", background=BG, foreground=TEXT, font=FONT,
@@ -226,10 +231,11 @@ def setup_style(root):
                     foreground=TEXT, rowheight=36, borderwidth=0, font=FONT)
     style.map("Treeview",
               background=[("selected", ACCENT_SOFT)], foreground=[("selected", TEXT)])
+    # Тонкие линии между заголовками столбцов — видно, где тянуть, чтобы изменить ширину
     style.configure("Treeview.Heading", background=SURFACE, foreground=MUTED,
-                    font=("Segoe UI Semibold", 9), relief="flat", padding=(10, 8),
-                    bordercolor=SURFACE, lightcolor=SURFACE, darkcolor=SURFACE)
-    style.map("Treeview.Heading", background=[("active", SURFACE)])
+                    font=("Segoe UI Semibold", 9), relief="raised", borderwidth=1,
+                    padding=(10, 8), bordercolor=SURFACE, lightcolor=SURFACE, darkcolor="#dfe3ea")
+    style.map("Treeview.Heading", background=[("active", "#f6f8fc")])
 
     # Тонкая полоса прокрутки без стрелок
     style.layout("Vertical.TScrollbar", [
@@ -813,6 +819,9 @@ class TotoroPanel(tk.Frame):
         if stats:
             c.create_text(cx, y2 + 16 + totoro_h + 8, text=stats, font=FONT_SMALL,
                           fill=MUTED, anchor="n", width=width - 2 * pad, justify="center")
+        c.create_text(cx, height - 12, text="ПКМ по задаче — меню · F1 — справка",
+                      font=("Segoe UI", 9), fill=DONE, anchor="s", width=width - 2 * pad,
+                      justify="center")
 
         if task_id is not None:
             c.tag_bind("task", "<Button-1>", lambda e: self.on_task_click(task_id))
@@ -823,7 +832,7 @@ class TotoroPanel(tk.Frame):
 class TaskCard(tk.Frame):
     """Карточка выбранной задачи: заголовок, описание и все поля."""
 
-    def __init__(self, parent, on_close, on_edit, on_email):
+    def __init__(self, parent, on_close, on_edit, on_email, on_toggle, on_delete):
         super().__init__(parent, bg=SURFACE, padx=18, pady=14)
         wrap = PANEL_WIDTH - 40
         # ширину панели можно менять — заголовок переносится по её ширине
@@ -831,6 +840,8 @@ class TaskCard(tk.Frame):
 
         top = tk.Frame(self, bg=SURFACE)
         top.pack(fill="x")
+        self.number = tk.Label(top, bg=BG, fg=MUTED, font=FONT_SMALL, padx=6)
+        self.number.pack(side="left", padx=(0, 8))
         self.priority = tk.Label(top, bg=SURFACE, fg=MUTED, font=FONT_SMALL, compound="left")
         self.priority.pack(side="left")
         close = tk.Label(top, text="✕", bg=SURFACE, fg=MUTED, font=FONT, cursor="hand2")
@@ -847,12 +858,18 @@ class TaskCard(tk.Frame):
 
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x", pady=12)
 
-        # Сроки и даты — внизу карточки
-        buttons = tk.Frame(self, bg=SURFACE)
-        buttons.pack(side="bottom", fill="x", pady=(12, 0))
-        ttk.Button(buttons, text="✎  Изменить", style="Soft.TButton", command=on_edit).pack(side="left")
-        ttk.Button(buttons, text="✉  Письмо", style="Soft.TButton", command=on_email).pack(
-            side="left", padx=(8, 0))
+        # Действия с задачей — внизу карточки, сроки и даты — над ними
+        actions = tk.Frame(self, bg=SURFACE)
+        actions.pack(side="bottom", fill="x", pady=(12, 0))
+        actions.columnconfigure((0, 1), weight=1, uniform="actions")
+        self.toggle_button = ttk.Button(actions, style="AccentSoft.TButton", command=on_toggle)
+        self.toggle_button.grid(row=0, column=0, columnspan=2, sticky="we", pady=(0, 6))
+        ttk.Button(actions, text="✎  Изменить", style="Soft.TButton", command=on_edit).grid(
+            row=1, column=0, sticky="we", padx=(0, 3))
+        ttk.Button(actions, text="✉  Письмо", style="Soft.TButton", command=on_email).grid(
+            row=1, column=1, sticky="we", padx=(3, 0))
+        ttk.Button(actions, text="Удалить задачу", style="DangerSoft.TButton", command=on_delete).grid(
+            row=2, column=0, columnspan=2, sticky="we", pady=(6, 0))
         self.fields = tk.Frame(self, bg=SURFACE)
         self.fields.pack(side="bottom", fill="x")
         self.values = {}
@@ -887,8 +904,10 @@ class TaskCard(tk.Frame):
             self.body_scroll.pack_forget()
         self.body_scroll.set(first, last)
 
-    def show(self, title, body, status, status_color, overdue, done, priority_level_, priority_name,
-             due, remind, created):
+    def show(self, number, title, body, status, status_color, overdue, done, priority_level_,
+             priority_name, due, remind, created):
+        self.number.configure(text=f"#{number}")
+        self.toggle_button.configure(text="↺  Вернуть в работу" if done else "✔  Выполнено")
         self.priority.configure(
             image=IMAGES.get(f"priority_{priority_level_}", ""),
             text=f"  {priority_name}" if priority_name else "Обычный приоритет",
@@ -951,12 +970,12 @@ class SidePanel(tk.Frame):
     """Правая панель: Тоторо, пока задача не выбрана, иначе — карточка задачи
     или форма её изменения."""
 
-    def __init__(self, parent, on_task_click, on_close, on_edit, on_email):
+    def __init__(self, parent, on_task_click, on_close, on_edit, on_email, on_toggle, on_delete):
         super().__init__(parent, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER,
                          highlightcolor=BORDER, width=PANEL_WIDTH)
         self.pack_propagate(False)  # ширину задаёт разделитель, а не длина текста
         self.totoro = TotoroPanel(self, on_task_click)
-        self.card = TaskCard(self, on_close, on_edit, on_email)
+        self.card = TaskCard(self, on_close, on_edit, on_email, on_toggle, on_delete)
         self.editor = None  # ScrollArea с формой, пока задача редактируется
         self.form = None
         self.mode = None
@@ -1000,52 +1019,425 @@ class SidePanel(tk.Frame):
         self.form.focus_title()
 
 
-class CatbusRoad(tk.Canvas):
-    """Дорога в шапке: Котобус едет к остановке «Готово» — чем больше задач выполнено, тем ближе."""
+MENU_BORDER = "#d3d9e3"
+MENU_FONT = ("Segoe UI", 10)
 
-    HEIGHT = 74
 
-    def __init__(self, parent):
-        super().__init__(parent, height=self.HEIGHT, bg=BG, highlightthickness=0)
-        self.fraction = 0.0   # куда надо доехать (0…1)
-        self.position = 0.0   # где Котобус сейчас (для плавной анимации)
-        self.animating = False
-        self.bind("<Configure>", lambda e: self.draw())
+class PopupMenu:
+    """Своё всплывающее меню в стиле приложения (вместо системного меню Windows).
 
-    def set_progress(self, done, total):
-        self.fraction = done / total if total else 0.0
-        if not self.animating:
-            self.animating = True
-            self.after(16, self.animate)
+    Пункты: command(...), separator(), submenu(...). Показать: popup(x, y).
+    Клавиши: ↑ ↓ — выбор, Enter — выполнить, → / ← — открыть / закрыть подменю, Esc — закрыть.
+    """
 
-    def animate(self):
-        step = self.fraction - self.position
-        if abs(step) < 0.003:
-            self.position = self.fraction
-            self.animating = False
-        else:
-            self.position += step * 0.15
-            self.after(16, self.animate)
-        self.draw()
+    def __init__(self):
+        self.items = []
 
-    def draw(self):
-        self.delete("all")
-        width = self.winfo_width()
-        bus = IMAGES.get("catbus")
-        if width < 200 or not bus:
+    def command(self, label, command, accel="", icon=None, enabled=True, checked=False, danger=False):
+        self.items.append(dict(kind="command", label=label, command=command, accel=accel, icon=icon,
+                               enabled=enabled, checked=checked, danger=danger))
+        return self
+
+    def separator(self):
+        self.items.append(dict(kind="separator"))
+        return self
+
+    def submenu(self, label, menu, icon=None, enabled=True):
+        self.items.append(dict(kind="submenu", label=label, menu=menu, icon=icon, enabled=enabled,
+                               checked=False, accel="", danger=False))
+        return self
+
+    def popup(self, root, x, y, right_aligned=False):
+        """right_aligned=True — x задаёт правый край меню (для кнопок у правого края окна)."""
+        _MenuWindow(root, self, x, y, right_aligned=right_aligned)
+
+
+class _MenuWindow(tk.Toplevel):
+    def __init__(self, master, menu, x, y, parent=None, right_aligned=False):
+        super().__init__(master)
+        self.menu, self.parent, self.child = menu, parent, None
+        self.top = parent.top if parent else self
+        self.rows, self.active, self.open_after = [], None, None
+        self.withdraw()
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        frame = tk.Frame(self, bg=SURFACE, padx=5, pady=5, highlightthickness=1,
+                         highlightbackground=MENU_BORDER)
+        frame.pack()
+        for item in menu.items:
+            if item["kind"] == "separator":
+                tk.Frame(frame, bg=BORDER, height=1).pack(fill="x", padx=6, pady=4)
+                continue
+            self.rows.append((self.make_row(frame, item), item))
+
+        # Не выходим за край экрана
+        self.update_idletasks()
+        w, h = self.winfo_reqwidth(), self.winfo_reqheight()
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        if right_aligned:
+            x -= w
+        if x + w > sw:
+            x = (parent.winfo_rootx() - w + 4) if parent else sw - w - 4
+        if y + h > sh:
+            y = max(sh - h - 4, 0)
+        self.geometry(f"+{x}+{y}")
+        self.deiconify()
+
+        if parent is None:
+            # Щелчок мимо меню закрывает его (пока меню открыто, все щелчки приходят сюда)
+            self.grab_set()
+            self.bind("<ButtonPress>", self.click_outside)
+            self.bind("<FocusOut>", lambda e: self.after(120, self.check_focus))
+            for key, action in (("<Escape>", self.key_escape), ("<Up>", lambda: self.move(-1)),
+                                ("<Down>", lambda: self.move(1)), ("<Return>", self.key_enter),
+                                ("<Right>", self.key_right), ("<Left>", self.key_left)):
+                self.bind(key, lambda e, a=action: a())
+            self.focus_force()
+
+    def make_row(self, frame, item):
+        enabled = item["enabled"]
+        fg = DONE if not enabled else DANGER if item["danger"] else TEXT
+        row = tk.Frame(frame, bg=SURFACE, padx=8, pady=5, cursor="hand2" if enabled else "")
+        row.pack(fill="x")
+        tk.Label(row, text="✓" if item["checked"] else "", width=2, bg=SURFACE, fg=ACCENT,
+                 font=MENU_FONT).pack(side="left")
+        if item["icon"] is not None:
+            tk.Label(row, image=item["icon"], bg=SURFACE).pack(side="left", padx=(0, 8))
+        tk.Label(row, text=item["label"], bg=SURFACE, fg=fg, font=MENU_FONT, anchor="w").pack(
+            side="left", fill="x", expand=True)
+        right = "›" if item["kind"] == "submenu" else item["accel"]
+        tk.Label(row, text=right, bg=SURFACE, fg=MUTED if enabled else DONE,
+                 font=("Segoe UI", 12) if item["kind"] == "submenu" else MENU_FONT).pack(
+            side="right", padx=(24, 2))
+        if enabled:
+            bind_tree(row, "<Enter>", lambda e, r=row: self.hover(r))
+            bind_tree(row, "<ButtonRelease-1>", lambda e, r=row: self.activate(r))
+        return row
+
+    def paint(self, row, bg):
+        row.configure(bg=bg)
+        for child in row.winfo_children():
+            child.configure(bg=bg)
+
+    def hover(self, row):
+        if self.active is not None and self.active is not row:
+            self.paint(self.active, SURFACE)
+        self.active = row
+        self.paint(row, ACCENT_SOFT)
+        item = dict(self.rows)[row]
+        if self.open_after:
+            self.after_cancel(self.open_after)
+            self.open_after = None
+        if self.child and self.child.anchor_row is not row:
+            self.close_child()
+        if item["kind"] == "submenu" and not self.child:
+            self.open_after = self.after(150, lambda: self.open_submenu(row))
+
+    def open_submenu(self, row):
+        self.open_after = None
+        if self.child:
             return
-        road_y = self.HEIGHT - 6
-        start, stop = 6, width - 64
-        # дорога и остановка
-        self.create_line(start, road_y, stop + 30, road_y, fill="#cfd5df", width=2, dash=(6, 5))
-        self.create_line(stop + 30, road_y, stop + 30, road_y - 44, fill="#9aa3b2", width=2)
-        round_rect(self, stop + 4, road_y - 62, stop + 58, road_y - 40, 6,
-                   fill="#e8f5ec", outline="#15803d")
-        self.create_text(stop + 31, road_y - 51, text="Готово", font=("Segoe UI Semibold", 8),
-                         fill="#15803d")
-        # Котобус едет мордой вперёд, к остановке
-        x = start + self.position * (stop - start - bus.width())
-        self.create_image(x, road_y + 2, image=bus, anchor="sw")
+        item = dict(self.rows)[row]
+        self.child = _MenuWindow(self.top, item["menu"], row.winfo_rootx() + row.winfo_width() + 6,
+                                 row.winfo_rooty() - 6, parent=self)
+        self.child.anchor_row = row
+
+    def close_child(self):
+        if self.child:
+            self.child.close_child()
+            self.child.destroy()
+            self.child = None
+
+    def activate(self, row):
+        item = dict(self.rows)[row]
+        if item["kind"] == "submenu":
+            self.open_submenu(row)
+            return
+        command = item["command"]
+        root = self.top.master
+        self.top.close()
+        root.after(1, command)  # выполняем после закрытия меню
+
+    def close(self):
+        self.close_child()
+        try:
+            self.grab_release()
+        except tk.TclError:
+            pass
+        self.destroy()
+
+    def windows(self):
+        win, result = self.top, []
+        while win:
+            result.append(win)
+            win = win.child
+        return result
+
+    def click_outside(self, event):
+        inside = any(w.winfo_rootx() <= event.x_root < w.winfo_rootx() + w.winfo_width()
+                     and w.winfo_rooty() <= event.y_root < w.winfo_rooty() + w.winfo_height()
+                     for w in self.windows())
+        if not inside:
+            self.close()
+
+    def check_focus(self):
+        try:
+            focus = self.focus_get()
+        except (KeyError, tk.TclError):
+            focus = None
+        if focus is None and self.winfo_exists():
+            self.close()
+
+    # --- клавиатура (работает в самом глубоком открытом подменю) ---
+
+    def deepest(self):
+        return self.windows()[-1]
+
+    def move(self, step):
+        win = self.deepest()
+        if not win.rows:
+            return
+        rows = [r for r, _ in win.rows]
+        i = rows.index(win.active) + step if win.active in rows else (0 if step > 0 else -1)
+        win.hover(rows[i % len(rows)])
+
+    def key_enter(self):
+        win = self.deepest()
+        if win.active is not None:
+            win.activate(win.active)
+
+    def key_right(self):
+        win = self.deepest()
+        if win.active is not None and dict(win.rows)[win.active]["kind"] == "submenu":
+            win.open_submenu(win.active)
+            self.move(1)  # подсветить первый пункт подменю
+
+    def key_left(self):
+        win = self.deepest()
+        if win.parent:
+            win.parent.close_child()
+
+    def key_escape(self):
+        win = self.deepest()
+        if win.parent:
+            win.parent.close_child()
+        else:
+            self.close()
+
+
+def menu_button(parent, text, build_menu):
+    """Плоская кнопка, открывающая наше меню (вместо старой кнопки со стрелкой).
+    Меню выравнивается по правому краю кнопки."""
+    button = ttk.Button(parent, text=text, style="TButton", cursor="hand2")
+
+    def show():
+        x = button.winfo_rootx() + button.winfo_width()
+        y = button.winfo_rooty() + button.winfo_height() + 4
+        build_menu().popup(button.winfo_toplevel(), x, y, right_aligned=True)
+    button.configure(command=show)
+    return button
+
+
+class ModernDialog(tk.Toplevel):
+    """Основа для окон-диалогов в стиле приложения: белое поле, заголовок, кнопки справа."""
+
+    def __init__(self, parent, title, heading, ok_text="Сохранить"):
+        super().__init__(parent)
+        self.result = None
+        self.title(title)
+        self.configure(bg=SURFACE)
+        self.resizable(False, False)
+        self.transient(parent)
+        self.body = tk.Frame(self, bg=SURFACE, padx=26, pady=20)
+        self.body.pack(fill="both", expand=True)
+        tk.Label(self.body, text=heading, bg=SURFACE, fg=TEXT, font=("Segoe UI Semibold", 14)).pack(
+            anchor="w", pady=(0, 14))
+        self.content = tk.Frame(self.body, bg=SURFACE)
+        self.content.pack(fill="both", expand=True)
+        buttons = tk.Frame(self.body, bg=SURFACE)
+        buttons.pack(fill="x", pady=(22, 0))
+        ttk.Button(buttons, text=ok_text, style="Accent.TButton", command=self.ok).pack(side="right")
+        ttk.Button(buttons, text="Отмена", style="Soft.TButton", command=self.destroy).pack(
+            side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.bind("<Return>", lambda e: self.ok())
+
+    def show(self):
+        center_on_screen(self)
+        self.grab_set()
+        self.focus_force()
+        self.wait_window()
+        return self.result
+
+    def ok(self):
+        raise NotImplementedError
+
+
+class LaneDialog(ModernDialog):
+    """Создание или настройка колонки доски: название, цвет, «задачи здесь выполнены»."""
+
+    def __init__(self, parent, name="", color=None, is_done=False, new=True):
+        super().__init__(parent, "Новая колонка" if new else "Настройка колонки",
+                         "Новая колонка" if new else "Настройка колонки",
+                         "Создать" if new else "Сохранить")
+        self.color = color or LANE_COLORS[0][1]
+
+        tk.Label(self.content, text="Название", bg=SURFACE, fg=MUTED, font=FONT_SMALL).pack(anchor="w")
+        self.name = ttk.Entry(self.content, font=FONT, width=34)
+        self.name.pack(fill="x", pady=(4, 16))
+        self.name.insert(0, name)
+
+        tk.Label(self.content, text="Цвет", bg=SURFACE, fg=MUTED, font=FONT_SMALL).pack(anchor="w")
+        self.swatches = tk.Canvas(self.content, bg=SURFACE, highlightthickness=0, height=40,
+                                  width=len(LANE_COLORS) * 36)
+        self.swatches.pack(anchor="w", pady=(6, 4))
+        self.swatches.bind("<Button-1>", self.pick_swatch)
+        other = tk.Label(self.content, text="Другой цвет…", bg=SURFACE, fg=ACCENT, font=FONT_SMALL,
+                         cursor="hand2")
+        other.pack(anchor="w", pady=(0, 16))
+        other.bind("<Button-1>", lambda e: self.pick_custom())
+        self.draw_swatches()
+
+        self.done = tk.BooleanVar(value=bool(is_done))
+        ttk.Checkbutton(self.content, text="Задачи здесь считаются выполненными",
+                        variable=self.done, style="Card.TCheckbutton").pack(anchor="w")
+        tk.Label(self.content, text="Такие задачи серые, не напоминают о себе\n"
+                                    "и попадают в счётчик «выполнено».",
+                 bg=SURFACE, fg=MUTED, font=FONT_SMALL, justify="left").pack(anchor="w", padx=(26, 0))
+        self.name.focus_set()
+
+    def draw_swatches(self):
+        c = self.swatches
+        c.delete("all")
+        for i, (_, color) in enumerate(LANE_COLORS):
+            x = 18 + i * 36
+            if color == self.color:
+                c.create_oval(x - 16, 4, x + 16, 36, outline=TEXT, width=2)
+            c.create_oval(x - 12, 8, x + 12, 32, fill=color, outline=color)
+        if self.color not in (col for _, col in LANE_COLORS):
+            c.configure(width=(len(LANE_COLORS) + 1) * 36)
+            x = 18 + len(LANE_COLORS) * 36
+            c.create_oval(x - 16, 4, x + 16, 36, outline=TEXT, width=2)
+            c.create_oval(x - 12, 8, x + 12, 32, fill=self.color, outline=self.color)
+
+    def pick_swatch(self, event):
+        i = event.x // 36
+        if i < len(LANE_COLORS):
+            self.color = LANE_COLORS[i][1]
+            self.draw_swatches()
+
+    def pick_custom(self):
+        _, color = colorchooser.askcolor(self.color, title="Цвет колонки", parent=self)
+        if color:
+            self.color = color
+            self.draw_swatches()
+
+    def ok(self):
+        name = self.name.get().strip()
+        if not name:
+            self.name.focus_set()
+            return
+        self.result = dict(name=name, color=self.color, is_done=self.done.get())
+        self.destroy()
+
+
+# Поля, которые можно показывать на карточках доски: ключ -> подпись
+CARD_FIELDS = {
+    "number": "Номер задачи",
+    "priority": "Метка приоритета",
+    "body": "Начало описания",
+    "due": "Срок",
+    "remind": "Напоминание",
+    "created": "Дата создания",
+}
+DEFAULT_CARD_FIELDS = ["number", "priority", "body", "due"]
+
+
+class CardFieldsDialog(ModernDialog):
+    """Какие поля показывать на карточках доски (заголовок виден всегда)."""
+
+    def __init__(self, parent, chosen):
+        super().__init__(parent, "Карточки на доске", "Что показывать на карточках")
+        tk.Label(self.content, text="Заголовок задачи виден всегда.", bg=SURFACE, fg=MUTED,
+                 font=FONT_SMALL).pack(anchor="w", pady=(0, 10))
+        self.vars = {}
+        for key, label in CARD_FIELDS.items():
+            var = tk.BooleanVar(value=key in chosen)
+            ttk.Checkbutton(self.content, text=label, variable=var, style="Card.TCheckbutton").pack(
+                anchor="w", pady=2)
+            self.vars[key] = var
+
+    def ok(self):
+        self.result = [key for key, var in self.vars.items() if var.get()]
+        self.destroy()
+
+
+class CatbusRun(tk.Toplevel):
+    """Котобус проезжает по низу окна и «увозит» выполненную задачу.
+
+    Прозрачное окно поверх приложения: всё, что цвета KEY, Windows делает прозрачным.
+    """
+
+    KEY = "#f3f5fa"  # почти цвет фона — края рисунка на светлом интерфейсе не видны
+    HEIGHT = 112
+    DURATION = 1700  # мс
+
+    def __init__(self, root, text):
+        super().__init__(root)
+        bus = IMAGES.get("catbus")
+        if bus is None:
+            self.destroy()
+            return
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        try:
+            self.attributes("-transparentcolor", self.KEY)
+        except tk.TclError:  # не Windows — просто не показываем
+            self.destroy()
+            return
+        width = root.winfo_width()
+        x, y = root.winfo_rootx(), root.winfo_rooty() + root.winfo_height() - self.HEIGHT - 6
+        self.geometry(f"{width}x{self.HEIGHT}+{x}+{y}")
+        self.canvas = tk.Canvas(self, width=width, height=self.HEIGHT, bg=self.KEY, highlightthickness=0)
+        self.canvas.pack()
+        self.bus = self.canvas.create_image(-bus.width(), self.HEIGHT - 4, image=bus, anchor="sw")
+        # табличка с названием задачи над Котобусом
+        label = f"✔ {short_text(text, 32)}"
+        self.sign_text = self.canvas.create_text(0, 0, text=label, font=FONT_SMALL, fill="#166534",
+                                                 anchor="s")
+        x1, y1, x2, y2 = self.canvas.bbox(self.sign_text)
+        self.sign_w, self.sign_h = x2 - x1 + 20, y2 - y1 + 8
+        self.sign = round_rect(self.canvas, 0, 0, self.sign_w, self.sign_h, 8,
+                               fill="#e8f7ee", outline="#86d3a3")
+        self.canvas.tag_raise(self.sign_text)
+        self.width, self.bus_w, self.bus_h = width, bus.width(), bus.height()
+        self.start = None
+        self.after(16, self.step)
+
+    def step(self):
+        import time as _time
+        now = _time.perf_counter() * 1000
+        if self.start is None:
+            self.start = now
+        t = min((now - self.start) / self.DURATION, 1.0)
+        eased = t * t * (3 - 2 * t)  # плавный разгон и торможение
+        x = -self.bus_w + eased * (self.width + self.bus_w + 40)
+        bounce = abs(math.sin(t * math.pi * 7)) * 3  # Котобус бежит вприпрыжку
+        y = self.HEIGHT - 4 - bounce
+        self.canvas.coords(self.bus, x, y)
+        sx = x + self.bus_w / 2 - self.sign_w / 2
+        sy = y - self.bus_h - 6
+        self.canvas.coords(self.sign, *self.rect_points(sx, sy - self.sign_h, sx + self.sign_w, sy, 8))
+        self.canvas.coords(self.sign_text, sx + self.sign_w / 2, sy - 4)
+        if t < 1.0:
+            self.after(15, self.step)
+        else:
+            self.destroy()
+
+    @staticmethod
+    def rect_points(x1, y1, x2, y2, r):
+        return [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
+                x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
 
 
 LANE_WIDTH = 250
@@ -1150,14 +1542,18 @@ class KanbanBoard(tk.Frame):
         lane.pack_propagate(False)
         tk.Frame(lane, bg=color, height=5).pack(fill="x")
 
-        head = tk.Frame(lane, bg=lane_bg)
+        # Заголовок колонки: за него колонку можно перетащить на другое место
+        head = tk.Frame(lane, bg=lane_bg, cursor="fleur")
         head.pack(fill="x", padx=12, pady=(10, 8))
-        tk.Label(head, text=name, bg=lane_bg, fg=TEXT, font=FONT_BOLD).pack(side="left")
-        tk.Label(head, text=f" {len(rows)} ", bg=SURFACE, fg=MUTED, font=FONT_SMALL).pack(
-            side="left", padx=(8, 0))
+        tk.Label(head, text=name, bg=lane_bg, fg=TEXT, font=FONT_BOLD, cursor="fleur").pack(side="left")
+        tk.Label(head, text=f" {len(rows)} ", bg=SURFACE, fg=MUTED, font=FONT_SMALL,
+                 cursor="fleur").pack(side="left", padx=(8, 0))
         if is_done:
-            tk.Label(head, text="✔", bg=lane_bg, fg="#15803d", font=FONT_SMALL).pack(
+            tk.Label(head, text="✔", bg=lane_bg, fg="#15803d", font=FONT_SMALL, cursor="fleur").pack(
                 side="left", padx=(6, 0))
+        bind_tree(head, "<ButtonPress-1>", lambda e: self.lane_press(e, status_id))
+        bind_tree(head, "<B1-Motion>", self.lane_motion)
+        bind_tree(head, "<ButtonRelease-1>", self.lane_release)
         menu_btn = tk.Label(head, text="⋯", bg=lane_bg, fg=MUTED, font=("Segoe UI", 14),
                             cursor="hand2")
         menu_btn.pack(side="right")
@@ -1177,7 +1573,7 @@ class KanbanBoard(tk.Frame):
             tk.Label(cards, text="Перетащите сюда задачу", bg=lane_bg, fg=DONE,
                      font=FONT_SMALL).pack(pady=24)
 
-        for widget in (lane, head, area, cards):
+        for widget in (lane, area, cards):
             widget.bind("<Button-1>", lambda e: self.app.clear_selection())
         bind_tree(lane, "<MouseWheel>",
                   lambda e: area.yview_scroll(-1 if e.delta > 0 else 1, "units")
@@ -1186,7 +1582,8 @@ class KanbanBoard(tk.Frame):
         self.lanes.append((status_id, lane, lane_bg))
 
     def make_card(self, parent, row, lane_color, overdue):
-        task_id, title, done, _, due_at, remind_before, urgent, important, body, _ = row
+        task_id, title, done, created, due_at, remind_before, urgent, important, body, _ = row
+        fields = self.app.card_fields  # что показывать на карточке (кнопка «⚙ Карточки»)
         card = tk.Frame(parent, bg=SURFACE, highlightthickness=2, highlightbackground=CARD_BORDER,
                         cursor="hand2")
         card.pack(fill="x", pady=(0, 8))
@@ -1197,20 +1594,31 @@ class KanbanBoard(tk.Frame):
         top = tk.Frame(content, bg=SURFACE)
         top.pack(fill="x")
         level = priority_level(urgent, important)
-        if level < 4:
+        if "priority" in fields and level < 4:
             tk.Label(top, image=IMAGES.get(f"priority_{level}", ""), bg=SURFACE).pack(
                 side="left", anchor="n", pady=(4, 0), padx=(0, 6))
+        if "number" in fields:
+            tk.Label(top, text=f"#{task_id}", bg=SURFACE, fg=DONE, font=FONT_SMALL).pack(
+                side="right", anchor="n", padx=(6, 0))
         color = DANGER if overdue else DONE if done else TEXT
         tk.Label(top, text=title, bg=SURFACE, fg=color, font=FONT_BOLD, justify="left",
-                 anchor="w", wraplength=LANE_WIDTH - 80).pack(side="left", fill="x")
-        if body.strip():
+                 anchor="w", wraplength=LANE_WIDTH - 95).pack(side="left", fill="x")
+        if "body" in fields and body.strip():
             tk.Label(content, text=short_text(body, 90), bg=SURFACE, fg=MUTED, font=FONT_SMALL,
                      justify="left", anchor="w", wraplength=LANE_WIDTH - 60).pack(fill="x", pady=(4, 0))
-        if due_at:
+        if "due" in fields and due_at:
             due_text = datetime.fromisoformat(due_at).strftime("%d.%m %H:%M")
             tk.Label(content, text=("⚠ срок " if overdue else "срок ") + due_text, bg=SURFACE,
                      fg=DANGER if overdue else MUTED, font=FONT_SMALL, anchor="w").pack(
                 fill="x", pady=(4, 0))
+        extra = []
+        if "remind" in fields and due_at and remind_before:
+            extra.append("напомнить " + REMIND_LABELS.get(remind_before, f"за {remind_before} мин"))
+        if "created" in fields:
+            extra.append("создана " + created[:5])
+        if extra:
+            tk.Label(content, text=" · ".join(extra), bg=SURFACE, fg=MUTED, font=FONT_SMALL,
+                     anchor="w", justify="left", wraplength=LANE_WIDTH - 60).pack(fill="x", pady=(2, 0))
 
         bind_tree(card, "<ButtonPress-1>", lambda e: self.on_press(e, task_id))
         bind_tree(card, "<B1-Motion>", self.on_motion)
@@ -1311,6 +1719,72 @@ class KanbanBoard(tk.Frame):
         else:
             self.highlight_selected()
 
+    # --- перетаскивание колонок за заголовок ---
+
+    def lane_press(self, event, status_id):
+        self.lane_drag = {"id": status_id, "start": (event.x_root, event.y_root), "ghost": None,
+                          "marker": None, "index": None, "pos": None, "pending": False}
+
+    def lane_motion(self, event):
+        drag = getattr(self, "lane_drag", None)
+        if not drag:
+            return
+        if drag["ghost"] is None:
+            sx, sy = drag["start"]
+            if abs(event.x_root - sx) + abs(event.y_root - sy) < 6:
+                return
+            name, color, _ = self.app.statuses[drag["id"]]
+            ghost = tk.Toplevel(self)
+            ghost.overrideredirect(True)
+            ghost.attributes("-alpha", 0.9)
+            ghost.attributes("-topmost", True)
+            frame = tk.Frame(ghost, bg=tint(color, 0.9), highlightthickness=2,
+                             highlightbackground=ACCENT, width=LANE_WIDTH, height=46)
+            frame.pack()
+            frame.pack_propagate(False)
+            tk.Frame(frame, bg=color, height=5).pack(fill="x")
+            tk.Label(frame, text=name, bg=tint(color, 0.9), fg=TEXT, font=FONT_BOLD).pack(
+                anchor="w", padx=12, pady=8)
+            drag["ghost"] = ghost
+            # синяя черта показывает, куда встанет колонка
+            drag["marker"] = tk.Frame(self.inner, bg=ACCENT, width=4)
+        drag["pos"] = (event.x_root, event.y_root)
+        if not drag["pending"]:
+            drag["pending"] = True
+            self.after(10, self.lane_follow)
+
+    def lane_follow(self):
+        drag = getattr(self, "lane_drag", None)
+        if not drag or drag["ghost"] is None:
+            return
+        drag["pending"] = False
+        x, y = drag["pos"]
+        drag["ghost"].geometry(f"+{x - 40}+{y - 20}")
+        # место вставки — перед первой колонкой, середина которой правее курсора
+        index = sum(1 for _, lane, _ in self.lanes if lane.winfo_rootx() + lane.winfo_width() / 2 < x)
+        if index != drag["index"]:
+            drag["index"] = index
+            if index < len(self.lanes):
+                mx = self.lanes[index][1].winfo_x() - 8
+            else:
+                last = self.lanes[-1][1]
+                mx = last.winfo_x() + last.winfo_width() + 4
+            drag["marker"].place(x=mx, y=0, relheight=1)
+
+    def lane_release(self, event):
+        drag, self.lane_drag = getattr(self, "lane_drag", None), None
+        if not drag or drag["ghost"] is None:
+            return
+        drag["ghost"].destroy()
+        drag["marker"].destroy()
+        ids = [sid for sid, _, _ in self.lanes]
+        old = ids.index(drag["id"])
+        index = drag["index"] if drag["index"] is not None else old
+        ids.pop(old)
+        ids.insert(index - 1 if index > old else index, drag["id"])
+        if ids != [sid for sid, _, _ in self.lanes]:
+            self.after_idle(lambda: self.app.reorder_lanes(ids))
+
     def lane_at(self, x, y):
         for status_id, lane, _ in self.lanes:
             lx, ly = lane.winfo_rootx(), lane.winfo_rooty()
@@ -1338,35 +1812,24 @@ class TodoApp:
         page = ttk.Frame(root, padding=(24, 14, 24, 20))
         page.pack(fill="both", expand=True)
 
-        # Заголовок, счётчик задач, Котобус, меню и справка
+        # Заголовок, счётчики-«таблетки», меню и справка
         header = ttk.Frame(page)
-        header.pack(fill="x")
-        ttk.Label(header, text=APP_NAME, style="Title.TLabel").pack(side="left", anchor="s")
-        self.counter = ttk.Label(header, style="Muted.TLabel")
-        self.counter.pack(side="left", padx=(14, 0), pady=(0, 6), anchor="s")
-        info = ttk.Menubutton(header, text="?  Справка", style="TMenubutton", cursor="hand2")
-        info_menu = tk.Menu(info, tearoff=0)
-        info_menu.add_command(label="Справка", accelerator="F1", command=self.show_help)
-        info_menu.add_command(label="Лицензия (MIT)…", command=self.show_license)
-        info_menu.add_separator()
-        info_menu.add_command(label=f"О программе {APP_NAME}…", command=self.show_about)
-        info["menu"] = info_menu
-        info.pack(side="right", anchor="s", pady=(0, 4))
-        more = ttk.Menubutton(header, text="☰  Ещё", style="TMenubutton", cursor="hand2")
-        more_menu = tk.Menu(more, tearoff=0)
-        more_menu.add_command(label="Добавить колонку на доску…", command=self.add_lane)
-        more_menu.add_separator()
-        more_menu.add_command(label="Добавить примеры задач", command=self.add_examples)
-        more_menu.add_command(label="Удалить примеры задач", command=self.delete_examples)
-        more["menu"] = more_menu
-        more.pack(side="right", padx=(0, 8), anchor="s", pady=(0, 4))
-        # Котобус везёт выполненные задачи к остановке «Готово»
-        self.road = CatbusRoad(header)
-        self.road.pack(side="left", fill="x", expand=True, padx=(24, 24))
+        header.pack(fill="x", pady=(4, 0))
+        ttk.Label(header, text=APP_NAME, style="Title.TLabel").pack(side="left")
+        chips = ttk.Frame(header)
+        chips.pack(side="left", padx=(18, 0), pady=(6, 0))
+        self.chips = {}
+        for key, bg, fg in (("active", "#eef1f6", MUTED), ("done", "#eef1f6", MUTED),
+                            ("today", "#e8f7ee", "#15803d")):
+            chip = tk.Label(chips, bg=bg, fg=fg, font=FONT_SMALL, padx=10, pady=3)
+            chip.pack(side="left", padx=(0, 6))
+            self.chips[key] = chip
+        menu_button(header, "?  Справка", self.build_info_menu).pack(side="right")
+        menu_button(header, "☰  Меню", self.build_main_menu).pack(side="right", padx=(0, 8))
 
         # Поле ввода и кнопка «Добавить»
         add_row = ttk.Frame(page)
-        add_row.pack(fill="x", pady=(10, 14))
+        add_row.pack(fill="x", pady=(16, 14))
         self.entry = ttk.Entry(add_row, font=FONT)
         self.entry.pack(side="left", fill="x", expand=True, ipady=2)
         self.entry.bind("<Return>", lambda e: self.add())
@@ -1400,17 +1863,11 @@ class TodoApp:
         self.sort.pack(side="right")
         self.sort.bind("<<ComboboxSelected>>", lambda e: self.refresh())
         ttk.Label(toolbar, text="Сортировка:", style="Muted.TLabel").pack(side="right", padx=(0, 8))
-
-        # Кнопки действий (размещаем до таблицы, чтобы таблица их не вытеснила)
-        bottom = ttk.Frame(page)
-        bottom.pack(side="bottom", fill="x", pady=(14, 0))
-        ttk.Button(bottom, text="✔  Выполнено / не выполнено", command=self.toggle).pack(side="left")
-        ttk.Button(bottom, text="✎  Изменить", command=self.edit).pack(side="left", padx=(8, 0))
-        ttk.Button(bottom, text="✉  Письмо", command=self.email).pack(side="left", padx=(8, 0))
-        ttk.Button(bottom, text="Удалить", style="Danger.TButton",
-                   command=self.delete).pack(side="right")
-        ttk.Label(bottom, text="ПКМ — меню · F1 — справка",
-                  style="Muted.TLabel").pack(side="right", padx=(0, 14))
+        # Настройка карточек — только на доске
+        self.card_fields = db.get_json_setting(self.conn, "card_fields", DEFAULT_CARD_FIELDS)
+        self.fields_button = ttk.Button(toolbar, text="⚙  Карточки", style="Soft.TButton",
+                                        command=self.choose_card_fields, cursor="hand2")
+        self.toolbar = toolbar
 
         # Середина окна: таблица или доска, справа — Тоторо, карточка или форма задачи.
         # Между ними — разделитель: потянув его мышью, можно менять ширину правой панели.
@@ -1419,7 +1876,8 @@ class TodoApp:
         content.pack(fill="both", expand=True)
         self.paned = content
         self.side = SidePanel(content, on_task_click=self.reveal_task,
-                              on_close=self.clear_selection, on_edit=self.edit, on_email=self.email)
+                              on_close=self.clear_selection, on_edit=self.edit, on_email=self.email,
+                              on_toggle=self.toggle, on_delete=self.delete)
         self.panel_width = int(db.get_setting(self.conn, "panel_width", PANEL_WIDTH))
         # В узком окне панель прячется, чтобы не теснить таблицу
         content.bind("<Configure>", self.fit_side_panel)
@@ -1432,12 +1890,13 @@ class TodoApp:
         inner.pack(fill="both", expand=True)
         self.scrollbar = ttk.Scrollbar(inner, orient="vertical")
         columns = {
-            "status": ("СТАТУС", 135, False),
-            "title": ("ЗАДАЧА", 250, True),
-            "priority": ("ПРИОРИТЕТ", 135, False),
-            "due": ("СРОК", 130, False),
+            "num": ("№", 52, False),
+            "status": ("СТАТУС", 125, False),
+            "title": ("ЗАДАЧА", 220, True),
+            "priority": ("ПРИОРИТЕТ", 130, False),
+            "due": ("СРОК", 125, False),
             "remind": ("НАПОМНИТЬ", 105, False),
-            "created": ("СОЗДАНА", 130, False),
+            "created": ("СОЗДАНА", 125, False),
         }
         # Первый, узкий столбец (#0) — цветная метка приоритета.
         self.tree = ttk.Treeview(
@@ -1445,9 +1904,16 @@ class TodoApp:
             selectmode="browse", yscrollcommand=self.update_scrollbar,
         )
         self.tree.column("#0", width=30, minwidth=30, stretch=False)
+        # Ширину столбцов можно менять, потянув за разделитель в заголовке; она запоминается
+        widths = db.get_json_setting(self.conn, "list_columns", {})
         for key, (text, width, stretch) in columns.items():
             self.tree.heading(key, text=text, anchor="w")
-            self.tree.column(key, width=width, stretch=stretch)
+            self.tree.column(key, width=widths.get(key, width), minwidth=40, stretch=stretch)
+        self.tree.tag_configure("hover", background="#f6f8fc")
+        self.hover_row = None
+        self.tree.bind("<Motion>", self.tree_motion)
+        self.tree.bind("<Leave>", lambda e: self.set_hover(None))
+        self.tree.bind("<ButtonRelease-1>", self.save_column_widths, add="+")
         self.tree.tag_configure("done", foreground=DONE)
         self.tree.tag_configure("overdue", foreground=DANGER)
         # У обычных строк цвет тоже задан явно: иначе в Tk 9 красный цвет
@@ -1489,6 +1955,28 @@ class TodoApp:
     def in_paned(self, widget):
         return str(widget) in (str(p) for p in self.paned.panes())
 
+    # --- таблица: ширина столбцов и подсветка строки под мышью ---
+
+    def tree_motion(self, event):
+        region = self.tree.identify_region(event.x, event.y)
+        # На разделителе столбцов курсор показывает, что ширину можно менять
+        self.tree.configure(cursor="sb_h_double_arrow" if region == "separator" else "")
+        self.set_hover(self.tree.identify_row(event.y) if region in ("cell", "tree") else None)
+
+    def set_hover(self, row):
+        if row == self.hover_row:
+            return
+        for item, add in ((self.hover_row, False), (row, True)):
+            if item and self.tree.exists(item):
+                tags = [t for t in self.tree.item(item, "tags") if t != "hover"]
+                self.tree.item(item, tags=tags + (["hover"] if add else []))
+        self.hover_row = row
+
+    def save_column_widths(self, event=None):
+        widths = {key: self.tree.column(key, "width") for key in self.tree["columns"]}
+        if widths != db.get_json_setting(self.conn, "list_columns", {}):
+            db.set_json_setting(self.conn, "list_columns", widths)
+
     def show_main_widget(self):
         """Слева в разделителе — таблица или доска, справа — панель."""
         other = self.table_card if self.view.get() == "board" else self.board
@@ -1502,6 +1990,39 @@ class TodoApp:
                 self.paned.add(main, stretch="always", minsize=420)
         if not self.in_paned(self.side):
             self.paned.add(self.side, stretch="never", minsize=240, width=self.panel_width)
+        # Кнопка «⚙ Карточки» нужна только на доске
+        if self.view.get() == "board":
+            self.fields_button.pack(side="left", padx=(12, 0))
+        else:
+            self.fields_button.pack_forget()
+
+    def choose_card_fields(self):
+        chosen = CardFieldsDialog(self.root, self.card_fields).show()
+        if chosen is not None:
+            self.card_fields = chosen
+            db.set_json_setting(self.conn, "card_fields", chosen)
+            self.refresh(select_id=self.current_id())
+
+    def build_main_menu(self):
+        return (PopupMenu()
+                .command("Добавить колонку на доску…", self.add_lane)
+                .command("Поля карточек на доске…", self.choose_card_fields)
+                .separator()
+                .command("Добавить примеры задач", self.add_examples)
+                .command("Удалить примеры задач", self.delete_examples))
+
+    def build_info_menu(self):
+        return (PopupMenu()
+                .command("Справка", self.show_help, accel="F1")
+                .command("Лицензия (MIT)…", self.show_license)
+                .separator()
+                .command(f"О программе {APP_NAME}…", self.show_about))
+
+    def celebrate(self, task_id):
+        """Задача выполнена — Котобус проезжает по низу окна и увозит её."""
+        task = db.get_task(self.conn, task_id)
+        if task:
+            self.root.after(150, lambda: CatbusRun(self.root, task[0]))
 
     def switch_view(self):
         db.set_setting(self.conn, "view", self.view.get())
@@ -1588,7 +2109,8 @@ class TodoApp:
         db.update_task(self.conn, task_id, result["title"], result["due_at"], result["remind_before"],
                        result["urgent"], result["important"], result["body"])
         if result["status_id"] != self.task_info(task_id)["status_id"]:
-            db.set_task_status(self.conn, task_id, result["status_id"])
+            if db.set_task_status(self.conn, task_id, result["status_id"]):
+                self.celebrate(task_id)
         if refresh:
             self.refresh(select_id=task_id)
 
@@ -1647,7 +2169,7 @@ class TodoApp:
             self.side.show_totoro()
             return
         self.side.show_task(
-            title=info["title"], body=info["body"], status=info["status"],
+            number=task_id, title=info["title"], body=info["body"], status=info["status"],
             status_color=DANGER if info["overdue"] else info["status_color"],
             overdue=info["overdue"], done=info["done"],
             priority_level_=info["level"], priority_name=info["priority"],
@@ -1666,9 +2188,11 @@ class TodoApp:
         def most_important(tasks):
             return min(tasks, key=lambda r: (priority_level(r[6], r[7]), due.get(r[0], datetime.max), r[0]))
 
+        done_today = db.count_done_today(self.conn)
         stats = " · ".join(text for count, text in (
             (len(overdue), f"просрочено: {len(overdue)}"),
             (len(today), f"на сегодня: {len(today)}"),
+            (done_today, f"сегодня выполнено: {done_today}"),
         ) if count)
 
         panel = self.side.totoro
@@ -1690,78 +2214,68 @@ class TodoApp:
                        f"Активных задач: {len(active)}. Ты справишься!", "normal", stats)
         else:
             panel.show("Все задачи выполнены!",
-                       tail="Можно отдохнуть под камфорным деревом.", mood="done")
+                       tail="Можно отдохнуть под камфорным деревом.", mood="done", stats=stats)
 
     # --- колонки доски (статусы) ---
 
     def add_lane(self):
-        name = simpledialog.askstring("Новая колонка", "Название колонки (статуса):", parent=self.root)
-        if not name or not name.strip():
-            return
         used = {color for _, color, _ in self.statuses.values()}
         color = next((c for _, c in LANE_COLORS if c not in used), LANE_COLORS[0][1])
-        db.add_status(self.conn, name.strip(), color)
+        result = LaneDialog(self.root, color=color).show()
+        if not result:
+            return
+        status_id = db.add_status(self.conn, result["name"], result["color"])
+        if result["is_done"]:
+            db.set_status_done(self.conn, status_id, True)
         if self.view.get() != "board":
             self.view.set("board")
             self.switch_view()
         else:
             self.refresh(select_id=self.current_id())
 
+    def edit_lane(self, status_id):
+        name, color, is_done = self.statuses[status_id]
+        result = LaneDialog(self.root, name, color, is_done, new=False).show()
+        if not result:
+            return
+        db.rename_status(self.conn, status_id, result["name"])
+        db.set_status_color(self.conn, status_id, result["color"])
+        if result["is_done"] != is_done:
+            db.set_status_done(self.conn, status_id, result["is_done"])
+        self.refresh(select_id=self.current_id())
+
     def lane_menu(self, status_id, x, y):
         name, color, is_done = self.statuses[status_id]
         order = list(self.statuses)
         index = order.index(status_id)
-        menu = tk.Menu(self.root, tearoff=0)
-        menu.add_command(label="Переименовать…", command=lambda: self.rename_lane(status_id))
-
-        colors = tk.Menu(menu, tearoff=0)
-        self.lane_color_choice = tk.StringVar(value=color)
+        colors = PopupMenu()
         for label, value in LANE_COLORS:
-            colors.add_radiobutton(label=label, value=value, variable=self.lane_color_choice,
-                                   image=swatch(value), compound="left",
-                                   command=lambda v=value: self.set_lane_color(status_id, v))
-        colors.add_separator()
-        colors.add_command(label="Другой цвет…", command=lambda: self.pick_lane_color(status_id))
-        menu.add_cascade(label="Цвет", menu=colors, image=swatch(color), compound="left")
-
-        self.lane_done_choice = tk.BooleanVar(value=bool(is_done))
-        menu.add_checkbutton(label="Задачи здесь считаются выполненными",
-                             variable=self.lane_done_choice,
-                             command=lambda: self.set_lane_done(status_id))
-        menu.add_separator()
-        menu.add_command(label="← Сдвинуть влево", state="normal" if index > 0 else "disabled",
-                         command=lambda: self.move_lane(status_id, -1))
-        menu.add_command(label="Сдвинуть вправо →",
-                         state="normal" if index < len(order) - 1 else "disabled",
-                         command=lambda: self.move_lane(status_id, 1))
-        menu.add_separator()
-        menu.add_command(label="Удалить колонку…", state="normal" if len(order) > 1 else "disabled",
-                         command=lambda: self.delete_lane(status_id))
-        menu.tk_popup(x, y)
-
-    def rename_lane(self, status_id):
-        name = simpledialog.askstring("Переименовать колонку", "Новое название:",
-                                      initialvalue=self.statuses[status_id][0], parent=self.root)
-        if name and name.strip():
-            db.rename_status(self.conn, status_id, name.strip())
-            self.refresh(select_id=self.current_id())
+            colors.command(label, lambda v=value: self.set_lane_color(status_id, v),
+                           icon=swatch(value), checked=value == color)
+        (PopupMenu()
+         .command("Настроить колонку…", lambda: self.edit_lane(status_id))
+         .submenu("Цвет", colors, icon=swatch(color))
+         .separator()
+         .command("Сдвинуть влево", lambda: self.move_lane(status_id, -1), accel="←",
+                  enabled=index > 0)
+         .command("Сдвинуть вправо", lambda: self.move_lane(status_id, 1), accel="→",
+                  enabled=index < len(order) - 1)
+         .separator()
+         .command("Удалить колонку…", lambda: self.delete_lane(status_id),
+                  enabled=len(order) > 1, danger=True)
+         ).popup(self.root, x, y)
 
     def set_lane_color(self, status_id, color):
         db.set_status_color(self.conn, status_id, color)
         self.refresh(select_id=self.current_id())
 
-    def pick_lane_color(self, status_id):
-        _, color = colorchooser.askcolor(self.statuses[status_id][1], title="Цвет колонки",
-                                         parent=self.root)
-        if color:
-            self.set_lane_color(status_id, color)
-
-    def set_lane_done(self, status_id):
-        db.set_status_done(self.conn, status_id, self.lane_done_choice.get())
-        self.refresh(select_id=self.current_id())
-
     def move_lane(self, status_id, step):
         db.move_status(self.conn, status_id, step)
+        self.refresh(select_id=self.current_id())
+
+    def reorder_lanes(self, ids):
+        """Новый порядок колонок после перетаскивания на доске."""
+        db.reorder_statuses(self.conn, ids)
         self.refresh(select_id=self.current_id())
 
     def delete_lane(self, status_id):
@@ -1779,7 +2293,8 @@ class TodoApp:
 
     def move_task(self, task_id, status_id):
         self.finish_editing()
-        db.set_task_status(self.conn, task_id, status_id)
+        if db.set_task_status(self.conn, task_id, status_id):
+            self.celebrate(task_id)
         self.refresh(select_id=task_id)
 
     # --- примеры, справка, «О программе» ---
@@ -1893,8 +2408,9 @@ class TodoApp:
         self.statuses = {sid: (name, color, bool(done)) for sid, name, color, done in statuses}
         rows = db.list_tasks(self.conn)
         active = sum(1 for row in rows if not row[2])
-        self.counter.configure(text=f"активных: {active}  ·  выполнено: {len(rows) - active}")
-        self.road.set_progress(len(rows) - active, len(rows))
+        self.chips["active"].configure(text=f"активных  {active}")
+        self.chips["done"].configure(text=f"выполнено  {len(rows) - active}")
+        self.chips["today"].configure(text=f"✔ сегодня  {db.count_done_today(self.conn)}")
 
         wanted = FILTERS[self.filter.get()]
         rows = [row for row in rows if wanted is None or bool(row[2]) == wanted]
@@ -1914,7 +2430,7 @@ class TodoApp:
             self.row_status[iid] = name
             self.tree.insert(
                 "", "end", iid=iid, image=IMAGES.get(f"priority_{level}", ""),
-                values=(status_label(name, done), title, PRIORITY_NAMES[level],
+                values=(f"#{task_id}", status_label(name, done), title, PRIORITY_NAMES[level],
                         format_due(due_at), remind, created),
                 tags=("done",) if done else ("normal",),
             )
@@ -2013,10 +2529,12 @@ class TodoApp:
                 APP_NAME,
                 "На доске нет колонки, куда можно перенести задачу.\n\n"
                 "Отметьте одну из колонок как «Задачи здесь считаются выполненными» "
-                "(меню «⋯» в заголовке колонки).",
+                "(меню «⋯» в заголовке колонки → «Настроить колонку…»).",
                 parent=self.root,
             )
             return
+        if not done:
+            self.celebrate(task_id)
         self.refresh(select_id=task_id)
 
     def delete(self):
@@ -2055,65 +2573,51 @@ class TodoApp:
 
     def show_menu_for(self, task_id, x, y):
         self.select_task(task_id)
-        self.build_menu(task_id).tk_popup(x, y)
+        self.build_menu(task_id).popup(self.root, x, y)
 
     def build_menu(self, task_id):
         title, due_at, remind_before, urgent, important, body = db.get_task(self.conn, task_id)
         info = self.task_info(task_id)
 
-        menu = tk.Menu(self.root, tearoff=0)
-        menu.add_command(label="Изменить…", accelerator="F2", command=self.edit)
-        menu.add_command(
-            label="Снять отметку о выполнении" if info["done"] else "Отметить выполненной",
-            accelerator="Пробел", command=self.toggle,
-        )
-        status_menu = tk.Menu(menu, tearoff=0)
-        self.status_choice = tk.IntVar(value=info["status_id"] or 0)
+        statuses = PopupMenu()
         for sid, (name, color, _) in self.statuses.items():
-            status_menu.add_radiobutton(label=name, value=sid, variable=self.status_choice,
-                                        image=swatch(color), compound="left",
-                                        command=lambda s=sid: self.move_task(task_id, s))
-        menu.add_cascade(label="Статус", menu=status_menu)
-        menu.add_separator()
+            statuses.command(name, lambda s=sid: self.move_task(task_id, s), icon=swatch(color),
+                             checked=sid == info["status_id"])
 
-        prio_menu = tk.Menu(menu, tearoff=0)
-        self.urgent_choice = tk.BooleanVar(value=bool(urgent))
-        self.important_choice = tk.BooleanVar(value=bool(important))
-        prio_menu.add_checkbutton(label="Срочно", variable=self.urgent_choice,
-                                  command=lambda: self.quick_priority(task_id))
-        prio_menu.add_checkbutton(label="Важно", variable=self.important_choice,
-                                  command=lambda: self.quick_priority(task_id))
-        menu.add_cascade(label="Приоритет", menu=prio_menu)
+        priority = (PopupMenu()
+                    .command("Срочно", lambda: self.quick_priority(task_id, not urgent, important),
+                             checked=bool(urgent))
+                    .command("Важно", lambda: self.quick_priority(task_id, urgent, not important),
+                             checked=bool(important)))
 
-        due_menu = tk.Menu(menu, tearoff=0)
+        due = PopupMenu()
         for label, days in (("Сегодня", 0), ("Завтра", 1), ("Через неделю", 7)):
-            due_menu.add_command(label=label, command=lambda d=days: self.quick_due(task_id, d))
-        due_menu.add_separator()
-        due_menu.add_command(label="Выбрать дату и время…", command=self.edit)
-        due_menu.add_command(
-            label="Убрать срок", command=lambda: self.quick_due(task_id, None),
-            state="normal" if due_at else "disabled",
-        )
-        menu.add_cascade(label="Срок", menu=due_menu)
+            due.command(label, lambda d=days: self.quick_due(task_id, d))
+        due.separator()
+        due.command("Выбрать дату и время…", self.edit)
+        due.command("Убрать срок", lambda: self.quick_due(task_id, None), enabled=bool(due_at))
 
-        remind_menu = tk.Menu(menu, tearoff=0)
-        self.remind_choice = tk.StringVar(value=REMIND_LABELS.get(remind_before, ""))
+        remind = PopupMenu()
         for label, minutes in REMIND_OPTIONS.items():
-            remind_menu.add_radiobutton(
-                label=label, value=label, variable=self.remind_choice,
-                command=lambda m=minutes: self.quick_remind(task_id, m),
-            )
-        menu.add_cascade(
-            label="Напомнить" if due_at else "Напомнить (сначала задайте срок)",
-            menu=remind_menu, state="normal" if due_at else "disabled",
-        )
+            remind.command(label, lambda m=minutes: self.quick_remind(task_id, m),
+                           checked=minutes == remind_before)
 
-        menu.add_separator()
-        menu.add_command(label="Создать письмо…", accelerator="Ctrl+E", command=self.email)
-        menu.add_command(label="Копировать текст",
-                         command=lambda: self.copy_text(f"{title}\n\n{body}".strip()))
-        menu.add_command(label="Удалить", accelerator="Del", command=self.delete)
-        return menu
+        return (PopupMenu()
+                .command("Изменить…", self.edit, accel="F2")
+                .command("Вернуть в работу" if info["done"] else "Отметить выполненной",
+                         self.toggle, accel="Пробел")
+                .submenu("Статус", statuses, icon=swatch(info["status_color"]))
+                .separator()
+                .submenu("Приоритет", priority,
+                         icon=IMAGES.get(f"priority_{info['level']}"))
+                .submenu("Срок", due)
+                .submenu("Напомнить" if due_at else "Напомнить (сначала задайте срок)", remind,
+                         enabled=bool(due_at))
+                .separator()
+                .command("Создать письмо…", self.email, accel="Ctrl+E")
+                .command("Копировать текст", lambda: self.copy_text(f"{title}\n\n{body}".strip()))
+                .separator()
+                .command("Удалить", self.delete, accel="Del", danger=True))
 
     def quick_due(self, task_id, days):
         """Быстрая смена срока из меню. Время сохраняется прежним (или 09:00)."""
@@ -2133,11 +2637,10 @@ class TodoApp:
         db.update_task(self.conn, task_id, title, due_at, minutes, urgent, important)
         self.refresh(select_id=task_id)
 
-    def quick_priority(self, task_id):
+    def quick_priority(self, task_id, urgent, important):
         self.finish_editing()
         title, due_at, remind_before, _, _, _ = db.get_task(self.conn, task_id)
-        db.update_task(self.conn, task_id, title, due_at, remind_before,
-                       self.urgent_choice.get(), self.important_choice.get())
+        db.update_task(self.conn, task_id, title, due_at, remind_before, urgent, important)
         self.refresh(select_id=task_id)
 
     def copy_text(self, text):
