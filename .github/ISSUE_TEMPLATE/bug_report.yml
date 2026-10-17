@@ -39,7 +39,7 @@ body:
     attributes:
       label: Версия ToDoro
       description: Меню → О программе → О программе ToDoro. Если сообщаете из программы — заполнится само.
-      placeholder: "2.10"
+      placeholder: "2.10.1"
     validations:
       required: true
   - type: input

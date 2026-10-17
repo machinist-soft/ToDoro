@@ -36,6 +36,8 @@ db.OLD_DB_PATHS = []
 db.set_setting(db.connect(), "theme", "dark" if DARK else "light")
 import team  # noqa: E402
 import todoro as T  # noqa: E402
+# окно и так держится поверх всех на время съёмки; вывод вперёд при запуске снял бы это
+T.TodoApp.raise_on_start = lambda self: None
 from examples import make_examples  # noqa: E402
 
 ME = "Андрей"
