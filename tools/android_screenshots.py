@@ -69,7 +69,8 @@ def prepare(work):
 
 
 # снимок экрана телефона -> картинка для README
-README_SHOTS = {"1-main": "android-list.png", "2-card": "android-card.png", "4-dark": "android-dark.png"}
+README_SHOTS = {"1-main": "android-list.png", "2-card": "android-card.png", "4-dark": "android-dark.png",
+               "6-menu": "android-theme.png"}
 
 
 def copy_for_readme(screens):

@@ -10,6 +10,9 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
+/** Тема приложения: как в телефоне, всегда светлая или всегда тёмная (☰ Меню → Тема). */
+enum class ThemeMode(val label: String) { SYSTEM("Как в телефоне"), LIGHT("Светлая"), DARK("Тёмная") }
+
 enum class Filter(val label: String) { ALL("Все"), ACTIVE("Активные"), DONE("Выполненные"), OVERDUE("Просроченные") }
 
 /** Что говорит Тоторо (как update_buddy в todoro.py). mood: normal, alert, sleep. */
@@ -50,6 +53,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var remindersOn by mutableStateOf(Reminders.enabled(app))
         private set
+    var theme by mutableStateOf(ThemeMode.entries.firstOrNull { it.name == prefs.getString("theme", null) } ?: ThemeMode.SYSTEM)
+        private set
 
     val lists: List<TaskList> get() = Repo.data?.lists.orEmpty()
 
@@ -86,6 +91,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setReminders(on: Boolean) {
         remindersOn = on
         Reminders.setEnabled(getApplication(), on)
+    }
+
+    fun chooseTheme(mode: ThemeMode) {
+        theme = mode
+        prefs.edit().putString("theme", mode.name).apply()
     }
 
     fun setBuddy(on: Boolean) {

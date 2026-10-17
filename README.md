@@ -113,8 +113,8 @@ CSV export / import, e-mail a task, built-in help · one-click updates and an in
 
 ![Подключить телефон / Connect a phone](docs/screenshots/phone.png)
 
-Приложение на телефоне выглядит как ToDoro на компьютере: список задач, карточка задачи с комментариями, тёмная тема. Файлы задач на телефон не передаются.
-*The phone app looks like ToDoro on the PC: the task list, a task card with comments, dark theme. Task files are never sent to the phone.*
+Приложение на телефоне выглядит как ToDoro на компьютере: список задач, карточка задачи с комментариями, светлая или тёмная тема (☰ Меню → Тема). Файлы задач на телефон не передаются.
+*The phone app looks like ToDoro on the PC: the task list, a task card with comments, light or dark theme (☰ Menu → Theme). Task files are never sent to the phone.*
 
 <p>
 <img src="docs/screenshots/android-list.png" width="260" alt="Список задач на телефоне / Task list on the phone">

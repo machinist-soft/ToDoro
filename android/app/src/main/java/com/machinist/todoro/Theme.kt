@@ -73,8 +73,7 @@ val P: Palette
     @Composable get() = LocalPalette.current
 
 @Composable
-fun ToDoroTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
+fun ToDoroTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
     val p = if (dark) DarkPalette else LightPalette
     val scheme = if (dark) {
         darkColorScheme(primary = p.accent, secondary = p.accent, error = p.danger, background = p.bg,

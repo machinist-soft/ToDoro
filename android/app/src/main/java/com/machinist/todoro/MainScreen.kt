@@ -27,6 +27,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -180,6 +181,13 @@ fun Header(vm: AppViewModel, onScan: () -> Unit, onUnpair: () -> Unit) {
                 DropdownMenuItem(text = { Text("Тоторо-помощник") },
                     trailingIcon = { Checkbox(checked = vm.buddyOn, onCheckedChange = null) },
                     onClick = { vm.setBuddy(!vm.buddyOn) })
+                HorizontalDivider(color = p.border)
+                Text("Тема", Modifier.padding(horizontal = 12.dp, vertical = 6.dp), fontSize = 12.sp, color = p.muted)
+                ThemeMode.entries.forEach { mode ->
+                    DropdownMenuItem(text = { Text(mode.label) },
+                        trailingIcon = { RadioButton(selected = vm.theme == mode, onClick = null) },
+                        onClick = { menu = false; vm.chooseTheme(mode) })
+                }
                 HorizontalDivider(color = p.border)
                 DropdownMenuItem(text = { Text("Подключить заново (QR-код)") }, onClick = { menu = false; onScan() })
                 DropdownMenuItem(text = { Text("Отключиться от компьютера") }, onClick = { menu = false; onUnpair() })

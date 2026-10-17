@@ -9,6 +9,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
 import com.github.takahirom.roborazzi.captureRoboImage
+import com.github.takahirom.roborazzi.captureScreenRoboImage
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
@@ -40,8 +41,10 @@ class ScreenshotTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         WorkManagerTestInitHelper.initializeTestWorkManager(context)
         Pairing(listOf("127.0.0.1"), port, key, "ПК").save(context)
+        val prefs = context.getSharedPreferences("app", Context.MODE_PRIVATE)
+        prefs.edit().remove("theme").commit()  // тема, выбранная в chosenTheme, не должна попасть в другие снимки
         System.getProperty("todoro.list")?.takeIf { it.isNotEmpty() }?.let { list ->
-            context.getSharedPreferences("app", Context.MODE_PRIVATE).edit().putString("list", list).commit()
+            prefs.edit().putString("list", list).commit()
         }
         ActivityScenario.launch(MainActivity::class.java)
         compose.waitUntil(20_000) { Repo.data != null }
@@ -67,6 +70,20 @@ class ScreenshotTest {
         compose.onNode(hasText("Комментарии", substring = true)).performClick()
         compose.waitUntil(10_000) { Repo.data != null && compose.onAllNodes(hasText("Отправить")).fetchSemanticsNodes().isNotEmpty() }
         shot("5-comments")
+    }
+
+    /** Телефон в светлой теме, в приложении выбрана «☰ Меню → Тема → Тёмная». */
+    @Test
+    fun chosenTheme() {
+        start()
+        compose.onNode(hasText("☰  Меню")).performClick()
+        compose.waitForIdle()
+        captureScreenRoboImage("build/screens/6-menu.png")
+        compose.onNode(hasText("Тёмная")).performClick()
+        shot("7-chosen-dark")
+        compose.onNode(hasText("☰  Меню")).performClick()
+        compose.onNode(hasText("Как в телефоне")).performClick()
+        compose.waitForIdle()
     }
 
     @Test
