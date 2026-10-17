@@ -4317,6 +4317,9 @@ class TodoApp:
             root.state("zoomed")  # развёрнуто на весь экран; «восстановить» вернёт обычное окно
         else:
             root.deiconify()
+        # После обновления ToDoro запускает установщик и сразу закрывается — Windows тогда
+        # открывает окно позади других (или свёрнутым). Выводим его вперёд сами.
+        root.after(150, self.raise_on_start)
         root.after(200, self.repaint)  # ещё раз, когда окно уже показано
         root.after(600, self.reset_cursor)  # и обычный курсор — на случай, если ⟷ «залип» при запуске
         self.show_placeholder()
@@ -4324,6 +4327,15 @@ class TodoApp:
         root.after(4000, self.auto_check_update)  # раз в день — нет ли новой версии
         if db.get_setting(self.prefs, "tour_show", "1") == "1":
             root.after(700, self.start_tour)  # первый запуск (или тур не отключили) — тур
+
+    def raise_on_start(self):
+        root = self.root
+        if root.state() == "iconic":
+            maximized = db.get_setting(self.prefs, "start_mode", "window") == "maximized"
+            root.state("zoomed" if maximized else "normal")
+        bring_to_front(root)
+        if self.entry.winfo_exists():
+            self.entry.focus()
 
     # --- список, доска или матрица ---
 
