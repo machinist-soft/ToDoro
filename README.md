@@ -29,6 +29,8 @@
 
 - **Задачи**: заголовок и описание, срок с календарём, напоминания, приоритет «Срочно / Важно»
   (матрица Эйзенхауэра), номер у каждой задачи.
+- **Напоминания**: в срок окно ToDoro всплывает поверх остальных и показывает все просроченные
+  задачи; щелчок по задаче открывает её. Окно можно открыть и самому из меню.
 - **Файлы, картинки и комментарии** в каждой задаче: приложите документ или снимок экрана
   (Ctrl+V), обсудите задачу с командой прямо в её карточке.
 - **Список, канбан-доска и матрица Эйзенхауэра**: свои колонки-статусы с цветами, перетаскивание
@@ -54,7 +56,8 @@
 - **Обновления в один клик**: программа сама сообщает о новой версии и ставит её — задачи
   сохраняются; «Что нового» во всех версиях — прямо в программе.
 
-*Tasks with due dates, reminders and urgent / important priority · file attachments, pasted
+*Tasks with due dates, reminders and urgent / important priority · a reminders window with every
+overdue task, one click opens a task · file attachments, pasted
 screenshots and comments in every task · list, kanban board with
 custom columns and Eisenhower matrix (drag a card to another quadrant to change its priority),
 filters, search and column sorting · several lists, personal and shared with a team via a network
@@ -132,6 +135,15 @@ Need more room? Collapse the panel to a thin strip with the » button or Ctrl+B.
 ![Файлы в задаче / Task files](docs/screenshots/files.png)
 
 ![Комментарии к задаче / Task comments](docs/screenshots/comments.png)
+
+### Напоминания / Reminders
+
+Когда приходит напоминание, окно показывает и все остальные просроченные задачи — щелчок по задаче
+открывает её. В любой момент: **☰ Меню → Напоминания и просроченные…**
+*When a reminder fires, the window lists every overdue task — click one to open it. Any time:
+Menu → Reminders and overdue tasks.*
+
+![Окно напоминаний / Reminders window](docs/screenshots/reminders.png)
 
 ### Что нового / What’s new
 

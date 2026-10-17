@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timedelta
 import tkinter as tk
 from ctypes import wintypes
 from pathlib import Path
@@ -25,6 +26,7 @@ import db  # noqa: E402
 DARK = "dark" in sys.argv[1:]  # python tools/make_screenshots.py dark — только снимок тёмной темы
 MATRIX = "matrix" in sys.argv[1:]  # python tools/make_screenshots.py matrix — только снимок матрицы
 WHATSNEW = "whatsnew" in sys.argv[1:]  # python tools/make_screenshots.py whatsnew — только «Что нового»
+REMINDERS = "reminders" in sys.argv[1:]  # python tools/make_screenshots.py reminders — только напоминания
 work = Path(tempfile.mkdtemp(prefix="todoro-shots-"))
 out = ROOT / "docs" / "screenshots"
 out.mkdir(parents=True, exist_ok=True)
@@ -174,6 +176,38 @@ def shoot_whatsnew():
     dialog.destroy()
 
 
+def shoot_reminders():
+    """Окно напоминаний (☰ Меню → Напоминания и просроченные): первая задача — «новое» напоминание.
+    Окно модальное, поэтому вместо показа снимаем его и сразу закрываем."""
+    show = T.AlertDialog.show
+
+    def shoot(dialog):
+        T.center_on_screen(dialog)
+        dialog.attributes("-topmost", True)
+        grab("reminders.png", window=dialog)
+        dialog.destroy()
+    T.AlertDialog.show = shoot
+    # только открытый общий список: в личном — те же примеры, в кадре были бы одинаковые названия
+    lists, app.lists = app.lists, [app.current_list()]
+    # «завтра утром» — чтобы в окне было несколько задач, а не одна
+    pending = db.pending_tasks
+    T.db.pending_tasks = lambda conn, user=None: pending(conn, user, datetime.now() + timedelta(days=1))
+    try:
+        app.show_reminders(new=app.collect_pending()[:1])
+    finally:
+        T.AlertDialog.show = show
+        T.db.pending_tasks = pending
+        app.lists = lists
+
+
+def run_reminders():
+    for _ in range(4):
+        root.update()
+        time.sleep(0.2)
+    shoot_reminders()
+    root.destroy()
+
+
 def run_whatsnew():
     for _ in range(4):
         root.update()
@@ -307,6 +341,7 @@ def run():
     grab("about.png", window=dialog)
     dialog.destroy()
     shoot_whatsnew()
+    shoot_reminders()
     # 7. Окно обновления: последний выпущенный раздел RELEASE_NOTES.md («Не выпущено» пропускаем),
     # «текущая» версия — предыдущий выпуск (подменяется только для снимка)
     notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
@@ -353,5 +388,6 @@ def make_gif(frames):
     print("saved catbus.gif", len(gif), "frames", (out / "catbus.gif").stat().st_size // 1024, "KB")
 
 
-root.after(1200, run_dark if DARK else run_matrix if MATRIX else run_whatsnew if WHATSNEW else run)
+root.after(1200, run_dark if DARK else run_matrix if MATRIX else run_whatsnew if WHATSNEW
+           else run_reminders if REMINDERS else run)
 root.mainloop()
