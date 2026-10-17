@@ -38,6 +38,7 @@ APP_YEAR = 2026
 COPYRIGHT_HOLDER = "Machinist"  # автор — имя меняется здесь и в файле LICENSE
 COPYRIGHT = f"© {APP_YEAR} {COPYRIGHT_HOLDER}"
 LICENSE_PATH = Path(__file__).with_name("LICENSE")
+RELEASE_NOTES_PATH = Path(__file__).with_name("RELEASE_NOTES.md")  # окно «Что нового»
 LICENSE_SUMMARY = (
     "Программа распространяется по лицензии MIT — это свободная лицензия открытого кода:\n"
     "• пользоваться можно бесплатно, в том числе в работе и в коммерческих целях;\n"
@@ -1569,6 +1570,120 @@ class LicenseWindow(tk.Toplevel):
         self.bind("<Escape>", lambda e: self.destroy())
         center_on_screen(self)
         self.focus_force()
+
+
+class WhatsNewWindow(tk.Toplevel):
+    """«Что нового»: изменения всех версий из файла RELEASE_NOTES.md (он ставится вместе
+    с программой — интернет не нужен)."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title(f"Что нового — {APP_NAME}")
+        self.configure(bg=BG)
+        self.minsize(560, 400)
+
+        head = tk.Frame(self, bg=BG)
+        head.pack(fill="x", padx=24, pady=(18, 10))
+        if "totoro_small" in IMAGES:
+            tk.Label(head, image=IMAGES["totoro_small"], bg=BG).pack(side="left", padx=(0, 14))
+        titles = tk.Frame(head, bg=BG)
+        titles.pack(side="left", anchor="center")
+        tk.Label(titles, text="Что нового", bg=BG, fg=TEXT, font=("Segoe UI Semibold", 16)).pack(anchor="w")
+        tk.Label(titles, text=f"У вас версия {APP_VERSION}. Новые изменения — сверху.", bg=BG, fg=MUTED,
+                 font=FONT_SMALL).pack(anchor="w")
+
+        bar = tk.Frame(self, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
+        bar.pack(fill="x", side="bottom")
+        ttk.Button(bar, text="Закрыть", style="Accent.TButton", command=self.destroy).pack(
+            side="right", padx=(0, 18), pady=12)
+        ttk.Button(bar, text="Все выпуски на GitHub…", style="Soft.TButton",
+                   command=lambda: webbrowser.open(updater.RELEASES_LIST)).pack(side="right", padx=(0, 8))
+
+        page = tk.Frame(self, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
+        page.pack(fill="both", expand=True, padx=24, pady=(0, 16))
+        text = tk.Text(page, wrap="word", bg=SURFACE, fg=TEXT, font=FONT_SMALL, relief="flat",
+                       borderwidth=0, highlightthickness=0, padx=26, pady=18, cursor="arrow",
+                       spacing1=1, spacing3=1, width=80, height=26)
+        scrollbar = ttk.Scrollbar(page, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y", padx=(0, 4), pady=4)
+        text.pack(side="left", fill="both", expand=True)
+        text.tag_configure("version", font=("Segoe UI Semibold", 14), spacing1=18, spacing3=2)
+        text.tag_configure("first", spacing1=0)
+        text.tag_configure("date", font=FONT_SMALL, foreground=MUTED)
+        text.tag_configure("current", font=FONT_SMALL_BOLD, foreground=GOOD_TEXT)
+        text.tag_configure("soon", font=FONT_SMALL_BOLD, foreground=WARN)
+        text.tag_configure("group", font=FONT_SMALL_BOLD, foreground=ACCENT, spacing1=10, spacing3=4)
+        text.tag_configure("li", lmargin1=4, lmargin2=20, spacing3=5)
+        text.tag_configure("p", spacing3=5)
+        text.tag_configure("note", lmargin1=12, lmargin2=12, rmargin=12, spacing1=4, spacing3=4,
+                           background=ACCENT_SOFT)
+        text.tag_configure("b", font=FONT_SMALL_BOLD)
+        self.fill(text)
+        text.configure(state="disabled")
+
+        self.bind("<Escape>", lambda e: self.destroy())
+        center_on_screen(self, 760, 660)
+        self.focus_force()
+
+    @staticmethod
+    def blocks(markdown):
+        """Разметка RELEASE_NOTES.md -> [(вид, текст)]: version, group, li, note, p.
+        Строки-продолжения пункта (с отступом) склеиваются с ним."""
+        blocks = []
+        started = False
+        for line in markdown.splitlines():
+            if line.startswith("## "):
+                started = True
+                blocks.append(("version", line[3:].strip()))
+            elif not started or not line.strip():
+                continue
+            elif line.startswith("### "):
+                blocks.append(("group", line[4:].strip()))
+            elif line.startswith("- "):
+                blocks.append(("li", line[2:].strip()))
+            elif line.startswith(">"):
+                body = line[1:].strip()
+                if blocks and blocks[-1][0] == "note":
+                    blocks[-1] = ("note", blocks[-1][1] + " " + body)
+                else:
+                    blocks.append(("note", body))
+            elif line.startswith(" ") and blocks and blocks[-1][0] in ("li", "p"):
+                blocks[-1] = (blocks[-1][0], blocks[-1][1] + " " + line.strip())
+            else:
+                blocks.append(("p", line.strip()))
+        return blocks
+
+    def fill(self, text):
+        path = RELEASE_NOTES_PATH
+        try:
+            markdown = path.read_text(encoding="utf-8")
+        except OSError:
+            text.insert("end", "Файл с описанием изменений не найден. Все выпуски — на GitHub "
+                               "(кнопка внизу).", "p")
+            return
+        first = True
+        for kind, line in self.blocks(markdown):
+            if kind == "version":
+                version, _, when = line.partition(" — ")
+                tags = ("version", "first") if first else ("version",)
+                first = False
+                if version == "Не выпущено":
+                    text.insert("end", "Скоро", tags)
+                    text.insert("end", "   ещё не выпущено\n", ("soon",))
+                    continue
+                text.insert("end", f"Версия {version}", tags)
+                if when:
+                    text.insert("end", f"   {when}", "date")
+                if version == APP_VERSION:
+                    text.insert("end", "   ✔ у вас эта версия", "current")
+                text.insert("end", "\n")
+                continue
+            if kind == "li":
+                text.insert("end", "•  ", "li")
+            for i, part in enumerate(re.split(r"\*\*", line.replace("`", ""))):
+                text.insert("end", part, (kind, "b") if i % 2 else kind)
+            text.insert("end", "\n", kind)
 
 
 def round_rect(canvas, x1, y1, x2, y2, r, **kw):
@@ -4614,7 +4729,7 @@ class TodoApp:
                     .command("Предложить улучшение…", lambda: self.send_feedback("idea"))
                     .command("Все сообщения на GitHub…", lambda: webbrowser.open(updater.ISSUES_PAGE)))
         about = (PopupMenu()
-                 .command("Что нового…", lambda: webbrowser.open(updater.RELEASES_LIST))
+                 .command("Что нового…", self.show_whats_new)
                  .command("Лицензия (MIT)…", self.show_license)
                  .command(f"О программе {APP_NAME}…", self.show_about))
         return (PopupMenu()
@@ -5239,6 +5354,9 @@ class TodoApp:
 
     def show_license(self):
         LicenseWindow(self.root)
+
+    def show_whats_new(self):
+        WhatsNewWindow(self.root)
 
     # --- подсказка в пустом поле ввода ---
 

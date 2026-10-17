@@ -59,6 +59,7 @@ def main():
         "--add-data", f"{ROOT / 'images'};images",
         "--add-data", f"{ROOT / 'icon.ico'};.",
         "--add-data", f"{ROOT / 'LICENSE'};.",
+        "--add-data", f"{ROOT / 'RELEASE_NOTES.md'};.",  # окно «Что нового»
         "--distpath", str(BUILD / "dist"), "--workpath", str(BUILD / "work"),
         "--specpath", str(BUILD),
         str(ROOT / "todoro.py"),
