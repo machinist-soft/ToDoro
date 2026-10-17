@@ -55,16 +55,120 @@ def is_newer(latest, current):
     return parse_version(latest) > parse_version(current)
 
 
+class _WinInetResponse:
+    """Ответ сервера, полученный через WinINet — сетевую часть самой Windows.
+    Она берёт прокси и сертификаты из настроек Windows, как браузер, поэтому работает в
+    корпоративных сетях, где прямой запрос Python не проходит (прокси со сценарием настройки,
+    вход в прокси под учётной записью Windows, проверка HTTPS-трафика сертификатом компании)."""
+    STATUS_CODE, CONTENT_LENGTH, AS_NUMBER = 19, 5, 0x20000000
+
+    def __init__(self, url, headers, timeout):
+        import ctypes
+        from ctypes import wintypes
+        self._ctypes = ctypes
+        dll = self._dll = ctypes.WinDLL("wininet", use_last_error=True)
+        dll.InternetOpenW.restype = dll.InternetOpenUrlW.restype = ctypes.c_void_p
+        dll.InternetOpenW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.LPCWSTR,
+                                      wintypes.LPCWSTR, wintypes.DWORD]
+        dll.InternetOpenUrlW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                                         wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p]
+        dll.InternetSetOptionW.argtypes = [ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p,
+                                           wintypes.DWORD]
+        dll.InternetReadFile.argtypes = [ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD,
+                                         ctypes.POINTER(wintypes.DWORD)]
+        dll.HttpQueryInfoW.argtypes = [ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p,
+                                       ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p]
+        dll.InternetCloseHandle.argtypes = [ctypes.c_void_p]
+        self._session = self._request = None
+        # 0 = «как настроено в Windows» (прокси, сценарий автонастройки)
+        self._session = dll.InternetOpenW(headers.get("User-Agent", USER_AGENT), 0, None, None, 0)
+        if not self._session:
+            self._fail("InternetOpen")
+        ms = wintypes.DWORD(int(timeout * 1000))
+        for option in (2, 5, 6):  # тайм-ауты соединения, отправки и получения
+            dll.InternetSetOptionW(self._session, option, ctypes.byref(ms), ctypes.sizeof(ms))
+        extra = "".join(f"{k}: {v}\r\n" for k, v in headers.items() if k != "User-Agent")
+        # без кэша, без окон, без cookie
+        flags = 0x80000000 | 0x04000000 | 0x00000200 | 0x00080000
+        self._request = dll.InternetOpenUrlW(self._session, url, extra or None,
+                                             0xFFFFFFFF if extra else 0, flags, None)
+        if not self._request:
+            self._fail("InternetOpenUrl")
+        status = self._number(self.STATUS_CODE)
+        if status and status >= 400:
+            self.close()
+            raise OSError(f"сервер ответил HTTP {status}")
+        length = self._number(self.CONTENT_LENGTH)
+        self.headers = {"Content-Length": str(length)} if length else {}
+
+    def _fail(self, what):
+        code = self._ctypes.get_last_error()
+        self.close()
+        raise OSError(f"{what}: ошибка WinINet {code}")
+
+    def _number(self, query):
+        from ctypes import wintypes
+        value, size = wintypes.DWORD(0), wintypes.DWORD(4)
+        ok = self._dll.HttpQueryInfoW(self._request, query | self.AS_NUMBER,
+                                      self._ctypes.byref(value), self._ctypes.byref(size), None)
+        return value.value if ok else None
+
+    def read(self, size=-1):
+        from ctypes import wintypes
+        if size is None or size < 0:
+            chunks = []
+            while chunk := self.read(256 * 1024):
+                chunks.append(chunk)
+            return b"".join(chunks)
+        buffer = self._ctypes.create_string_buffer(size)
+        got = wintypes.DWORD(0)
+        if not self._dll.InternetReadFile(self._request, buffer, size, self._ctypes.byref(got)):
+            self._fail("InternetReadFile")
+        return buffer.raw[:got.value]
+
+    def close(self):
+        for handle in (self._request, self._session):
+            if handle:
+                self._dll.InternetCloseHandle(handle)
+        self._session = self._request = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+def _urlopen(url, headers, timeout):
+    """Открывает адрес напрямую, а если не вышло (на Windows) — через сетевую часть Windows."""
+    try:
+        return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout)
+    except OSError as direct_error:
+        if sys.platform != "win32":
+            raise
+        try:
+            return _WinInetResponse(url, headers, timeout)
+        except OSError as windows_error:
+            raise OSError(f"{_reason(direct_error)}; через Windows: {windows_error}") from direct_error
+
+
+def _reason(error):
+    """Короткое техническое описание сетевой ошибки — для строки «Подробности»."""
+    reason = getattr(error, "reason", None) or error
+    text = str(reason) or type(reason).__name__
+    return text if len(text) <= 300 else text[:300] + "…"
+
+
 def fetch_latest(timeout=10):
     """Последний выпуск на GitHub: dict(version, notes, url, asset_url, asset_name, size, sha256).
     asset_* — None, если к выпуску не приложен установщик."""
-    request = urllib.request.Request(LATEST_URL, headers={
-        "User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"})
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"}
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            data = json.load(response)
+        with _urlopen(LATEST_URL, headers, timeout) as response:
+            data = json.loads(response.read())
     except OSError as error:
-        raise UpdateError("Не удалось связаться с GitHub. Проверьте подключение к интернету.") from error
+        raise UpdateError("Не удалось связаться с GitHub. Проверьте подключение к интернету.\n"
+                          f"Подробности: {_reason(error)}") from error
     except ValueError as error:
         raise UpdateError("GitHub ответил что-то непонятное. Попробуйте позже.") from error
     asset = next((a for a in data.get("assets", [])
@@ -89,11 +193,11 @@ def download(release, on_progress=None, timeout=30):
     folder = Path(tempfile.gettempdir()) / "ToDoro-update"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / Path(release["asset_name"]).name
-    request = urllib.request.Request(release["asset_url"], headers={"User-Agent": USER_AGENT})
     sha = hashlib.sha256()
     received = 0
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response, open(path, "wb") as f:
+        with _urlopen(release["asset_url"], {"User-Agent": USER_AGENT}, timeout) as response, \
+                open(path, "wb") as f:
             total = int(response.headers.get("Content-Length") or release.get("size") or 0)
             while chunk := response.read(256 * 1024):
                 f.write(chunk)
@@ -102,7 +206,8 @@ def download(release, on_progress=None, timeout=30):
                 if on_progress:
                     on_progress(received, total)
     except OSError as error:
-        raise UpdateError("Не удалось скачать обновление. Проверьте подключение к интернету.") from error
+        raise UpdateError("Не удалось скачать обновление. Проверьте подключение к интернету.\n"
+                          f"Подробности: {_reason(error)}") from error
     if release.get("size") and received != release["size"]:
         raise UpdateError("Обновление скачалось не полностью. Попробуйте ещё раз.")
     if release.get("sha256") and sha.hexdigest() != release["sha256"]:
