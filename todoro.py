@@ -1460,10 +1460,18 @@ class AboutWindow(tk.Toplevel):
         tk.Label(names, text=APP_NAME, bg=SURFACE, fg=TEXT, font=FONT_TITLE).pack(anchor="w")
         tk.Label(names, text=f"Список дел с Тоторо · версия {APP_VERSION}", bg=SURFACE, fg=MUTED, font=FONT).pack(anchor="w")
 
-        tk.Label(body, text=COPYRIGHT, bg=SURFACE, fg=TEXT, font=FONT_BOLD).pack(anchor="w", pady=(18, 2))
-        link = tk.Label(body, text=PROJECT_URL.removeprefix("https://"), bg=SURFACE, fg=ACCENT,
+        # Автор: логотип machinist-soft слева от копирайта и ссылки на проект.
+        author = tk.Frame(body, bg=SURFACE)
+        author.pack(fill="x", pady=(18, 10))
+        logo = IMAGES.get("machinist_dark" if THEME == "dark" else "machinist")
+        if logo:
+            tk.Label(author, image=logo, bg=SURFACE).pack(side="left", padx=(0, 12))
+        credits = tk.Frame(author, bg=SURFACE)
+        credits.pack(side="left", anchor="center")
+        tk.Label(credits, text=COPYRIGHT, bg=SURFACE, fg=TEXT, font=FONT_BOLD).pack(anchor="w", pady=(0, 2))
+        link = tk.Label(credits, text=PROJECT_URL.removeprefix("https://"), bg=SURFACE, fg=ACCENT,
                         font=(*FONT_SMALL, "underline"), cursor="hand2")
-        link.pack(anchor="w", pady=(0, 10))
+        link.pack(anchor="w")
         link.bind("<Button-1>", lambda e: webbrowser.open(PROJECT_URL))
         for text, color, font in ((LICENSE_SUMMARY, TEXT, FONT_SMALL), (GHIBLI_NOTE, MUTED, FONT_SMALL)):
             tk.Label(body, text=text, bg=SURFACE, fg=color, font=font, justify="left",
