@@ -12,7 +12,7 @@ description: Выпуск новой версии ToDoro — номер верс
 ## Пути и инструменты
 
 - Проект: `D:\Claude\ToDoro`, ветка `main`, GitHub: `machinist-soft/ToDoro` (публичный).
-- Python: `C:\Users\amfil\AppData\Local\Python\bin\python.exe`
+- Python: `%LOCALAPPDATA%\Python\bin\python.exe`
 - git: `C:\Program Files\Git\cmd\git.exe` (в PowerShell может не быть в PATH — обнови `$env:Path`
   из переменных Machine + User).
 - gh: `%LOCALAPPDATA%\Programs\GitHub CLI\bin\gh.exe` (пользователь входит сам: `gh auth login --web`).
@@ -119,7 +119,7 @@ description: Выпуск новой версии ToDoro — номер верс
 
 - Перезапусти программу пользователя: закрой окно ToDoro мягко (`CloseMainWindow` у процесса
   `pythonw` с заголовком `*ToDoro*` — когда активна справка, заголовок «Справка — ToDoro») и
-  запусти ярлык `C:\Users\amfil\Desktop\ToDoro.lnk`. Проверь, что осталась одна копия программы.
+  запусти ярлык `%USERPROFILE%\Desktop\ToDoro.lnk`. Проверь, что осталась одна копия программы.
 - Отчёт пользователю: номер версии, ссылка
   `https://github.com/machinist-soft/ToDoro/releases/tag/v<версия>`, что вошло (2–5 пунктов),
   что обновлено (README, справка, скриншоты), что не удалось проверить — прямо.
