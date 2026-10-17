@@ -6360,10 +6360,31 @@ class TodoApp:
         lists = [dict(item, shared=False) for item in db.list_registry(self.prefs)]
         if self.team:
             try:
-                lists += self.team.lists()
+                shared = self.team.lists()
+                lists += shared
+                # запоминаем, какие общие списки есть, — чтобы показывать их в меню и без связи
+                seen = {"folder": self.team.folder,
+                        "lists": [{"id": i["id"], "name": i["name"]} for i in shared]}
+                if seen != db.get_json_setting(self.prefs, "shared_lists_seen", {}):
+                    db.set_json_setting(self.prefs, "shared_lists_seen", seen)
             except sqlite3.Error as error:
                 self.team, self.team_error = None, str(error)
         self.lists = lists
+
+    def unreachable_lists(self):
+        """Общие списки, которые были в общей папке при последней связи с ней."""
+        seen = db.get_json_setting(self.prefs, "shared_lists_seen", {})
+        folder = db.get_setting(self.prefs, "shared_folder", "")
+        return seen.get("lists", []) if folder and seen.get("folder") == folder.strip() else []
+
+    def try_reconnect(self):
+        """Пункт меню «Подключиться снова»."""
+        self.reconnect_at = 0
+        if self.probe and self.probe.online():
+            self.reconnect_team()
+        if self.team is None:
+            ui.showwarning(APP_NAME, self.team_error or self.offline_text(
+                db.get_setting(self.prefs, "shared_folder", "")), parent=self.root)
 
     def list_conn(self, list_id):
         """Соединение с файлом списка (открывается один раз и потом переиспользуется)."""
@@ -6415,6 +6436,8 @@ class TodoApp:
     def show_lists_menu(self):
         if self.share_online():  # вдруг кто-то добавил общий список
             self.load_lists()
+        elif self.team:  # связь только что пропала, а watch_changes ещё не заметил
+            self.go_offline()
         menu = PopupMenu()
         menu.command("Мои списки", None, enabled=False)
         for item in self.lists:
@@ -6422,16 +6445,21 @@ class TodoApp:
                 menu.command(item["name"], lambda i=item["id"]: self.switch_list(i),
                              checked=item["id"] == self.list_id)
         menu.separator()
-        menu.command("Общие списки", None, enabled=False)
-        if self.team:
+        offline = self.team is None and bool(db.get_setting(self.prefs, "shared_folder", ""))
+        menu.command("Общие списки — нет связи" if offline else "Общие списки", None, enabled=False)
+        if offline:
+            # списки не прячем: видно, что они есть, но сейчас недоступны
+            for item in self.unreachable_lists():
+                menu.command(item["name"], None, accel="нет связи", enabled=False)
+            menu.command("Подключиться снова", self.try_reconnect)
+            menu.command("Настройки общей папки…", lambda: self.show_settings("sharing"))
+        elif self.team:
             shared = [i for i in self.lists if i["shared"]]
             for item in shared:
                 menu.command(item["name"], lambda i=item["id"]: self.switch_list(i),
                              checked=item["id"] == self.list_id)
             if not shared:
                 menu.command("пока нет — создайте первый", None, enabled=False)
-        elif self.team_error:
-            menu.command("Общая папка недоступна…", lambda: self.show_settings("sharing"))
         else:
             menu.command("Подключить общие списки…", lambda: self.show_settings("sharing"))
         personal = self.list_id == db.PERSONAL
