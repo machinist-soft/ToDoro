@@ -1776,7 +1776,7 @@ TotoroPanel.ZZZ_COLORS = [tint(MUTED, k / 6, SURFACE) for k in range(7)]
 class TaskCard(tk.Frame):
     """Карточка выбранной задачи: заголовок, описание и все поля."""
 
-    def __init__(self, parent, on_close, on_edit, on_email, on_toggle, on_delete, extras):
+    def __init__(self, parent, on_close, on_edit, on_email, on_toggle, on_delete, extras, on_collapse):
         super().__init__(parent, bg=SURFACE, padx=18, pady=14)
         wrap = PANEL_WIDTH - 40
         # ширину панели можно менять — заголовок переносится по её ширине
@@ -1795,6 +1795,7 @@ class TaskCard(tk.Frame):
         close.bind("<Button-1>", lambda e: on_close())
         close.bind("<Enter>", lambda e: close.configure(fg=TEXT))
         close.bind("<Leave>", lambda e: close.configure(fg=MUTED))
+        collapse_button(top, on_collapse).pack(side="right", padx=(0, 10))
 
         self.title = tk.Label(self, bg=SURFACE, fg=TEXT, font=("Segoe UI Semibold", 14),
                               wraplength=wrap, justify="left", anchor="w")
@@ -2139,16 +2140,45 @@ class ScrollArea(tk.Frame):
         return "break"  # и не меняем значение в выпадающих списках при прокрутке
 
 
+def collapse_button(parent, command, text="»"):
+    """Кнопка «»» — свернуть правую панель в полоску («« — развернуть обратно)."""
+    button = tk.Label(parent, text=text, bg=SURFACE, fg=MUTED, font=("Segoe UI", 13), cursor="hand2")
+    button.bind("<Button-1>", lambda e: command())
+    button.bind("<Enter>", lambda e: button.configure(fg=TEXT))
+    button.bind("<Leave>", lambda e: button.configure(fg=MUTED))
+    return button
+
+
+class SideStrip(tk.Frame):
+    """Свёрнутая правая панель: узкая полоска; щелчок по ней разворачивает панель."""
+
+    WIDTH = 28
+
+    def __init__(self, parent, on_expand):
+        super().__init__(parent, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER,
+                         highlightcolor=BORDER, width=self.WIDTH, cursor="hand2")
+        self.pack_propagate(False)
+        button = collapse_button(self, on_expand, text="«")
+        button.pack(side="top", pady=(10, 0))
+        self.bind("<Button-1>", lambda e: on_expand())
+        self.bind("<Enter>", lambda e: button.configure(fg=TEXT))
+        self.bind("<Leave>", lambda e: button.configure(fg=MUTED))
+
+
 class SidePanel(tk.Frame):
     """Правая панель: Тоторо, пока задача не выбрана, иначе — карточка задачи
-    или форма её изменения."""
+    или форма её изменения. Кнопкой «»» (или Ctrl+B) сворачивается в полоску."""
 
-    def __init__(self, parent, on_task_click, on_close, on_edit, on_email, on_toggle, on_delete, extras):
+    def __init__(self, parent, on_task_click, on_close, on_edit, on_email, on_toggle, on_delete, extras,
+                 on_collapse):
         super().__init__(parent, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER,
                          highlightcolor=BORDER, width=PANEL_WIDTH)
         self.pack_propagate(False)  # ширину задаёт разделитель, а не длина текста
+        self.on_collapse = on_collapse
         self.totoro = TotoroPanel(self, on_task_click)
-        self.card = TaskCard(self, on_close, on_edit, on_email, on_toggle, on_delete, extras)
+        self.card = TaskCard(self, on_close, on_edit, on_email, on_toggle, on_delete, extras, on_collapse)
+        # У Тоторо своей строки с кнопками нет — кнопка «»» лежит в правом верхнем углу
+        self.totoro_collapse = collapse_button(self, on_collapse)
         self.editor = None  # форма задачи (с прокруткой и кнопками внизу), пока задача редактируется
         self.form = None
         self.mode = None
@@ -2163,6 +2193,11 @@ class SidePanel(tk.Frame):
             self.editor.destroy()
             self.editor, self.form = None, None
         widget.pack(fill="both", expand=True)
+        if mode == "totoro":
+            self.totoro_collapse.place(relx=1, x=-8, y=4, anchor="ne")
+            self.totoro_collapse.lift()
+        else:
+            self.totoro_collapse.place_forget()
         self.mode = mode
 
     def show_totoro(self):
@@ -2193,6 +2228,7 @@ class SidePanel(tk.Frame):
         close = tk.Label(head, text="✕", bg=SURFACE, fg=MUTED, font=FONT, cursor="hand2")
         close.pack(side="right")
         close.bind("<Button-1>", lambda e: on_cancel())
+        collapse_button(head, self.on_collapse).pack(side="right", padx=(0, 10))
         self.form = TaskForm(area.inner, task, statuses, on_save, on_cancel, compact=True,
                              members=members)
         self.form.pack(fill="x", padx=18, pady=(0, 16))
@@ -4203,12 +4239,17 @@ class TodoApp:
         content.bind("<Leave>", lambda e: self.reset_cursor(), add="+")
         self.side = SidePanel(content, on_task_click=self.reveal_task,
                               on_close=self.clear_selection, on_edit=self.edit, on_email=self.email,
-                              on_toggle=self.toggle, on_delete=self.delete, extras=self)
+                              on_toggle=self.toggle, on_delete=self.delete, extras=self,
+                              on_collapse=self.toggle_side_panel)
         self.panel_width = int(db.get_setting(self.prefs, "panel_width", PANEL_WIDTH))
+        # Панель можно свернуть в узкую полоску (кнопка «»», Ctrl+B или разделитель — к краю окна)
+        self.side_strip = SideStrip(content, on_expand=self.toggle_side_panel)
+        self.side_collapsed = db.get_setting(self.prefs, "panel_collapsed", "0") == "1"
+        self.side_room = True  # окно достаточно широкое для панели
         self.side.totoro.animate = db.get_setting(self.prefs, "totoro_animate", "1") == "1"
         # В узком окне панель прячется, чтобы не теснить таблицу
         content.bind("<Configure>", self.fit_side_panel)
-        content.bind("<ButtonRelease-1>", lambda e: self.save_panel_width())
+        content.bind("<ButtonRelease-1>", self.sash_released)
         self.editing = None  # id задачи, которая сейчас редактируется в правой панели
 
         card = tk.Frame(content, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
@@ -4286,6 +4327,7 @@ class TodoApp:
             root.bind(sequence, lambda e, a=action: self.key_action(e, a))
         root.bind("<F1>", lambda e: self.show_help())
         root.bind("<Control-KeyPress>", self.paste_key, add="+")
+        root.bind("<Control-KeyPress>", self.side_panel_key, add="+")
         for key in ("<Control-f>", "<Control-F>"):
             root.bind(key, lambda e: (self.search.focus_set(), "break")[1])
         for key in ("<Control-n>", "<Control-N>"):
@@ -4392,12 +4434,12 @@ class TodoApp:
             if other is not main and self.in_paned(other):
                 self.paned.forget(other)
         if not self.in_paned(main):
-            if self.in_paned(self.side):
-                self.paned.add(main, before=self.side, stretch="always", minsize=420)
+            right = [w for w in (self.side, self.side_strip) if self.in_paned(w)]
+            if right:
+                self.paned.add(main, before=right[0], stretch="always", minsize=420)
             else:
                 self.paned.add(main, stretch="always", minsize=420)
-        if not self.in_paned(self.side):
-            self.paned.add(self.side, stretch="never", minsize=240, width=self.panel_width)
+        self.place_side()
 
     def show_settings(self, page="general"):
         if self.team:
@@ -4514,6 +4556,8 @@ class TodoApp:
                 .command("Задача из письма Outlook", self.from_outlook, accel=OUTLOOK_HOTKEY_NAME)
                 .command("Задача со снимка экрана", self.from_screen, accel=SNIP_HOTKEY_NAME)
                 .command("Добавить колонку на доску…", self.add_lane)
+                .command("Развернуть правую панель" if self.side_collapsed else "Свернуть правую панель",
+                         self.toggle_side_panel, accel="Ctrl+B", enabled=self.side_room)
                 .submenu("Экспорт и импорт", data)
                 .submenu("Примеры задач", examples)
                 .separator()
@@ -4678,13 +4722,52 @@ class TodoApp:
             pass  # окно уже закрыто
 
     def fit_side_panel(self, event):
-        wide_enough = event.width >= 1000
-        shown = self.in_paned(self.side)
-        if wide_enough and not shown:
-            self.paned.add(self.side, stretch="never", minsize=240, width=self.panel_width)
-        elif not wide_enough and shown:
+        self.side_room = event.width >= 1000
+        if not self.side_room:
             self.save_panel_width()
-            self.paned.forget(self.side)
+        self.place_side()
+
+    def place_side(self):
+        """Справа в разделителе — панель, полоска (панель свёрнута) или ничего (окно узкое)."""
+        want = None if not self.side_room else self.side_strip if self.side_collapsed else self.side
+        for widget in (self.side, self.side_strip):
+            if widget is not want and self.in_paned(widget):
+                self.paned.forget(widget)
+        if want is self.side and not self.in_paned(self.side):
+            self.paned.add(self.side, stretch="never", minsize=240, width=self.panel_width)
+        elif want is self.side_strip and not self.in_paned(self.side_strip):
+            self.paned.add(self.side_strip, stretch="never", minsize=SideStrip.WIDTH,
+                           width=SideStrip.WIDTH)
+
+    def toggle_side_panel(self, save_width=True):
+        """Свернуть правую панель в полоску или развернуть её обратно (Ctrl+B)."""
+        if not self.side_room:
+            return  # в узком окне панели нет вовсе
+        if not self.side_collapsed:
+            if save_width:
+                self.save_panel_width()
+            self.finish_editing()  # несохранённые изменения в форме — спросим, сохранить ли
+        self.side_collapsed = not self.side_collapsed
+        db.set_setting(self.prefs, "panel_collapsed", "1" if self.side_collapsed else "0")
+        self.place_side()
+        if not self.side_collapsed:
+            self.update_side()
+        self.reset_cursor()
+
+    def sash_released(self, event):
+        """Отпустили разделитель. Утянули его почти к правому краю — панель сворачивается,
+        потянули полоску влево — разворачивается. Иначе запоминаем новую ширину панели."""
+        edge = self.paned.winfo_width() - event.x
+        if self.in_paned(self.side) and edge < 150:
+            self.toggle_side_panel(save_width=False)  # развернётся прежней ширины
+        elif self.in_paned(self.side_strip):
+            if edge > SideStrip.WIDTH + 80:
+                self.toggle_side_panel()
+            else:  # потянули чуть-чуть — полоска возвращается к своей ширине
+                self.paned.forget(self.side_strip)
+                self.place_side()
+        else:
+            self.save_panel_width()
 
     def save_panel_width(self):
         """Ширина правой панели запоминается (её меняют, потянув за разделитель)."""
@@ -5721,6 +5804,13 @@ class TodoApp:
         ui.showinfo(APP_NAME, "В буфере обмена нет картинки или файлов.\n\n"
                     "Сделайте снимок экрана (Win+Shift+S) или скопируйте файл в Проводнике, "
                     "а потом нажмите «Вставить».", parent=self.root)
+
+    def side_panel_key(self, event):
+        """Ctrl+B (в любой раскладке) сворачивает и разворачивает правую панель."""
+        if event.keycode != 66:
+            return None
+        self.toggle_side_panel()
+        return "break"
 
     def paste_key(self, event):
         """Ctrl+V при открытой вкладке «Файлы» (в любой раскладке) вставляет из буфера."""
