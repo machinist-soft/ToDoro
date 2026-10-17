@@ -4,7 +4,6 @@
 Работают на временных файлах — данные пользователя не трогают.
 """
 import shutil
-import sqlite3
 import sys
 import tempfile
 import unittest
@@ -113,6 +112,12 @@ class DatabaseTests(TempDir):
         self.assertEqual(dst.execute("SELECT COUNT(*) FROM attachments").fetchone()[0], 0)
         self.assertEqual(dst.execute("SELECT COUNT(*) FROM comments").fetchone()[0], 0)
         self.assertEqual(db.list_tasks(conn)[0][0], other)
+        # файлы и комментарии соседней задачи при этом остаются
+        db.add_comment(conn, other, "свой")
+        gone = db.add_task(conn, "удалить")
+        db.add_comment(conn, gone, "чужой")
+        db.delete_task(conn, gone)
+        self.assertEqual(db.extras_counts(conn), {other: (0, 1)})
 
     def test_examples_have_files_and_comments(self):
         from examples import make_examples
@@ -176,6 +181,11 @@ class AppHelpersTests(TempDir):
         stems = self.T.search_stems("Исполнитель отчёт")
         self.assertTrue(all(any(s in word for s in stems[:1]) for word in ("исполнителя", "исполнителю")))
         self.assertIn("отчё", stems[1])
+
+    def test_remind_labels(self):
+        self.assertEqual(self.T.remind_label(60), "За 1 час")
+        self.assertEqual(self.T.remind_label(90), "За 1 ч 30 мин")
+        self.assertEqual(self.T.remind_label(3 * 24 * 60), "За 3 дн")
 
     def test_csv_roundtrip(self):
         conn = db.connect(self.dir / "a.db")

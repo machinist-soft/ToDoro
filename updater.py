@@ -209,6 +209,7 @@ def download(release, on_progress=None, timeout=30):
         raise UpdateError("Не удалось скачать обновление. Проверьте подключение к интернету.\n"
                           f"Подробности: {_reason(error)}") from error
     if release.get("size") and received != release["size"]:
+        path.unlink(missing_ok=True)
         raise UpdateError("Обновление скачалось не полностью. Попробуйте ещё раз.")
     if release.get("sha256") and sha.hexdigest() != release["sha256"]:
         path.unlink(missing_ok=True)

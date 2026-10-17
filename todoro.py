@@ -21,7 +21,7 @@ from urllib.parse import quote
 from ctypes import wintypes
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from tkinter import colorchooser, filedialog, ttk
+from tkinter import colorchooser, filedialog, font as tkfont, ttk
 
 import db
 import outlook
@@ -168,6 +168,16 @@ REMIND_OPTIONS = {
     "За 1 неделю": 7 * 24 * 60,
 }
 REMIND_LABELS = {minutes: label for label, minutes in REMIND_OPTIONS.items()}
+
+
+def remind_label(minutes):
+    """Подпись напоминания: «За 1 час»; своё время (например, из файла CSV) — «За 1 ч 30 мин»."""
+    if minutes in REMIND_LABELS:
+        return REMIND_LABELS[minutes]
+    days, rest = divmod(minutes, 24 * 60)
+    hours, mins = divmod(rest, 60)
+    parts = [f"{n} {unit}" for n, unit in ((days, "дн"), (hours, "ч"), (mins, "мин")) if n]
+    return "За " + " ".join(parts or ["0 мин"])
 
 # Приоритет по матрице Эйзенхауэра: из «срочно» и «важно» получается 4 уровня.
 # 1 — срочно и важно, 2 — важно, 3 — срочно, 4 — ни то ни другое.
@@ -443,6 +453,9 @@ def format_due(due_at):
 
 
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+# Вложения, которые при открытии запускаются как программа, — перед открытием спрашиваем
+RISKY_TYPES = {".exe", ".com", ".bat", ".cmd", ".msi", ".msp", ".scr", ".pif", ".cpl", ".js", ".jse",
+               ".vbs", ".vbe", ".wsf", ".wsh", ".ps1", ".psm1", ".hta", ".lnk", ".reg", ".jar", ".appref-ms"}
 
 
 def format_size(size):
@@ -592,7 +605,7 @@ def export_rows(conn):
     statuses = {sid: name for sid, name, _, _ in db.list_statuses(conn)}
     authors, assignees = db.task_people(conn)
     rows = []
-    for task_id, title, done, created, due_at, remind_before, urgent, important, body, status_id \
+    for task_id, title, _done, created, due_at, remind_before, urgent, important, body, status_id \
             in db.list_tasks(conn):
         remind = REMIND_LABELS.get(remind_before, remind_before or "") if due_at else ""
         if remind == "Не напоминать":
@@ -1043,10 +1056,16 @@ class TaskForm(ttk.Frame):
         self.priority_changed()
 
         label("Напоминание")
-        self.remind = ttk.Combobox(self, values=list(REMIND_OPTIONS), state="readonly",
+        # Своё время напоминания (например, «90» из файла CSV) — отдельным пунктом, иначе при
+        # сохранении формы оно молча пропало бы
+        self.remind_options = dict(REMIND_OPTIONS)
+        if task["remind_before"] not in REMIND_LABELS:
+            self.remind_options[remind_label(task["remind_before"])] = task["remind_before"]
+        self.remind = ttk.Combobox(self, values=list(self.remind_options), state="readonly",
                                    width=1 if compact else 18, font=FONT)
         self.remind.pack(fill="x" if compact else None, anchor="w")
-        self.remind.set(REMIND_LABELS.get(task["remind_before"], f"За {task['remind_before']} мин"))
+        self.remind.set(next(label for label, minutes in self.remind_options.items()
+                             if minutes == task["remind_before"]))
 
         if not compact:  # в правой панели кнопки — в нижней строке панели (SidePanel.show_form)
             buttons = ttk.Frame(self, style=self["style"])
@@ -1099,7 +1118,7 @@ class TaskForm(ttk.Frame):
             assignee = self.assignee.get()
         return dict(title=self.title_entry.get().strip(), body=self.desc.get("1.0", "end-1c").strip(),
                     status_id=status_id, due_at=due_at,
-                    remind_before=REMIND_OPTIONS.get(self.remind.get()),
+                    remind_before=self.remind_options.get(self.remind.get()),
                     urgent=self.urgent.get(), important=self.important.get(), assignee=assignee)
 
     def dirty(self):
@@ -1311,7 +1330,7 @@ class HelpWindow(tk.Toplevel):
     def layout_nav(self):
         visible = {i for i, t in enumerate(self.topics) if self.matches(t)}
         groups = {self.topics[i]["group"] for i in visible}
-        for widget, index, group in self.nav_rows:
+        for widget, *_ in self.nav_rows:
             widget.pack_forget()
         self.empty.pack_forget()
         for widget, index, group in self.nav_rows:
@@ -3687,7 +3706,7 @@ class KanbanBoard(tk.Frame):
                 fill="x", pady=(4, 0))
         extra = []
         if "remind" in fields and due_at and remind_before:
-            extra.append("Напомнить " + REMIND_LABELS.get(remind_before, f"За {remind_before} мин").lower())
+            extra.append("Напомнить " + remind_label(remind_before).lower())
         if "created" in fields:
             extra.append("Создана " + created[:5])
         if "assignee" in fields and self.app.assignees.get(task_id):
@@ -3695,7 +3714,9 @@ class KanbanBoard(tk.Frame):
         if "author" in fields and self.app.authors.get(task_id):
             extra.append("Автор " + self.app.authors[task_id])
         if extra:
-            tk.Label(content, text=" · ".join(extra), bg=SURFACE, fg=MUTED, font=FONT_SMALL,
+            # неразрывные пробелы внутри пары: строка переносится только между «· …», а не
+            # так, что «Автор» остаётся в конце строки, а имя уезжает на следующую
+            tk.Label(content, text=" · ".join(part.replace(" ", " ") for part in extra), bg=SURFACE, fg=MUTED, font=FONT_SMALL,
                      anchor="w", justify="left", wraplength=self.card_width - 60).pack(fill="x", pady=(2, 0))
         # 📎 и 💬 — отдельной строкой: её можно обновить, не перерисовывая доску
         card.mark = tk.Label(content, bg=SURFACE, fg=MUTED, font=FONT_SMALL, anchor="w")
@@ -4259,7 +4280,7 @@ class TodoApp:
         self.scrollbar = ttk.Scrollbar(inner, orient="vertical")
         columns = {
             "num": ("№", 52, False),
-            "status": ("СТАТУС", 125, False),
+            "status": ("СТАТУС", 140, False),
             "title": ("ЗАДАЧА", 220, False),
             "priority": ("ПРИОРИТЕТ", 130, False),
             "due": ("СРОК", 125, False),
@@ -4300,7 +4321,12 @@ class TodoApp:
         self.tree.tag_configure("hover", background=ROW_HOVER)
         self.hover_row = None
         self.tree.bind("<Motion>", self.tree_motion)
-        self.tree.bind("<Leave>", lambda e: self.set_hover(None))
+        self.tree.bind("<Leave>", lambda e: (self.set_hover(None), self.hide_title_tip()))
+        # подсказка с полным названием задачи, если оно не помещается в столбец
+        self.tree_font = tkfont.Font(root=root, font=FONT)
+        self.tip_row = self.tip_job = self.tip_window = None
+        for sequence in ("<ButtonPress-1>", "<ButtonPress-3>", "<MouseWheel>", "<KeyPress>"):
+            self.tree.bind(sequence, self.hide_title_tip, add="+")
         self.tree.bind("<ButtonRelease-1>", self.save_column_widths, add="+")
         self.tree.tag_configure("done", foreground=DONE)
         self.tree.tag_configure("overdue", foreground=DANGER)
@@ -4401,6 +4427,45 @@ class TodoApp:
         # На разделителе столбцов курсор показывает, что ширину можно менять
         self.tree.configure(cursor="sb_h_double_arrow" if region == "separator" else "")
         self.set_hover(self.tree.identify_row(event.y) if region in ("cell", "tree") else None)
+        self.title_tip(event, region)
+
+    def title_tip(self, event, region):
+        """Название задачи не помещается в столбец — через полсекунды под мышью появится
+        подсказка с полным названием."""
+        row = self.tree.identify_row(event.y) if region == "cell" else ""
+        column = self.tree.identify_column(event.x)
+        shown = self.tree["displaycolumns"]
+        shown = self.tree["columns"] if tuple(shown) == ("#all",) else shown
+        index = int(column[1:]) - 1 if column[1:].isdigit() else -1
+        key = row if row and 0 <= index < len(shown) and shown[index] == "title" else None
+        if key == self.tip_row:
+            return
+        self.hide_title_tip()
+        self.tip_row = key
+        if key is None:
+            return
+        text = self.tree.set(key, "title")
+        if self.tree_font.measure(text) + 14 > self.tree.column("title", "width"):
+            self.tip_job = self.root.after(500, lambda: self.show_title_tip(text))
+
+    def show_title_tip(self, text):
+        self.tip_job = None
+        tip = self.tip_window = tk.Toplevel(self.root)
+        tip.overrideredirect(True)
+        tip.attributes("-topmost", True)
+        tk.Label(tip, text=text, bg=SURFACE, fg=TEXT, font=FONT_SMALL, justify="left",
+                 wraplength=520, padx=10, pady=6, highlightthickness=1,
+                 highlightbackground=POPUP_BORDER).pack()
+        tip.geometry(f"+{self.root.winfo_pointerx() + 12}+{self.root.winfo_pointery() + 20}")
+
+    def hide_title_tip(self, event=None):
+        self.tip_row = None
+        if self.tip_job:
+            self.root.after_cancel(self.tip_job)
+            self.tip_job = None
+        if self.tip_window is not None:
+            self.tip_window.destroy()
+            self.tip_window = None
 
     def set_hover(self, row):
         if row == self.hover_row:
@@ -4880,7 +4945,7 @@ class TodoApp:
         name, color, _ = self.statuses.get(status_id, ("—", MUTED, done))
         overdue = bool(due_at and not done and datetime.fromisoformat(due_at) < datetime.now())
         level = priority_level(urgent, important)
-        remind = REMIND_LABELS.get(remind_before, f"За {remind_before} мин") if due_at and remind_before else ""
+        remind = remind_label(remind_before) if due_at and remind_before else ""
         return dict(title=title, body=body, done=bool(done), overdue=overdue, status_id=status_id,
                     status=status_label(name, done, overdue), status_name=name, status_color=color,
                     level=level, priority=PRIORITY_NAMES[level], due=format_due(due_at),
@@ -5309,7 +5374,7 @@ class TodoApp:
         active = sum(1 for row in rows if not row[2])
         self.chips["active"].configure(text=f"Активных  {active}")
         self.chips["done"].configure(text=f"Выполнено  {len(rows) - active}")
-        self.chips["today"].configure(text=f"✔ Сегодня  {self.done_today}")
+        self.chips["today"].configure(text=f"✔ Сделано сегодня  {self.done_today}")
 
         wanted = FILTERS[self.filter.get()]
         now = datetime.now()
@@ -5324,12 +5389,11 @@ class TodoApp:
         rows = self.sort_rows(rows, statuses)
         overdue_ids = late & {r[0] for r in rows}
 
+        self.hide_title_tip()
         self.tree.delete(*self.tree.get_children())
         self.due, self.row_status = {}, {}
         for task_id, title, done, created, due_at, remind_before, urgent, important, _, status_id in rows:
-            remind = REMIND_LABELS.get(remind_before, f"За {remind_before} мин") if due_at else ""
-            if remind == "Не напоминать":
-                remind = ""
+            remind = remind_label(remind_before) if due_at and remind_before is not None else ""
             level = priority_level(urgent, important)
             iid = str(task_id)
             name = self.statuses.get(status_id, ("—",))[0]
@@ -5835,6 +5899,12 @@ class TodoApp:
             return
         if data is None:
             return
+        if Path(name).suffix.lower() in RISKY_TYPES and not ui.askyesno(
+                "Запустить программу?",
+                f"«{name}» — программа или сценарий: при открытии он запустится на этом "
+                "компьютере.\n\nОткрывайте, только если доверяете тому, кто приложил файл. "
+                "Запустить?", icon="warning", default="no", parent=self.root):
+            return
         safe = re.sub(r'[\\/:*?"<>|]', "_", name).strip() or "файл"
         folder = Path(tempfile.gettempdir()) / "ToDoro" / f"{self.list_id}-{attachment_id}"
         try:
@@ -6062,11 +6132,16 @@ class TodoApp:
         try:
             conn = self.list_conn(list_id)
             db.list_statuses(conn)  # проверка, что файл читается
-        except sqlite3.Error:
+        except (sqlite3.Error, StopIteration) as error:
             self.forget_list(list_id)
-            ui.showerror(APP_NAME, "Не удалось открыть общий список — общая папка "
-                                 "сейчас недоступна. Проверьте сеть (VPN) и попробуйте ещё раз.",
-                                 parent=self.root)
+            item = next((i for i in self.lists if i["id"] == list_id), None)
+            if item is None or item["shared"]:
+                text = ("Не удалось открыть общий список — общая папка сейчас недоступна. "
+                        "Проверьте сеть (VPN) и попробуйте ещё раз.")
+            else:
+                text = (f"Не удалось открыть список «{item['name']}».\n\n{error}\n\n"
+                        f"Файл списка: {db.list_path(item)}")
+            ui.showerror(APP_NAME, text, parent=self.root)
             return
         self.list_id, self.conn = list_id, conn
         self.watch = None

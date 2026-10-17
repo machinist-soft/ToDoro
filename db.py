@@ -97,9 +97,6 @@ def connect(path=None, timeout=5):
             "INSERT INTO statuses (name, color, position, is_done) VALUES (?, ?, ?, ?)",
             [(name, color, i, done) for i, (name, color, done) in enumerate(DEFAULT_STATUSES)],
         )
-    # Задачам без статуса (из старых версий) назначаем: выполненным — первую «выполненную»
-    # колонку, остальным — первую невыполненную, кроме самой первой («Новая»), если она есть:
-    # раньше такие задачи показывались как «В работе».
     # Вложения (файлы и картинки) и комментарии к задачам. Файл хранится прямо в базе списка:
     # так он виден всем участникам общего списка и переносится вместе с задачей.
     conn.executescript(
@@ -124,6 +121,9 @@ def connect(path=None, timeout=5):
         CREATE INDEX IF NOT EXISTS comments_task ON comments (task_id);
         """
     )
+    # Задачам без статуса (из старых версий) назначаем: выполненным — первую «выполненную»
+    # колонку, остальным — первую невыполненную, кроме самой первой («Новая»), если она есть:
+    # раньше такие задачи показывались как «В работе».
     if conn.execute("SELECT EXISTS (SELECT 1 FROM tasks WHERE status_id IS NULL)").fetchone()[0]:
         open_ids = [r[0] for r in conn.execute("SELECT id FROM statuses WHERE is_done = 0 ORDER BY position")]
         done_ids = [r[0] for r in conn.execute("SELECT id FROM statuses WHERE is_done = 1 ORDER BY position")]
@@ -408,9 +408,11 @@ def set_json_setting(conn, key, value):
 
 
 def delete_task(conn, task_id):
+    """Удаляет задачу вместе с её файлами и комментариями."""
     with conn:
         conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-        drop_orphans(conn)
+        for table in ("attachments", "comments"):
+            conn.execute(f"DELETE FROM {table} WHERE task_id = ?", (task_id,))
 
 
 def drop_orphans(conn):
