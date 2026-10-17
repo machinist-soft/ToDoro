@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200" role="img" aria-label="machinist-soft">
+  <title>machinist-soft</title>
+  <g fill="#15171C">
+    <circle cx="100" cy="28.5" r="2"/>
+    <circle cx="100" cy="22" r="3.2"/>
+    <circle cx="100" cy="13.5" r="5"/>
+    <rect x="82" y="32" width="36" height="6"/>
+    <rect x="90" y="38" width="20" height="22"/>
+    <rect x="54" y="146" width="92" height="8"/>
+    <rect x="66" y="154" width="12" height="14"/>
+    <rect x="122" y="154" width="12" height="14"/>
+  </g>
+  <g fill="none" stroke="#15171C">
+    <circle cx="100" cy="100" r="95" stroke-width="4"/>
+    <circle cx="100" cy="100" r="36" stroke-width="12"/>
+    <path d="M72 174 L56 188 M128 174 L144 188" stroke-width="4"/>
+  </g>
+  <path d="M92 86 Q86 86 86 92 L86 97 Q86 100 82 100 Q86 100 86 103 L86 108 Q86 114 92 114 M108 86 Q114 86 114 92 L114 97 Q114 100 118 100 Q114 100 114 103 L114 108 Q114 114 108 114" fill="none" stroke="#D9481C" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

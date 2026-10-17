@@ -163,3 +163,16 @@ python todoro.py
 
 Код — MIT, © 2026 Machinist. См. [LICENSE](LICENSE).
 Code is MIT-licensed, © 2026 Machinist. See [LICENSE](LICENSE).
+
+---
+
+<p align="center">
+  <a href="https://github.com/machinist-soft">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/machinist-soft-dark.svg">
+      <img src="docs/brand/machinist-soft-light.svg" width="72" height="72" alt="machinist-soft">
+    </picture>
+  </a>
+  <br>
+  <sub>Сделано в / Made by <a href="https://github.com/machinist-soft"><b>machinist-soft</b></a></sub>
+</p>
