@@ -81,7 +81,7 @@ share.close()
 for key, value in (("update_auto", "0"), ("start_mode", "window"), ("view", "list"),
                    ("update_checked", "2099-01-01"), ("shared_folder", str(work / "share")),
                    ("user_name", ME), ("current_list", item["id"]),
-                   ("theme", "dark" if DARK else "light")):
+                   ("theme", "dark" if DARK else "light"), ("tour_show", "0")):
     db.set_setting(prefs, key, value)
 # уже «видели» все назначенные задачи — чтобы окно «Вам назначены задачи» не попало в кадр
 db.set_json_setting(prefs, "assigned_seen_lists", [item["id"]])

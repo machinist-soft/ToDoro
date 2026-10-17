@@ -55,6 +55,7 @@ IMAGES_DIR = Path(__file__).with_name("images")
 FONT = ("Segoe UI", 11)
 FONT_SMALL = ("Segoe UI", 10)
 FONT_BOLD = ("Segoe UI Semibold", 11)
+FONT_SMALL_BOLD = ("Segoe UI Semibold", 10)
 FONT_TITLE = ("Segoe UI Semibold", 20)
 
 # Палитры: светлая и тёмная. Все цвета интерфейса берутся отсюда по имени.
@@ -288,6 +289,8 @@ def setup_style(root):
               background=[("active", BG)])
     style.configure("Card.TCheckbutton", background=SURFACE)
     style.map("Card.TCheckbutton", background=[("active", SURFACE)])
+    style.configure("Tour.TCheckbutton", background=SURFACE, foreground=MUTED, font=FONT_SMALL)
+    style.map("Tour.TCheckbutton", background=[("active", SURFACE)])
     style.configure("Card.TRadiobutton", background=SURFACE)
     style.map("Card.TRadiobutton", background=[("active", SURFACE)])
     style.configure("Icon.TButton", padding=(6, 3), font=FONT)
@@ -1720,7 +1723,8 @@ class TaskCard(tk.Frame):
         self.fields.pack(side="bottom", fill="x")
         self.values = {}
         self.captions = {}
-        for row, (key, label) in enumerate((("due", "Срок"), ("remind", "Напомнить"),
+        for row, (key, label) in enumerate((("important", "Важность"), ("urgent", "Срочность"),
+                                            ("due", "Срок"), ("remind", "Напомнить"),
                                             ("created", "Создана"), ("author", "Автор"),
                                             ("assignee", "Исполнитель"), ("updated", "Изменена"))):
             caption = tk.Label(self.fields, text=label, bg=SURFACE, fg=MUTED, font=FONT_SMALL)
@@ -1753,9 +1757,10 @@ class TaskCard(tk.Frame):
         self.body_scroll.set(first, last)
 
     def show(self, number, title, body, status, status_color, overdue, done, priority_level_,
-             priority_name, due, remind, created, author="", assignee="", updated=""):
+             priority_name, due, remind, created, author="", assignee="", updated="",
+             urgent=False, important=False):
         shown = (number, title, body, status, status_color, overdue, done, priority_level_,
-                 priority_name, due, remind, created, author, assignee, updated)
+                 priority_name, due, remind, created, author, assignee, updated, urgent, important)
         if shown == getattr(self, "shown", None):
             return  # ничего не изменилось — не трогаем, чтобы не сбросить прокрутку описания
         self.shown = shown
@@ -1776,6 +1781,15 @@ class TaskCard(tk.Frame):
             self.body.insert("1.0", "Описания нет.\nНажмите «Изменить», чтобы его добавить.",
                              "empty")
         self.body.configure(state="disabled")
+        # важность и срочность отдельными строками; просроченная задача — срочная (как в матрице)
+        self.values["important"].configure(text="важно" if important else "не важно",
+                                           fg=TEXT if important else MUTED,
+                                           font=FONT_SMALL_BOLD if important else FONT_SMALL)
+        urgent_text = ("срочно" if urgent else "срочно — задача просрочена" if overdue
+                       else "не срочно")
+        self.values["urgent"].configure(text=urgent_text,
+                                        fg=DANGER if overdue else TEXT if urgent else MUTED,
+                                        font=FONT_SMALL_BOLD if urgent or overdue else FONT_SMALL)
         self.values["due"].configure(text=due or "не задан", fg=DANGER if overdue else TEXT)
         self.values["remind"].configure(text=remind or "нет")
         self.values["created"].configure(text=created)
@@ -2391,7 +2405,7 @@ class SettingsDialog(tk.Toplevel):
 
     def __init__(self, parent, start_mode, card_fields, update_auto, shared_folder="", user_name="",
                  team_status=None, page="general", check_folder=None, check_update=None,
-                 animate=True, theme="light"):
+                 animate=True, theme="light", tour=True):
         super().__init__(parent)
         self.result = None
         self.update_found = None  # найденная новая версия: откроется после закрытия настроек
@@ -2406,6 +2420,7 @@ class SettingsDialog(tk.Toplevel):
         self.update_auto = tk.BooleanVar(value=update_auto)
         self.animate = tk.BooleanVar(value=animate)
         self.theme = tk.StringVar(value=theme)
+        self.tour = tk.BooleanVar(value=tour)
 
         body = tk.Frame(self, bg=BG)
         body.pack(fill="both", expand=True)
@@ -2521,6 +2536,10 @@ class SettingsDialog(tk.Toplevel):
                            "Тоторо дышит, моргает, радуется, волнуется о просроченных задачах "
                            "и спит, когда всё сделано.")
         Toggle(control, self.animate).pack()
+        control = self.row(card, "Ознакомительный тур при запуске",
+                           "Показывать при запуске программы тур по её главным возможностям. "
+                           "Пройти его в любой момент: «☰ Меню» → «Ознакомительный тур».")
+        Toggle(control, self.tour).pack()
         return page
 
     def page_board(self):
@@ -2686,7 +2705,8 @@ class SettingsDialog(tk.Toplevel):
         self.result = dict(start_mode=self.start_mode.get(),
                            card_fields=[key for key, var in self.fields.items() if var.get()],
                            update_auto=self.update_auto.get(), shared_folder=folder, user_name=name,
-                           animate=self.animate.get(), theme=self.theme.get())
+                           animate=self.animate.get(), theme=self.theme.get(),
+                           tour=self.tour.get())
         self.destroy()
 
     def show(self):
@@ -2968,6 +2988,192 @@ class CatbusRun(tk.Toplevel):
     def rect_points(x1, y1, x2, y2, r):
         return [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
                 x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+
+
+class GuideTour:
+    """Ознакомительный тур: окошко с подсказкой у нужной части окна и синяя рамка вокруг неё.
+
+    steps — [(функция, возвращающая виджет или None, заголовок, текст)]. Без виджета подсказка
+    стоит посередине окна (приветствие и последний шаг). Шаги, чей виджет сейчас не виден
+    (например, правая панель в узком окне), пропускаются.
+    on_close(show_next_time) — тур закрыт; аргумент — показывать ли его при следующем запуске.
+    """
+
+    KEY = "#ff00fe"   # этот цвет Windows делает прозрачным: от окна рамки остаётся только рамка
+    PAD, GAP = 6, 14  # отступ рамки от виджета и подсказки от рамки
+    WIDTH = 420
+
+    def __init__(self, root, steps, on_close, hide_next_time=False):
+        self.root, self.steps, self.on_close = root, steps, on_close
+        self.index, self.shown_box = 0, None
+        self.hide_next = tk.BooleanVar(value=hide_next_time)
+
+        # рамка вокруг показываемой части окна (если Windows умеет прозрачные окна)
+        self.frame = tk.Toplevel(root)
+        self.frame.withdraw()
+        self.frame.overrideredirect(True)
+        self.frame.transient(root)
+        try:
+            self.frame.attributes("-transparentcolor", self.KEY)
+            self.frame.configure(bg=self.KEY)
+            self.ring = tk.Canvas(self.frame, bg=self.KEY, highlightthickness=0)
+            self.ring.pack(fill="both", expand=True)
+        except tk.TclError:
+            self.frame.destroy()
+            self.frame = None
+
+        self.tip = tk.Toplevel(root)
+        self.tip.withdraw()
+        self.tip.overrideredirect(True)
+        self.tip.transient(root)
+        box = tk.Frame(self.tip, bg=SURFACE, padx=20, pady=16, highlightthickness=1,
+                       highlightbackground=POPUP_BORDER)
+        box.pack(fill="both", expand=True)
+        top = tk.Frame(box, bg=SURFACE)
+        top.pack(fill="x")
+        self.picture = tk.Label(top, bg=SURFACE)
+        self.picture.pack(side="left", anchor="n", padx=(0, 14))
+        text = tk.Frame(top, bg=SURFACE)
+        text.pack(side="left", fill="both", expand=True)
+        self.counter = tk.Label(text, bg=SURFACE, fg=MUTED, font=("Segoe UI", 9), anchor="w")
+        self.counter.pack(fill="x")
+        self.heading = tk.Label(text, bg=SURFACE, fg=TEXT, font=("Segoe UI Semibold", 13),
+                                anchor="w", justify="left")
+        self.heading.pack(fill="x", pady=(0, 4))
+        self.text = tk.Label(text, bg=SURFACE, fg=TEXT, font=FONT_SMALL, anchor="w",
+                             justify="left")
+        self.text.pack(fill="x")
+
+        ttk.Checkbutton(box, text="Не показывать тур при следующем запуске",
+                        variable=self.hide_next, style="Tour.TCheckbutton",
+                        cursor="hand2").pack(anchor="w", pady=(14, 0))
+        bar = tk.Frame(box, bg=SURFACE)
+        bar.pack(fill="x", pady=(10, 0))
+        self.skip = ttk.Button(bar, text="Пропустить", style="Soft.TButton", cursor="hand2",
+                               command=self.close)
+        self.next_button = ttk.Button(bar, style="Accent.TButton", cursor="hand2",
+                                      command=lambda: self.go(1))
+        self.next_button.pack(side="right")
+        self.back_button = ttk.Button(bar, text="Назад", style="Soft.TButton", cursor="hand2",
+                                      command=lambda: self.go(-1))
+        for key, action in (("<Escape>", self.close), ("<Return>", lambda: self.go(1)),
+                            ("<Right>", lambda: self.go(1)), ("<Left>", lambda: self.go(-1))):
+            self.tip.bind(key, lambda e, a=action: a())
+
+        self.show_step()
+        self.follow()
+
+    def target(self, index):
+        """Виджет шага, если он сейчас виден на экране, иначе None."""
+        widget = self.steps[index][0]()
+        if widget is not None and widget.winfo_exists() and widget.winfo_viewable():
+            return widget
+        return None
+
+    def go(self, step):
+        index = self.index + step
+        # шаги с невидимым сейчас виджетом пропускаем (приветствие и конец — без виджета)
+        while 0 < index < len(self.steps) - 1 and self.target(index) is None:
+            index += step
+        if index >= len(self.steps):
+            self.close()
+        elif index >= 0:
+            self.index = index
+            self.show_step()
+
+    def show_step(self):
+        _, heading, text = self.steps[self.index]
+        first, last = self.index == 0, self.index == len(self.steps) - 1
+        self.counter.configure(text="" if first or last else
+                               f"Шаг {self.index} из {len(self.steps) - 2}")
+        self.heading.configure(text=heading)
+        self.text.configure(text=text)
+        image = "totoro_happy" if first or last else "totoro_small"
+        self.picture.configure(image=IMAGES.get(image, ""))
+        for label in (self.heading, self.text):
+            label.configure(wraplength=self.WIDTH - (240 if first or last else 120))
+        self.next_button.configure(text="Начать тур" if first else
+                                   "Начать работу" if last else "Далее  →")
+        if first:
+            self.back_button.pack_forget()
+        else:
+            self.back_button.pack(side="right", padx=(0, 8))
+        if last:
+            self.skip.pack_forget()
+        else:
+            self.skip.pack(side="left")
+        self.shown_box = None
+        self.place()
+        self.tip.focus_force()
+        self.next_button.focus_set()
+
+    def place(self):
+        """Ставит рамку и подсказку по текущему положению окна и виджета."""
+        root = self.root
+        if root.state() in ("iconic", "withdrawn"):
+            self.tip.withdraw()
+            if self.frame:
+                self.frame.withdraw()
+            self.shown_box = None
+            return
+        widget = self.target(self.index)
+        rx, ry = root.winfo_rootx(), root.winfo_rooty()
+        rw, rh = root.winfo_width(), root.winfo_height()
+        target = widget and (widget.winfo_rootx(), widget.winfo_rooty(),
+                             widget.winfo_width(), widget.winfo_height())
+        box = (rx, ry, rw, rh, target)
+        if box == self.shown_box:
+            return
+        self.shown_box = box
+        self.tip.update_idletasks()
+        tw, th = self.WIDTH, self.tip.winfo_reqheight()
+        if not target:
+            x, y = rx + (rw - tw) // 2, ry + (rh - th) // 2
+            if self.frame:
+                self.frame.withdraw()
+        else:
+            x, y, w, h = target
+            pad = self.PAD
+            fx, fy, fw, fh = x - pad, y - pad, w + 2 * pad, h + 2 * pad
+            if self.frame:
+                self.frame.geometry(f"{fw}x{fh}+{fx}+{fy}")
+                self.ring.delete("all")
+                round_rect(self.ring, 2, 2, fw - 2, fh - 2, 10, outline=ACCENT, width=3,
+                           fill=self.KEY)
+                self.frame.deiconify()
+                self.frame.lift()
+            # подсказка под рамкой; не помещается — над ней, потом слева, потом справа
+            if fy + fh + self.GAP + th <= ry + rh:
+                x, y = fx, fy + fh + self.GAP
+            elif fy - self.GAP - th >= ry:
+                x, y = fx, fy - self.GAP - th
+            elif fx - self.GAP - tw >= rx:
+                x, y = fx - self.GAP - tw, fy
+            else:
+                x, y = fx + fw + self.GAP, fy
+            x = max(rx + 8, min(x, rx + rw - tw - 8))
+            y = max(ry + 8, min(y, ry + rh - th - 8))
+        self.tip.geometry(f"{tw}x{th}+{x}+{y}")
+        self.tip.deiconify()
+        self.tip.lift()
+
+    def follow(self):
+        """Окно двигают, меняют его размер, сворачивают — подсказка едет за ним."""
+        try:
+            if not self.tip.winfo_exists():
+                return
+            self.place()
+        except tk.TclError:
+            return
+        self.tip.after(250, self.follow)
+
+    def close(self):
+        if not self.tip.winfo_exists():
+            return
+        self.tip.destroy()
+        if self.frame:
+            self.frame.destroy()
+        self.on_close(not self.hide_next.get())
 
 
 LANE_WIDTH = 250
@@ -3537,11 +3743,13 @@ class TodoApp:
             chip = tk.Label(chips, bg=bg, fg=fg, font=FONT_SMALL, padx=10, pady=3)
             chip.pack(side="left", padx=(0, 6))
             self.chips[key] = chip
-        menu_button(header, "☰  Меню", self.build_main_menu).pack(side="right")
+        self.menu_button = menu_button(header, "☰  Меню", self.build_main_menu)
+        self.menu_button.pack(side="right")
 
         # Поле ввода и кнопка «Добавить»
         add_row = ttk.Frame(page)
         add_row.pack(fill="x", pady=(16, 14))
+        self.add_row = add_row
         self.entry = ttk.Entry(add_row, font=FONT)
         self.entry.pack(side="left", fill="x", expand=True, ipady=2)
         self.entry.bind("<Return>", lambda e: self.add())
@@ -3559,6 +3767,7 @@ class TodoApp:
         self.view = tk.StringVar(value=db.get_setting(self.prefs, "view", "list"))
         views = ttk.Frame(toolbar, style="Segments.TFrame", padding=3)
         views.pack(side="left")
+        self.views_frame = views
         for value, text in (("list", "☰  Список"), ("board", "▦  Доска"), ("matrix", "⊞  Матрица")):
             ttk.Radiobutton(views, text=text, value=value, variable=self.view,
                             style="Segment.TRadiobutton", command=self.switch_view,
@@ -3734,6 +3943,9 @@ class TodoApp:
         root.after(1000, self.check_reminders)
         root.after(WATCH_EVERY_MS, self.watch_changes)  # изменения других участников в общих списках
         root.after(4000, self.auto_check_update)  # раз в день — нет ли новой версии
+        self.tour = None
+        if db.get_setting(self.prefs, "tour_show", "1") == "1":
+            root.after(700, self.start_tour)  # первый запуск (или тур не отключили) — тур
 
     # --- список, доска или матрица ---
 
@@ -3809,7 +4021,8 @@ class TodoApp:
             self.auto_update_enabled(), db.get_setting(self.prefs, "shared_folder", ""),
             db.get_setting(self.prefs, "user_name", "") or os.environ.get("USERNAME", ""),
             status, page, check_folder=self.check_folder, check_update=self.check_update_inline,
-            animate=self.side.totoro.animate, theme=THEME_SETTING)
+            animate=self.side.totoro.animate, theme=THEME_SETTING,
+            tour=db.get_setting(self.prefs, "tour_show", "1") == "1")
         result = dialog.show()
         if dialog.update_found:  # нашли новую версию кнопкой в настройках
             UpdateDialog(self.root, dialog.update_found, self.close)
@@ -3818,6 +4031,7 @@ class TodoApp:
         db.set_setting(self.prefs, "start_mode", result["start_mode"])
         db.set_setting(self.prefs, "update_auto", "1" if result["update_auto"] else "0")
         db.set_setting(self.prefs, "totoro_animate", "1" if result["animate"] else "0")
+        db.set_setting(self.prefs, "tour_show", "1" if result["tour"] else "0")
         self.side.totoro.animate = result["animate"]
         self.side.totoro.render_frame(force=True)
         if result["theme"] != THEME_SETTING:
@@ -3905,9 +4119,63 @@ class TodoApp:
                 .command("Настройки…", self.show_settings)
                 .separator()
                 .command("Справка", self.show_help, accel="F1")
+                .command("Ознакомительный тур", self.start_tour)
                 .command("Проверить обновления…", self.check_update_now)
                 .submenu("Обратная связь", feedback)
                 .submenu("О программе", about))
+
+    # --- ознакомительный тур ---
+
+    def tour_steps(self):
+        """Шаги тура: (какой виджет обвести, заголовок, текст). Первый и последний — без виджета."""
+        return [
+            (lambda: None, f"Добро пожаловать в {APP_NAME}!",
+             "Привет! Я Тоторо и помогу не забывать о делах.\n\n"
+             "За минуту покажу главное. Тур можно пропустить и открыть потом: "
+             "«☰ Меню» → «Ознакомительный тур»."),
+            (lambda: self.add_row, "Новая задача",
+             "Впишите задачу и нажмите Enter или «Добавить». Срок, важность, срочность "
+             "и описание можно задать потом — кнопкой «Изменить»."),
+            (self.main_widget, "Ваши задачи",
+             "Щелчок по задаче открывает её карточку справа, двойной щелчок или F2 — изменить, "
+             "пробел — отметить выполненной. Правая кнопка мыши — быстрые действия: срок, "
+             "важность, срочность, письмо."),
+            (lambda: self.side, "Карточка задачи и Тоторо",
+             "Справа — карточка выбранной задачи: важность, срочность, срок, напоминание "
+             "и описание. Пока задача не выбрана, Тоторо подсказывает, с чего начать, "
+             "и волнуется о просроченных делах."),
+            (lambda: self.views_frame, "Список, доска и матрица",
+             "Список — таблица задач. Доска — колонки по статусам, задачи перетаскиваются "
+             "мышью. Матрица Эйзенхауэра раскладывает задачи по важности и срочности."),
+            (lambda: self.filters_frame, "Фильтры",
+             "Показывают все задачи, только активные, выполненные или просроченные. "
+             "На кнопке «Просроченные» — сколько их сейчас."),
+            (lambda: self.search_box, "Поиск",
+             "Ищет по названию, описанию и номеру задачи. Быстро открыть — Ctrl+F."),
+            (lambda: self.list_button, "Списки задач",
+             "Разделяйте дела по спискам: личный, рабочий, домашний… "
+             "Общие списки для команды подключаются в настройках."),
+            (lambda: self.menu_button, "Меню",
+             "Настройки, экспорт и импорт, примеры задач, справка (F1) и обновления. "
+             "Отсюда же можно снова пройти этот тур."),
+            (lambda: None, "Всё готово!",
+             "Добавьте первую задачу — а я буду рядом. Напомню о сроках, а выполненные "
+             "задачи увезёт Котобус."),
+        ]
+
+    def start_tour(self):
+        if self.tour is not None and self.tour.tip.winfo_exists():
+            self.tour.tip.lift()
+            return
+        if self.editing is not None:
+            self.finish_editing()
+        hide = db.get_setting(self.prefs, "tour_show", "1") == "0"
+        self.tour = GuideTour(self.root, self.tour_steps(), self.tour_closed, hide_next_time=hide)
+
+    def tour_closed(self, show_next_time):
+        db.set_setting(self.prefs, "tour_show", "1" if show_next_time else "0")
+        self.tour = None
+        self.entry.focus_set()
 
     def send_feedback(self, kind):
         """Открывает на GitHub форму сообщения об ошибке или идеи (раздел Issues)."""
@@ -4123,7 +4391,8 @@ class TodoApp:
         return dict(title=title, body=body, done=bool(done), overdue=overdue, status_id=status_id,
                     status=status_label(name, done, overdue), status_name=name, status_color=color,
                     level=level, priority=PRIORITY_NAMES[level], due=format_due(due_at),
-                    remind=remind, created=created, urgent=urgent, **self.people(task_id))
+                    remind=remind, created=created, urgent=urgent, important=important,
+                    **self.people(task_id))
 
     def people(self, task_id):
         """Автор, исполнитель и «кто когда изменил» — для карточки и письма."""
@@ -4155,7 +4424,7 @@ class TodoApp:
             priority_level_=info["level"], priority_name=info["priority"],
             due=info["due"], remind=info["remind"], created=info["created"], author=info["author"],
             assignee=info["assignee"] or ("не назначен" if info["shared"] else ""),
-            updated=info["updated"],
+            updated=info["updated"], urgent=bool(info["urgent"]), important=bool(info["important"]),
         )
 
     def update_buddy(self):
@@ -5257,6 +5526,9 @@ class TodoApp:
 
     def auto_check_update(self):
         """При запуске, не чаще раза в день. Без интернета — молча пропускаем."""
+        if self.tour is not None:
+            self.root.after(5000, self.auto_check_update)  # не мешаем туру — проверим после
+            return
         today = date.today().isoformat()
         if not self.auto_update_enabled() or db.get_setting(self.prefs, "update_checked") == today:
             return
