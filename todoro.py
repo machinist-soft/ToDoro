@@ -33,7 +33,7 @@ from examples import make_examples
 from help_text import HELP
 
 APP_NAME = "ToDoro"  # ToDo + Totoro
-APP_VERSION = "2.13.2"  # номер версии — меняется здесь (установщик берёт его отсюда)
+APP_VERSION = "2.13.3"  # номер версии — меняется здесь (установщик берёт его отсюда)
 APP_YEAR = 2026
 COPYRIGHT_HOLDER = "Machinist"  # автор — имя меняется здесь и в файле LICENSE
 COPYRIGHT = f"© {APP_YEAR} {COPYRIGHT_HOLDER}"
