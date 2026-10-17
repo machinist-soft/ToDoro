@@ -3599,6 +3599,7 @@ class KanbanBoard(tk.Frame):
                      anchor="w", justify="left", wraplength=self.card_width - 60).pack(fill="x", pady=(2, 0))
         # 📎 и 💬 — отдельной строкой: её можно обновить, не перерисовывая доску
         card.mark = tk.Label(content, bg=SURFACE, fg=MUTED, font=FONT_SMALL, anchor="w")
+        self.cards[task_id] = card
         self.set_mark(task_id, extras_mark(self.app.extra_counts.get(task_id)))
 
         bind_tree(card, "<ButtonPress-1>", lambda e: self.on_press(e, task_id))
@@ -3606,7 +3607,6 @@ class KanbanBoard(tk.Frame):
         bind_tree(card, "<ButtonRelease-1>", self.on_release)
         bind_tree(card, "<Double-Button-1>", lambda e: self.app.edit())
         bind_tree(card, "<Button-3>", lambda e: self.app.show_menu_for(task_id, e.x_root, e.y_root))
-        self.cards[task_id] = card
 
     def set_mark(self, task_id, mark):
         label = getattr(self.cards.get(task_id), "mark", None)
