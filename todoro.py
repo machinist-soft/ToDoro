@@ -4701,9 +4701,9 @@ class TodoApp:
 
         done_today = self.done_today
         stats = " · ".join(text for count, text in (
-            (len(overdue), f"просрочено: {len(overdue)}"),
-            (len(today), f"на сегодня: {len(today)}"),
-            (done_today, f"сегодня выполнено: {done_today}"),
+            (len(overdue), f"Просрочено: {len(overdue)}"),
+            (len(today), f"На сегодня: {len(today)}"),
+            (done_today, f"Сегодня выполнено: {done_today}"),
         ) if count)
 
         panel = self.side.totoro
