@@ -88,6 +88,7 @@ prefs.close()
 T.TodoApp.check_reminders = lambda self: None  # окна напоминаний не должны попасть в кадр
 root = tk.Tk()
 app = T.TodoApp(root)
+app.side.totoro.animate = False  # на снимках Тоторо не должен попасть моргающим
 T.center_on_screen(root, 1560, 860)  # пошире, чтобы названия задач и все столбцы помещались
 # ширины столбцов для снимка: место — названию задачи, остальным — по содержимому
 for column, width in (("num", 48), ("status", 112), ("title", 268), ("priority", 128), ("due", 122),

@@ -4,6 +4,7 @@ import csv
 import ctypes
 import math
 import os
+import random
 import re
 import sqlite3
 import tempfile
@@ -1341,7 +1342,14 @@ class TotoroPanel(tk.Frame):
         "normal": (BG, BORDER, TEXT),
         "alert": ("#fdeeee", "#f3c4c4", DANGER),
         "done": ("#eaf7ef", "#bfe5cc", "#15803d"),
+        "sleep": ("#eaf7ef", "#bfe5cc", "#15803d"),  # всё сделано — Тоторо спит
     }
+
+    # Анимация: Тоторо «дышит» (чуть покачивается), моргает, радуется, когда на него наводят
+    # мышь или щёлкают, волнуется, когда есть просроченные задачи, и спит, когда всё сделано.
+    FRAME_MS = 50            # кадр анимации
+    BREATH = {"normal": (2.0, 2400), "alert": (1.5, 1500), "sleep": (2.5, 4200)}  # размах px, период мс
+    JUMP_MS, JUMP_PX = 480, 22
 
     def __init__(self, parent, on_task_click):
         super().__init__(parent, bg=SURFACE)
@@ -1350,6 +1358,21 @@ class TotoroPanel(tk.Frame):
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Configure>", lambda e: self.draw())
         self.message = ("", (), "", "normal", "")
+        self.animate = True           # выключается в настройках
+        self.totoro_item = None       # картинка Тоторо на холсте и её «спокойное» положение
+        self.totoro_x = self.totoro_y = 0
+        self.shown = (None, None)     # что сейчас на экране: (картинка, сдвиг по высоте)
+        self.hover = False
+        self.next_blink = self.now() + 2500
+        self.blink_until = self.second_blink = 0
+        self.happy_until = self.jump_start = 0
+        self.zzz = []                 # всплывающие «z» над спящим Тоторо: (id, когда появилась)
+        self.next_z = 0
+        self.after(1000, self.tick)
+
+    @staticmethod
+    def now():
+        return time_module.perf_counter() * 1000
 
     def show(self, lead, tasks=(), tail="", mood="normal", stats=""):
         """tasks — задачи, которые назвать в облачке: [(заголовок, id), ...]; каждая кликается."""
@@ -1407,8 +1430,15 @@ class TotoroPanel(tk.Frame):
         for shape in (joint, tail_poly, bubble):
             c.tag_lower(shape)
 
+        self.totoro_item = None
+        self.zzz = []
         if totoro:
-            c.create_image(cx, y2 + 16, image=totoro, anchor="n")
+            self.totoro_x, self.totoro_y = cx, y2 + 16
+            self.totoro_item = c.create_image(cx, y2 + 16, image=totoro, anchor="n", tags=("totoro",))
+            self.shown = ("totoro", 0)
+            c.tag_bind("totoro", "<Enter>", lambda e: self.set_hover(True))
+            c.tag_bind("totoro", "<Leave>", lambda e: self.set_hover(False))
+            c.tag_bind("totoro", "<Button-1>", lambda e: self.cheer())
         if stats:
             c.create_text(cx, y2 + 16 + totoro_h + 8, text=stats, font=FONT_SMALL,
                           fill=MUTED, anchor="n", width=width - 2 * pad, justify="center")
@@ -1417,6 +1447,100 @@ class TotoroPanel(tk.Frame):
             c.tag_bind(f"task{tid}", "<Button-1>", lambda e, t=tid: self.on_task_click(t))
         c.tag_bind("task", "<Enter>", lambda e: c.configure(cursor="hand2"))
         c.tag_bind("task", "<Leave>", lambda e: c.configure(cursor=""))
+        self.render_frame(force=True)
+
+    # --- анимация ---
+
+    def set_hover(self, hover):
+        self.hover = hover and self.animate
+        self.canvas.configure(cursor="hand2" if self.hover else "")
+
+    def cheer(self):
+        """Тоторо радуется и подпрыгивает (щелчок по нему или выполненная задача)."""
+        if self.animate:
+            self.happy_until = self.now() + 1300
+            self.jump_start = self.now()
+
+    def tick(self):
+        """Кадр анимации. Пока панель не видна (открыта карточка задачи, окно свёрнуто)
+        или анимация выключена — ничего не делаем и проверяем реже."""
+        try:
+            visible = (self.animate and self.totoro_item is not None and self.winfo_ismapped()
+                       and self.winfo_toplevel().state() != "iconic")
+        except tk.TclError:
+            return  # окно закрыто
+        if visible:
+            self.render_frame()
+        self.after(self.FRAME_MS if visible else 400, self.tick)
+
+    def face(self, t, mood):
+        """Какую картинку показать сейчас."""
+        if t < self.happy_until or self.hover:
+            return "totoro_happy"
+        if mood == "sleep":
+            return "totoro_sleep"
+        if t >= self.next_blink:  # пора моргнуть; иногда — дважды подряд
+            self.blink_until = t + 130
+            self.second_blink = t + 330 if random.random() < 0.25 else 0
+            self.next_blink = t + random.uniform(2500, 6000)
+        if self.second_blink and t >= self.second_blink:
+            self.blink_until, self.second_blink = t + 120, 0
+        if t < self.blink_until:
+            return "totoro_blink"
+        return "totoro_worried" if mood == "alert" else "totoro"
+
+    def render_frame(self, force=False):
+        if self.totoro_item is None:
+            return
+        mood = self.message[3]
+        t = self.now()
+        if not self.animate:
+            name, dy = "totoro", 0
+        else:
+            name = self.face(t, mood)
+            amplitude, period = self.BREATH.get(mood, self.BREATH["normal"])
+            dy = amplitude * math.sin(2 * math.pi * t / period)
+            if t - self.jump_start < self.JUMP_MS:  # прыжок по параболе
+                p = (t - self.jump_start) / self.JUMP_MS
+                dy -= self.JUMP_PX * 4 * p * (1 - p)
+            dy = round(dy)
+        if name not in IMAGES:
+            name = "totoro"
+        if force or (name, dy) != self.shown:  # перерисовываем, только если кадр изменился
+            self.canvas.itemconfigure(self.totoro_item, image=IMAGES[name])
+            self.canvas.coords(self.totoro_item, self.totoro_x, self.totoro_y + dy)
+            self.shown = (name, dy)
+        if self.animate and mood == "sleep":
+            self.float_zzz(t)
+        elif self.zzz:
+            for item, _ in self.zzz:
+                self.canvas.delete(item)
+            self.zzz = []
+
+    ZZZ_LIFE = 2600
+    ZZZ_COLORS = ["#6b7280", "#7f8794", "#949ba6", "#a9afb8", "#bec3ca", "#d3d7dc", "#e8eaed"]
+
+    def float_zzz(self, t):
+        """Над спящим Тоторо всплывают и тают буквы «z»."""
+        c = self.canvas
+        if t >= self.next_z:
+            self.next_z = t + 900
+            size = random.choice((10, 12, 14))
+            item = c.create_text(self.totoro_x + 48, self.totoro_y + 30, text="z",
+                                 font=("Segoe UI Semibold", size), fill=self.ZZZ_COLORS[0])
+            self.zzz.append((item, t))
+        alive = []
+        for item, born in self.zzz:
+            age = (t - born) / self.ZZZ_LIFE
+            if age >= 1:
+                c.delete(item)
+                continue
+            c.coords(item, self.totoro_x + 48 + 10 * age + 4 * math.sin(age * 6),
+                     self.totoro_y + 30 - 55 * age)
+            c.itemconfigure(item, fill=self.ZZZ_COLORS[min(int(age * len(self.ZZZ_COLORS)),
+                                                           len(self.ZZZ_COLORS) - 1)])
+            alive.append((item, born))
+        self.zzz = alive
 
 
 class TaskCard(tk.Frame):
@@ -2124,7 +2248,8 @@ class SettingsDialog(tk.Toplevel):
              ("sharing", "", "Совместная работа"), ("updates", "", "Обновления")]
 
     def __init__(self, parent, start_mode, card_fields, update_auto, shared_folder="", user_name="",
-                 team_status=None, page="general", check_folder=None, check_update=None):
+                 team_status=None, page="general", check_folder=None, check_update=None,
+                 animate=True):
         super().__init__(parent)
         self.result = None
         self.update_found = None  # найденная новая версия: откроется после закрытия настроек
@@ -2137,6 +2262,7 @@ class SettingsDialog(tk.Toplevel):
         self.start_mode = tk.StringVar(value=start_mode)
         self.fields = {key: tk.BooleanVar(value=key in card_fields) for key in CARD_FIELDS}
         self.update_auto = tk.BooleanVar(value=update_auto)
+        self.animate = tk.BooleanVar(value=animate)
 
         body = tk.Frame(self, bg=BG)
         body.pack(fill="both", expand=True)
@@ -2241,6 +2367,10 @@ class SettingsDialog(tk.Toplevel):
         for value, label in (("window", "Окном"), ("maximized", "На весь экран")):
             ttk.Radiobutton(segments, text=label, value=value, variable=self.start_mode,
                             style="Segment.TRadiobutton", cursor="hand2").pack(side="left")
+        control = self.row(card, "Оживлять Тоторо",
+                           "Тоторо дышит, моргает, радуется, волнуется о просроченных задачах "
+                           "и спит, когда всё сделано.")
+        Toggle(control, self.animate).pack()
         return page
 
     def page_board(self):
@@ -2404,7 +2534,8 @@ class SettingsDialog(tk.Toplevel):
             return
         self.result = dict(start_mode=self.start_mode.get(),
                            card_fields=[key for key, var in self.fields.items() if var.get()],
-                           update_auto=self.update_auto.get(), shared_folder=folder, user_name=name)
+                           update_auto=self.update_auto.get(), shared_folder=folder, user_name=name,
+                           animate=self.animate.get())
         self.destroy()
 
     def show(self):
@@ -3191,6 +3322,7 @@ class TodoApp:
                               on_close=self.clear_selection, on_edit=self.edit, on_email=self.email,
                               on_toggle=self.toggle, on_delete=self.delete)
         self.panel_width = int(db.get_setting(self.prefs, "panel_width", PANEL_WIDTH))
+        self.side.totoro.animate = db.get_setting(self.prefs, "totoro_animate", "1") == "1"
         # В узком окне панель прячется, чтобы не теснить таблицу
         content.bind("<Configure>", self.fit_side_panel)
         content.bind("<ButtonRelease-1>", lambda e: self.save_panel_width())
@@ -3360,7 +3492,8 @@ class TodoApp:
             self.root, db.get_setting(self.prefs, "start_mode", "window"), self.card_fields,
             self.auto_update_enabled(), db.get_setting(self.prefs, "shared_folder", ""),
             db.get_setting(self.prefs, "user_name", "") or os.environ.get("USERNAME", ""),
-            status, page, check_folder=self.check_folder, check_update=self.check_update_inline)
+            status, page, check_folder=self.check_folder, check_update=self.check_update_inline,
+            animate=self.side.totoro.animate)
         result = dialog.show()
         if dialog.update_found:  # нашли новую версию кнопкой в настройках
             UpdateDialog(self.root, dialog.update_found, self.close)
@@ -3368,6 +3501,9 @@ class TodoApp:
             return
         db.set_setting(self.prefs, "start_mode", result["start_mode"])
         db.set_setting(self.prefs, "update_auto", "1" if result["update_auto"] else "0")
+        db.set_setting(self.prefs, "totoro_animate", "1" if result["animate"] else "0")
+        self.side.totoro.animate = result["animate"]
+        self.side.totoro.render_frame(force=True)
         if result["card_fields"] != self.card_fields:
             self.card_fields = result["card_fields"]
             db.set_json_setting(self.prefs, "card_fields", self.card_fields)
@@ -3468,6 +3604,7 @@ class TodoApp:
         task = db.get_task(self.conn, task_id)
         if task:
             self.root.after(150, lambda: CatbusRun(self.root, task[0]))
+            self.side.totoro.cheer()
 
     def switch_view(self):
         db.set_setting(self.prefs, "view", self.view.get())
@@ -3743,7 +3880,7 @@ class TodoApp:
                        f"Активных задач: {len(active)}. Ты справишься!", "normal", stats)
         else:
             panel.show("Все задачи выполнены!",
-                       tail="Можно отдохнуть под камфорным деревом.", mood="done", stats=stats)
+                       tail="Можно отдохнуть под камфорным деревом.", mood="sleep", stats=stats)
 
     # --- колонки доски (статусы) ---
 

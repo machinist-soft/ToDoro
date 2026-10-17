@@ -78,7 +78,10 @@ T_WHISKERS = [((0.37, 0.305), (0.10, 0.27)), ((0.37, 0.325), (0.08, 0.325)),
               ((0.37, 0.345), (0.10, 0.385))]
 
 
-def totoro(u, v):
+def totoro(u, v, eyes="open", mouth=None, arms="down"):
+    """Тоторо. eyes: open — обычные, closed — закрыты (моргает, спит), happy — дужки «^ ^»,
+    wide — широко раскрыты (волнуется). mouth: None, smile — улыбка, o — рот «о».
+    arms: down — опущены, up — подняты (радуется)."""
     ow = 0.011  # толщина контура
     # листок на голове
     if sd_segment(u, v, 0.5, 0.075, 0.5, 0.115) < 0.007:
@@ -93,12 +96,31 @@ def totoro(u, v):
     # нос
     if sd_ellipse(u, v, 0.5, 0.305, 0.032, 0.012) < 0:
         return OUTLINE
+    # рот
+    if mouth == "smile":
+        r = math.hypot(u - 0.5, v - 0.29)
+        if abs(r - 0.075) < 0.0085 and v > 0.335:
+            return OUTLINE
+    elif mouth == "o" and sd_ellipse(u, v, 0.5, 0.36, 0.02, 0.024) < 0:
+        return OUTLINE
     # глаза
     for cx in (0.385, 0.615):
-        px = cx + (0.008 if cx < 0.5 else -0.008)
-        if sd_ellipse(u, v, px, 0.262, 0.019, 0.019) < 0:
+        if eyes == "closed":  # дуга вниз «◡»
+            r = math.hypot(u - cx, v - 0.235)
+            if abs(r - 0.036) < 0.008 and v > 0.245:
+                return OUTLINE
+            continue
+        if eyes == "happy":  # дуга вверх «^»
+            r = math.hypot(u - cx, v - 0.285)
+            if abs(r - 0.036) < 0.008 and v < 0.275:
+                return OUTLINE
+            continue
+        size = 0.05 if eyes == "wide" else 0.042
+        px = cx if eyes == "wide" else cx + (0.008 if cx < 0.5 else -0.008)
+        if sd_ellipse(u, v, px, 0.262, 0.017 if eyes == "wide" else 0.019,
+                      0.017 if eyes == "wide" else 0.019) < 0:
             return OUTLINE
-        eye = sd_ellipse(u, v, cx, 0.26, 0.042, 0.042)
+        eye = sd_ellipse(u, v, cx, 0.26, size, size)
         if eye < 0:
             return outlined(eye, WHITE, ow)
     # «галочки» на животе (дуги вверх)
@@ -121,17 +143,22 @@ def totoro(u, v):
         if foot < 0:
             return outlined(foot, T_BODY_DARK, ow)
     # когти на руках
-    for ax, sign in ((0.085, 1), (0.915, -1)):
+    claw_y = 0.365 if arms == "up" else 0.86
+    for ax, sign in (((0.095, 1), (0.905, -1)) if arms == "up" else ((0.085, 1), (0.915, -1))):
         for dx in (-0.02, 0.0, 0.02):
-            if sd_ellipse(u, v, ax + dx * sign, 0.86, 0.009, 0.02) < 0:
+            if sd_ellipse(u, v, ax + dx * sign, claw_y, 0.009, 0.02) < 0:
                 return T_CLAW
     # силуэт: голова + тело + уши + руки
     head = sd_ellipse(u, v, 0.5, 0.27, 0.25, 0.2)
     body = sd_ellipse(u, v, 0.5, 0.68, 0.43, 0.36)
     ears = min(sd_ellipse(u, v, 0.36, 0.1, 0.04, 0.11, -10),
                sd_ellipse(u, v, 0.64, 0.1, 0.04, 0.11, 10))
-    arms = min(sd_ellipse(u, v, 0.1, 0.7, 0.07, 0.19, 12),
-               sd_ellipse(u, v, 0.9, 0.7, 0.07, 0.19, -12))
+    if arms == "up":  # подняты в стороны-вверх
+        arms = min(sd_ellipse(u, v, 0.16, 0.5, 0.065, 0.17, -28),
+                   sd_ellipse(u, v, 0.84, 0.5, 0.065, 0.17, 28))
+    else:
+        arms = min(sd_ellipse(u, v, 0.1, 0.7, 0.07, 0.19, 12),
+                   sd_ellipse(u, v, 0.9, 0.7, 0.07, 0.19, -12))
     silhouette = min(smin(smin(head, body, 0.08), ears, 0.03), arms)
     if silhouette > 0:
         return None
@@ -274,6 +301,13 @@ def main(out):
     out.mkdir(exist_ok=True)
     for name, w in (("totoro.png", 170), ("totoro_small.png", 50)):
         (out / name).write_bytes(png(render(totoro, w, round(w * 1.1), 1.1)))
+    # выражения для анимации в правой панели (см. TotoroPanel в todoro.py)
+    for name, face in (("totoro_blink", dict(eyes="closed")),
+                       ("totoro_happy", dict(eyes="happy", mouth="smile", arms="up")),
+                       ("totoro_worried", dict(eyes="wide", mouth="o")),
+                       ("totoro_sleep", dict(eyes="closed"))):
+        (out / f"{name}.png").write_bytes(
+            png(render(lambda u, v, f=face: totoro(u, v, **f), 170, 187, 1.1)))
     # Котобус нарисован мордой влево, в приложении он едет вправо — отражаем
     (out / "catbus.png").write_bytes(png(render(lambda u, v: catbus(1 - u, v), 112, 72, 0.643)))
     for level, color in ((1, (239, 68, 68)), (2, (245, 158, 11)), (3, (59, 130, 246))):
