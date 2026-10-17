@@ -3594,12 +3594,12 @@ class KanbanBoard(tk.Frame):
             extra.insert(0, "исполнитель " + self.app.assignees[task_id])
         if "author" in fields and self.app.authors.get(task_id):
             extra.append("автор " + self.app.authors[task_id])
-        mark = extras_mark(self.app.extra_counts.get(task_id)).strip()
-        if mark:
-            extra.append(mark)
         if extra:
             tk.Label(content, text=" · ".join(extra), bg=SURFACE, fg=MUTED, font=FONT_SMALL,
                      anchor="w", justify="left", wraplength=self.card_width - 60).pack(fill="x", pady=(2, 0))
+        # 📎 и 💬 — отдельной строкой: её можно обновить, не перерисовывая доску
+        card.mark = tk.Label(content, bg=SURFACE, fg=MUTED, font=FONT_SMALL, anchor="w")
+        self.set_mark(task_id, extras_mark(self.app.extra_counts.get(task_id)))
 
         bind_tree(card, "<ButtonPress-1>", lambda e: self.on_press(e, task_id))
         bind_tree(card, "<B1-Motion>", self.on_motion)
@@ -3607,6 +3607,16 @@ class KanbanBoard(tk.Frame):
         bind_tree(card, "<Double-Button-1>", lambda e: self.app.edit())
         bind_tree(card, "<Button-3>", lambda e: self.app.show_menu_for(task_id, e.x_root, e.y_root))
         self.cards[task_id] = card
+
+    def set_mark(self, task_id, mark):
+        label = getattr(self.cards.get(task_id), "mark", None)
+        if label is None:
+            return
+        label.configure(text=mark.strip())
+        if mark and not label.winfo_ismapped():
+            label.pack(fill="x", pady=(2, 0))
+        elif not mark:
+            label.pack_forget()
 
     # --- выделение ---
 
@@ -5461,6 +5471,24 @@ class TodoApp:
 
     # --- файлы и комментарии задачи (вкладки карточки справа) ---
 
+    def extras_changed(self, task_id):
+        """Добавили или убрали файл или комментарий: обновляем карточку справа и значки 📎 💬
+        только у этой задачи — без перерисовки всего списка (иначе окно «дёргается»)."""
+        try:
+            self.extra_counts = db.extras_counts(self.conn)
+        except sqlite3.Error:
+            return
+        mark = extras_mark(self.extra_counts.get(task_id))
+        iid = str(task_id)
+        if self.tree.exists(iid):
+            title = next((r[1] for r in self.all_rows if r[0] == task_id), None)
+            if title is not None:
+                self.tree.set(iid, "title", title + mark)
+        if self.cards_view():
+            self.cards_view().set_mark(task_id, mark)
+        if self.side.mode == "task" and self.side.card.task_id == task_id:
+            self.side.card.load_extras(task_id)
+
     def attachments(self, task_id):
         try:
             return db.list_attachments(self.conn, task_id)
@@ -5489,7 +5517,7 @@ class TodoApp:
                     db.add_attachment(self.conn, task_id, name, data, by=self.created_by())
         except sqlite3.Error as error:
             ui.showerror(APP_NAME, f"Не удалось добавить файл:\n{error}", parent=self.root)
-        self.refresh(select_id=task_id)
+        self.extras_changed(task_id)
 
     def read_files(self, paths):
         items = []
@@ -5582,7 +5610,7 @@ class TodoApp:
             db.delete_attachment(self.conn, attachment_id)
         except sqlite3.Error as error:
             ui.showerror(APP_NAME, f"Не удалось удалить файл:\n{error}", parent=self.root)
-        self.refresh(select_id=self.current_id())
+        self.extras_changed(self.current_id())
 
     def file_menu(self, attachment_id, x, y):
         (PopupMenu()
@@ -5598,7 +5626,7 @@ class TodoApp:
         except sqlite3.Error as error:
             ui.showerror(APP_NAME, f"Не удалось сохранить комментарий:\n{error}", parent=self.root)
             return False
-        self.refresh(select_id=task_id)
+        self.extras_changed(task_id)
         return True
 
     def comment_menu(self, comment_id, author, text, x, y):
@@ -5619,7 +5647,7 @@ class TodoApp:
             db.delete_comment(self.conn, comment_id)
         except sqlite3.Error as error:
             ui.showerror(APP_NAME, f"Не удалось удалить комментарий:\n{error}", parent=self.root)
-        self.refresh(select_id=self.current_id())
+        self.extras_changed(self.current_id())
 
     def check_reminders(self):
         """Раз в 30 секунд проверяет, не пора ли о чём-то напомнить."""
