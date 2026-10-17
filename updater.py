@@ -18,6 +18,9 @@ PROJECT_URL = f"https://github.com/{REPO}"
 LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
 RELEASES_LIST = f"https://github.com/{REPO}/releases"  # все выпуски со списками изменений
+# Приложение для Android: к каждому выпуску прикладывается под этим именем (см. навык release)
+APK_NAME = "ToDoro.apk"
+APK_URL = f"https://github.com/{REPO}/releases/latest/download/{APK_NAME}"
 ISSUES_PAGE = f"https://github.com/{REPO}/issues"  # сообщения об ошибках и идеи
 
 

@@ -85,6 +85,19 @@ description: Выпуск новой версии ToDoro — номер верс
 - Установщик на этом компьютере НЕ запускай с настоящим `%APPDATA%` (заменит ярлык
   разработки на рабочем столе). Если нужна проверка — только с `APPDATA`, направленным в scratchpad.
 
+## 6а. Приложение для Android
+
+- Если с прошлого выпуска менялась папка `android/` (`git diff --stat v<прошлая версия> -- android`),
+  подними в `android/app/build.gradle.kts` `versionCode` на 1 и `versionName` (иначе телефон не
+  поставит новый APK поверх старого).
+- `python tools/build_apk.py` → `dist\ToDoro-<versionName>.apk` (нужен ключ подписи
+  `D:\Claude\android-tools\keys` — без него APK подпишется отладочным ключом и не встанет поверх
+  установленного; тогда остановись и скажи пользователю).
+- Скопируй его в `dist\ToDoro.apk`: **имя без версии обязательно** — QR-код «Установить
+  приложение» в окне «Подключить телефон» ведёт на `releases/latest/download/ToDoro.apk`.
+- APK прикладывается к **каждому** выпуску (даже если Android не менялся), иначе ссылка
+  из QR-кода сломается.
+
 ## 7. Коммит
 
 - `git add` изменённые файлы (todoro.py, RELEASE_NOTES.md, README.md, help_text.py,
@@ -111,9 +124,11 @@ description: Выпуск новой версии ToDoro — номер верс
    Ссылки — на полный SHA коммита из шага 7 (не на `main`), чтобы картинки выпуска не
    менялись потом. Показывай снимки новых функций выпуска + `list.png` / `board.png` /
    `dark.png` по смыслу. Проверь, что каждая ссылка отдаёт 200 (`curl -s -o /dev/null -w "%{http_code}"`).
-2. `gh release create v<версия> dist/ToDoro-Setup-<версия>.exe --title "ToDoro <версия>" --notes-file <файл> --target main`
+2. `gh release create v<версия> dist/ToDoro-Setup-<версия>.exe dist/ToDoro.apk --title "ToDoro <версия>" --notes-file <файл> --target main`
 3. Проверки:
-   - `gh release view v<версия> --json assets,isDraft` — установщик приложен, не черновик;
+   - `gh release view v<версия> --json assets,isDraft` — установщик и `ToDoro.apk` приложены, не черновик;
+   - `curl -s --ssl-no-revoke -o /dev/null -w "%{http_code}" -L https://github.com/machinist-soft/ToDoro/releases/latest/download/ToDoro.apk`
+     → 200 (по этой ссылке телефон скачивает приложение из QR-кода);
    - `curl -s --ssl-no-revoke https://api.github.com/repos/machinist-soft/ToDoro/releases/latest`
      → `tag_name` = новая версия;
    - так видит выпуск программа: `python -c "import updater, re; r = updater.fetch_latest(); print(r['version']); print(re.sub(r'^#+\s*', '', r['notes'], flags=re.M).split('\n---', 1)[0][-300:])"`

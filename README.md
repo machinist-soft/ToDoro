@@ -4,6 +4,7 @@
 *A to-do list, kanban board and Eisenhower matrix for Windows — for yourself and a small team — with a Totoro helper.*
 
 **[⬇ Скачать установщик / Download](https://github.com/machinist-soft/ToDoro/releases/latest)** ·
+[📱 Android (APK)](https://github.com/machinist-soft/ToDoro/releases/latest/download/ToDoro.apk) ·
 [Что нового / What's new](RELEASE_NOTES.md) ·
 [Сообщить об ошибке / Report a bug](https://github.com/machinist-soft/ToDoro/issues/new?template=bug_report.yml)
 

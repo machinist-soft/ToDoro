@@ -3380,6 +3380,7 @@ class PhoneDialog(tk.Toplevel):
         self.status = None
         self.pinging = False
         self.failed_pings = 0
+        self.qr_mode = "pair"  # какой QR-код показан: "pair" — подключить, "install" — скачать приложение
         self.build()
         self.bind("<Escape>", lambda e: self.destroy())
         center_on_screen(self)
@@ -3419,23 +3420,41 @@ class PhoneDialog(tk.Toplevel):
 
     def build_on(self, token):
         hosts = phone.addresses()
+        tabs = tk.Frame(self.body, bg=SURFACE)
+        tabs.pack(anchor="w", pady=(0, 12))
+        for mode, label in (("install", "1. Установить приложение"), ("pair", "2. Подключить телефон")):
+            ttk.Button(tabs, text=label, style="Accent.TButton" if mode == self.qr_mode else "Soft.TButton",
+                       command=lambda m=mode: self.show_qr(m)).pack(side="left", padx=(0, 8))
         row = tk.Frame(self.body, bg=SURFACE)
         row.pack(fill="x")
-        self.draw_qr(row, phone.pairing_text(token, hosts)).pack(side="left", anchor="n", padx=(0, 20))
+        install = self.qr_mode == "install"
+        text = updater.APK_URL if install else phone.pairing_text(token, hosts)
+        self.draw_qr(row, text).pack(side="left", anchor="n", padx=(0, 20))
         info = tk.Frame(row, bg=SURFACE)
         info.pack(side="left", anchor="n", fill="y")
-        self.text(info, "1. Установите на телефон приложение ToDoro.", width=300)
-        self.text(info, "2. В приложении нажмите «Подключить» и наведите камеру на этот код.", width=300)
-        if hosts:
-            self.text(info, "Проверить, видит ли телефон компьютер: откройте в браузере телефона",
-                      MUTED, pady=(10, 2), width=300)
-            tk.Label(info, text=f"http://{hosts[0]}:{phone.PORT}", bg=SURFACE, fg=ACCENT,
-                     font=FONT_SMALL_BOLD).pack(anchor="w")
-            self.text(info, "— должно появиться «ToDoro работает». Через VPN — тоже.", MUTED,
-                      pady=(2, 8), width=300)
+        if install:
+            self.text(info, "Наведите камеру телефона на этот код и откройте ссылку — с GitHub "
+                      "скачается приложение ToDoro.apk.", width=300)
+            self.text(info, "Откройте скачанный файл. Телефон спросит, разрешить ли установку "
+                      "из браузера, — разрешите.", width=300)
+            self.text(info, "Потом нажмите «2. Подключить телефон».", width=300)
+            link = tk.Label(info, text="Ссылка на файл", bg=SURFACE, fg=ACCENT,
+                            font=(*FONT_SMALL, "underline"), cursor="hand2")
+            link.pack(anchor="w", pady=(6, 0))
+            link.bind("<Button-1>", lambda e: webbrowser.open(updater.APK_URL))
         else:
-            self.text(info, "Компьютер сейчас не в сети — подключите его к Wi-Fi или кабелю.",
-                      DANGER, pady=(10, 8), width=300)
+            self.text(info, "В приложении ToDoro на телефоне нажмите «Сканировать QR-код» и "
+                      "наведите камеру на этот код. Можно и обычной камерой телефона.", width=300)
+            if hosts:
+                self.text(info, "Проверить, видит ли телефон компьютер: откройте в браузере телефона",
+                          MUTED, pady=(10, 2), width=300)
+                tk.Label(info, text=f"http://{hosts[0]}:{phone.PORT}", bg=SURFACE, fg=ACCENT,
+                         font=FONT_SMALL_BOLD).pack(anchor="w")
+                self.text(info, "— должно появиться «ToDoro работает». Через VPN — тоже.", MUTED,
+                          pady=(2, 8), width=300)
+            else:
+                self.text(info, "Компьютер сейчас не в сети — подключите его к Wi-Fi или кабелю.",
+                          DANGER, pady=(10, 8), width=300)
         line = tk.Frame(self.body, bg=SURFACE)
         line.pack(fill="x", pady=(14, 0))
         self.dot = tk.Label(line, text="●", bg=SURFACE, fg=MUTED, font=FONT_SMALL)
@@ -3454,6 +3473,11 @@ class PhoneDialog(tk.Toplevel):
                    command=self.disable).pack(side="right", padx=(0, 8))
         ttk.Button(buttons, text="Новый ключ", style="Soft.TButton",
                    command=self.renew).pack(side="right", padx=(0, 8))
+
+    def show_qr(self, mode):
+        self.qr_mode = mode
+        self.build()
+        self.geometry("")  # у кодов разное оформление — окно подстраивает размер, оставаясь на месте
 
     def draw_qr(self, parent, text):
         """QR-код на холсте: всегда чёрный на белом (и в тёмной теме) — так его читают камеры."""
