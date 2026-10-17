@@ -78,6 +78,9 @@ with shared:
 ids = {title: tid for tid, title, *_ in db.list_tasks(shared)}
 # файлы и комментарии у задачи «Подготовить презентацию для клиента»
 EXTRAS_TASK = "Подготовить презентацию для клиента"
+with shared:  # вместо файлов и комментариев из примеров — командная переписка с именами
+    shared.execute("DELETE FROM attachments")
+    shared.execute("DELETE FROM comments")
 sketch = Image.new("RGB", (640, 400), "#eef3fb")
 for i, (height, color) in enumerate(((150, "#5b8def"), (240, "#7cc68d"), (190, "#f2b84b"), (300, "#e5735c"))):
     sketch.paste(color, (80 + i * 130, 360 - height, 160 + i * 130, 360))

@@ -415,21 +415,26 @@ def add_examples(conn, examples):
         "done": done_ids[0] if done_ids else first,
     }
     is_done = {s[0]: s[3] for s in statuses}
-    rows = []
-    for ex in examples:
-        status_id = targets[ex.get("stage", "new")]
-        rows.append((ex["title"], is_done[status_id], status_id, ex["due_at"], ex["remind_before"],
-                     int(ex["reminded"]), int(ex.get("urgent", False)), int(ex.get("important", False)),
-                     ex.get("body", "")))
     with conn:
-        conn.executemany(
-            """
-            INSERT INTO tasks (title, done, status_id, due_at, remind_before, reminded,
-                               urgent, important, body, is_example)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-            """,
-            rows,
-        )
+        for ex in examples:
+            status_id = targets[ex.get("stage", "new")]
+            task_id = conn.execute(
+                """
+                INSERT INTO tasks (title, done, status_id, due_at, remind_before, reminded,
+                                   urgent, important, body, is_example)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                """,
+                (ex["title"], is_done[status_id], status_id, ex["due_at"], ex["remind_before"],
+                 int(ex["reminded"]), int(ex.get("urgent", False)), int(ex.get("important", False)),
+                 ex.get("body", "")),
+            ).lastrowid
+            for name, data in ex.get("files", []):
+                conn.execute("INSERT INTO attachments (task_id, name, size, data, added_by, added_at) "
+                             "VALUES (?, ?, ?, ?, NULL, ?)", (task_id, name, len(data), sqlite3.Binary(data),
+                                                              now_text()))
+            for text in ex.get("comments", []):
+                conn.execute("INSERT INTO comments (task_id, author, text, created_at) VALUES (?, NULL, ?, ?)",
+                             (task_id, text, now_text()))
 
 
 def import_tasks(conn, tasks, created_by=None):

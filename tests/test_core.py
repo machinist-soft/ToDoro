@@ -113,6 +113,18 @@ class DatabaseTests(TempDir):
         self.assertEqual(dst.execute("SELECT COUNT(*) FROM comments").fetchone()[0], 0)
         self.assertEqual(db.list_tasks(conn)[0][0], other)
 
+    def test_examples_have_files_and_comments(self):
+        from examples import make_examples
+        from PIL import Image
+        conn = db.connect(self.dir / "a.db")
+        db.add_examples(conn, make_examples())
+        (task, (files, comments)), = db.extras_counts(conn).items()
+        self.assertEqual((files, comments), (2, 2))
+        picture = db.list_attachments(conn, task)[0]
+        Image.open(__import__("io").BytesIO(db.attachment_data(conn, picture[0]))).verify()  # PNG читается
+        db.delete_examples(conn)  # вместе с примерами уходят и их файлы с комментариями
+        self.assertEqual(db.extras_counts(conn), {})
+
 
 class TeamTests(TempDir):
     def test_shared_lists_members_and_backup(self):

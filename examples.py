@@ -3,6 +3,8 @@
 Сроки считаются от текущего момента, поэтому примеры всегда «свежие»:
 одна задача просрочена, одна — на сегодня, другие — на завтра, через неделю и т. д.
 """
+import struct
+import zlib
 from datetime import datetime, timedelta
 
 HOUR = 60
@@ -11,6 +13,29 @@ DAY = 24 * 60
 
 def _at(day, hour, minute=0):
     return day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def _chart_png(width=320, height=200):
+    """Картинка-пример «Макет слайда»: столбчатая диаграмма, PNG без сторонних библиотек."""
+    background = (238, 243, 251)
+    bars = [(150 // 2, (91, 141, 239)), (240 // 2, (124, 198, 141)), (190 // 2, (242, 184, 75)),
+            (300 // 2, (229, 115, 92))]
+    rows = []
+    for y in range(height):
+        row = bytearray(b"\0")  # фильтр строки PNG: «без фильтра»
+        for x in range(width):
+            pixel = background
+            index, offset = divmod(x - 40, 65)
+            if 0 <= index < len(bars) and offset < 40 and y >= height - 20 - bars[index][0] and y < height - 20:
+                pixel = bars[index][1]
+            row += bytes(pixel)
+        rows.append(bytes(row))
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"".join(rows), 9)) + chunk(b"IEND", b""))
 
 
 def make_examples(now=None):
@@ -40,7 +65,13 @@ def make_examples(now=None):
         dict(title="Подготовить презентацию для клиента", stage="work", due=_at(today + timedelta(days=1), 10),
              remind=DAY, important=True,
              body="10–12 слайдов: о компании, кейсы, цены, сроки. "
-                  "Взять шаблон из прошлой презентации и обновить цифры."),
+                  "Взять шаблон из прошлой презентации и обновить цифры.",
+             # файлы и комментарии — видно, как работают вкладки «Файлы» и «Комментарии»
+             files=[("Макет слайда.png", _chart_png()),
+                    ("План презентации.txt",
+                     "1. О компании\n2. Кейсы\n3. Цены\n4. Сроки\n5. Вопросы\n".encode("utf-8"))],
+             comments=["Нашёл прошлогоднюю презентацию — макет слайда приложил во вкладке «Файлы».",
+                       "Клиент просил уложиться в 15 минут — не больше 12 слайдов."]),
         # Важно, срок через неделю, напомнить за 2 дня
         dict(title="Продлить страховку автомобиля", due=_at(today + timedelta(days=7), 12),
              remind=2 * DAY, important=True,
