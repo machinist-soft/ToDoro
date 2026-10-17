@@ -4260,7 +4260,10 @@ class TodoApp:
         self.prefs = db.connect()
         self.list_conns = {db.PERSONAL: self.prefs}  # открытые списки: id -> соединение
         self.team, self.team_error = None, None      # общая папка (team.Team), если подключена
-        self.connect_team()
+        self.probe = None      # фоновая проверка связи с общей папкой (team.Probe)
+        self.lost_list = None  # общий список, который был открыт, когда пропала связь
+        self.reconnect_at = 0  # раньше этого времени (monotonic) не пытаемся переподключиться
+        self.connect_team(wait=True)
         self.load_lists()
         self.list_id = db.get_setting(self.prefs, "current_list", db.PERSONAL)
         self.watch = None  # «отпечаток» открытого общего списка — чтобы заметить чужие изменения
@@ -4665,8 +4668,13 @@ class TodoApp:
         self.place_side()
 
     def show_settings(self, page="general"):
+        if self.team and not self.share_online():  # связь пропала, а watch_changes ещё не заметил
+            self.go_offline()
         if self.team:
-            status = ("ok", "Подключено. Участники: " + ", ".join(self.team.members()))
+            try:
+                status = ("ok", "Подключено. Участники: " + ", ".join(self.team.members()))
+            except sqlite3.Error as error:
+                status = ("error", " ".join(str(error).split()))
         elif self.team_error:
             status = ("error", " ".join(self.team_error.split()))
         else:
@@ -6143,7 +6151,8 @@ class TodoApp:
         # Перерисовываем, только если какая-то задача стала просроченной или наступил новый день:
         # иначе доска и список «вздрагивали» бы каждые 30 секунд
         try:
-            if self.time_state() != self.shown_state and not self.dragging():
+            offline = self.current_list()["shared"] and not self.share_online()
+            if not offline and self.time_state() != self.shown_state and not self.dragging():
                 self.refresh(select_id=self.current_id())
         except sqlite3.Error:
             pass  # общая папка недоступна — проверим в следующий раз
@@ -6152,6 +6161,8 @@ class TodoApp:
         reminded = set(db.get_json_setting(self.prefs, "shared_reminded", []))
         for item in self.lists:
             where = "" if item["id"] == self.list_id else f"  (список «{item['name']}»)"
+            if item["shared"] and not self.share_online():
+                continue  # нет связи с общей папкой — напомним, когда появится
             try:
                 conn = self.list_conn(item["id"])
                 if not item["shared"]:
@@ -6186,6 +6197,8 @@ class TodoApp:
         lines = []
         for item in self.lists:
             where = "" if item["id"] == self.list_id else f"  (список «{item['name']}»)"
+            if item["shared"] and not self.share_online():
+                continue
             try:
                 tasks = db.pending_tasks(self.list_conn(item["id"]),
                                          self.user_name() if item["shared"] else None)
@@ -6257,14 +6270,28 @@ class TodoApp:
     # --- списки задач ---
     # Личные списки хранятся у себя (self.prefs + папка lists), общие — в сетевой папке (self.team).
 
-    def connect_team(self):
-        """Подключает общую папку из настроек. Возвращает текст ошибки или None."""
+    def connect_team(self, wait=False):
+        """Подключает общую папку из настроек. Возвращает текст ошибки или None.
+        wait — сначала дождаться фоновой проверки связи (при запуске программы): если сети
+        нет, не подключаемся, а то окно повиснет; подключимся сами, когда связь появится."""
         if self.team:
             self.team.close()
         self.team, self.team_error = None, None
         folder = db.get_setting(self.prefs, "shared_folder", "")
+        if self.probe and self.probe.folder != folder:
+            self.probe.stop()
+            self.probe = None
         if not folder:
             return None
+        if self.probe is None:
+            self.probe = team.Probe(folder)
+        if wait:
+            deadline = time_module.monotonic() + team.Probe.HANG + 0.5
+            while self.probe.ok is None and time_module.monotonic() < deadline:
+                time_module.sleep(0.05)
+            if not self.probe.online():
+                self.team_error = self.offline_text(folder)
+                return self.team_error
         try:
             self.team = team.Team(folder)
             self.team.touch_member(self.user_name())
@@ -6273,6 +6300,57 @@ class TodoApp:
         except (team.TeamError, sqlite3.Error, OSError) as error:
             self.team, self.team_error = None, str(error)
         return self.team_error
+
+    @staticmethod
+    def offline_text(folder):
+        return (f"Нет связи с общей папкой\n{folder}\n\nПроверьте сеть (VPN). Когда связь "
+                "появится, программа подключится сама.")
+
+    def share_online(self):
+        """Можно ли сейчас обращаться к общей папке, не рискуя «повесить» окно."""
+        return self.team is not None and self.probe is not None and self.probe.online()
+
+    def go_offline(self):
+        """Пропала связь с общей папкой: убираем общие списки и, если был открыт общий,
+        открываем личный. Когда связь вернётся, watch_changes подключится снова.
+        Возвращает название общего списка, который был открыт (или None)."""
+        name = None
+        if self.list_id and self.current_list()["shared"]:
+            self.lost_list, name = self.list_id, self.current_list()["name"]
+            self.forget_list(self.list_id)
+            self.list_id = None
+            self.editing = None
+            self.switch_list(db.PERSONAL)
+        for item in [i for i in self.lists if i["shared"]]:
+            self.forget_list(item["id"])
+        if self.team:
+            try:
+                self.team.close()
+            except sqlite3.Error:
+                pass
+        self.team = None
+        self.team_error = self.offline_text(db.get_setting(self.prefs, "shared_folder", ""))
+        self.load_lists()
+        return name
+
+    def reconnect_team(self):
+        """Связь с общей папкой вернулась — подключаемся и, если до обрыва был открыт общий
+        список, открываем его снова (если человек тем временем не ушёл в другой список)."""
+        if self.connect_team():
+            self.reconnect_at = time_module.monotonic() + 30  # не вышло — попробуем позже
+            return
+        self.load_lists()
+        lost, self.lost_list = self.lost_list, None
+        item = next((i for i in self.lists if i["id"] == lost), None)
+        if item is None:
+            self.side.totoro.show("Связь с общей папкой восстановлена.", mood="done")
+        elif self.list_id == db.PERSONAL and self.editing is None and not self.dragging():
+            self.switch_list(lost)
+            self.side.totoro.show(f"Связь с общей папкой восстановлена — снова открыт "
+                                  f"список «{item['name']}».", mood="done")
+        else:
+            self.side.totoro.show(f"Связь с общей папкой восстановлена — список «{item['name']}» "
+                                  "снова есть в меню списков.", mood="done")
 
     def user_name(self):
         return db.get_setting(self.prefs, "user_name", "") or os.environ.get("USERNAME", "Я")
@@ -6315,7 +6393,7 @@ class TodoApp:
             return None
         names = set(self.assignees.values()) | {self.user_name()}
         try:
-            names |= set(self.team.members()) if self.team else set()
+            names |= set(self.team.members()) if self.share_online() else set()
         except sqlite3.Error:
             pass
         return sorted(names, key=str.casefold)
@@ -6333,7 +6411,7 @@ class TodoApp:
         self.root.title(f"{APP_NAME} — {item['name']}{' (общий)' if item['shared'] else ''}")
 
     def show_lists_menu(self):
-        if self.team:  # вдруг кто-то добавил общий список
+        if self.share_online():  # вдруг кто-то добавил общий список
             self.load_lists()
         menu = PopupMenu()
         menu.command("Мои списки", None, enabled=False)
@@ -6369,6 +6447,8 @@ class TodoApp:
             self.finish_editing()  # спросит, сохранить ли незаконченную правку задачи
             self.clear_selection()
         try:
+            if any(i["id"] == list_id and i["shared"] for i in self.lists) and not self.share_online():
+                raise sqlite3.OperationalError("нет связи с общей папкой")  # не ждём сеть зря
             conn = self.list_conn(list_id)
             db.list_statuses(conn)  # проверка, что файл читается
         except (sqlite3.Error, StopIteration) as error:
@@ -6463,6 +6543,9 @@ class TodoApp:
         seen_lists = set(db.get_json_setting(self.prefs, "assigned_seen_lists", []))
         me, lines, now_known = self.user_name(), [], set()
         for item in [i for i in self.lists if i["shared"]]:
+            if not self.share_online():
+                now_known |= {k for k in known if k.startswith(item["id"] + "|")}
+                continue
             try:
                 tasks = db.assigned_to(self.list_conn(item["id"]), me)
             except (sqlite3.Error, StopIteration):
@@ -6493,22 +6576,29 @@ class TodoApp:
         """Ошибка во время работы. Если пропала связь с общей папкой — объясняем и открываем
         личный список, чтобы можно было продолжать работать."""
         if isinstance(error, sqlite3.Error) and self.list_id and self.current_list()["shared"]:
-            name = self.current_list()["name"]
-            self.forget_list(self.list_id)
-            self.list_id = None
-            self.editing = None
-            self.switch_list(db.PERSONAL)
+            name = self.go_offline()
             ui.showerror(
                 APP_NAME, f"Пропала связь с общим списком «{name}» — общая папка недоступна "
                 "(сеть, VPN) или файл занят слишком долго.\n\nОткрыт личный список. Последнее "
                 "действие в общем списке могло не сохраниться — проверьте его, когда связь "
-                "появится.", parent=self.root)
+                "появится. Когда связь вернётся, общий список откроется сам.", parent=self.root)
             return
         tk.Tk.report_callback_exception(self.root, kind, error, trace)
 
     def watch_changes(self):
         """Раз в несколько секунд: не изменил ли кто-то открытый общий список или перечень
-        общих списков. Перерисовываем, только если что-то изменилось."""
+        общих списков. Перерисовываем, только если что-то изменилось.
+        Заодно следит за связью с общей папкой: пропала — убираем общие списки,
+        вернулась — подключаемся снова."""
+        if self.team and not self.share_online():
+            name = self.go_offline()
+            if name:
+                self.side.totoro.show(f"Пропала связь с общим списком «{name}» — общая папка "
+                                      "недоступна (сеть, VPN). Пока открыт личный список. Когда "
+                                      "связь вернётся, общий список откроется сам.", mood="alert")
+        elif (self.team is None and self.probe and self.probe.online()
+              and time_module.monotonic() >= self.reconnect_at):
+            self.reconnect_team()
         try:
             if self.team:
                 version = self.team.version()

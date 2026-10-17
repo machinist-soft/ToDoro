@@ -168,6 +168,31 @@ class TeamTests(TempDir):
         self.assertEqual(second.lists(), [])
         first.close(); second.close()
 
+    def test_probe_notices_lost_and_restored_folder(self):
+        team.Team(self.dir).close()
+        probe = team.Probe(self.dir)
+        probe.EVERY = 0.05
+        try:
+            self.assertTrue(self.wait_for(probe, True))
+            moved = self.dir / "ToDoro"
+            moved.rename(self.dir / "away")  # «пропала сеть»
+            self.assertTrue(self.wait_for(probe, False))
+            (self.dir / "away").rename(moved)  # «сеть вернулась»
+            self.assertTrue(self.wait_for(probe, True))
+            probe.started = team.time.monotonic() - probe.HANG - 1  # проверка «повисла»
+            self.assertFalse(probe.online())
+        finally:
+            probe.stop()
+
+    @staticmethod
+    def wait_for(probe, online, seconds=5):
+        deadline = team.time.monotonic() + seconds
+        while team.time.monotonic() < deadline:
+            if probe.online() == online:
+                return True
+            team.time.sleep(0.02)
+        return False
+
     def test_unreachable_folder_gives_clear_error(self):
         blocker = self.dir / "file"
         blocker.write_text("not a folder")

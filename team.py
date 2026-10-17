@@ -9,6 +9,8 @@ import os
 import shutil
 import socket
 import sqlite3
+import threading
+import time
 import uuid
 from datetime import date, timedelta
 from pathlib import Path
@@ -17,6 +19,45 @@ import db
 
 BACKUP_DAYS = 14
 TIMEOUT = 15  # секунд ждать, если файл сейчас пишет другой участник
+
+
+class Probe:
+    """Фоновая проверка, на связи ли общая папка.
+
+    Когда пропадает Wi-Fi или VPN, любое обращение к сетевой папке может «повиснуть» на
+    десятки секунд — и окно программы белеет. Поэтому окно само к папке не ходит, пока эта
+    проверка (в отдельном потоке) не скажет, что связь есть. Если проверка сама повисла
+    дольше HANG секунд — значит, связи нет."""
+    EVERY = 3  # секунд между проверками
+    HANG = 3   # секунд: дольше — считаем, что связи нет
+
+    def __init__(self, folder):
+        self.folder = folder
+        self.file = Path(str(folder).strip()) / "ToDoro" / "team.db"
+        self.ok = None        # None — ещё ни разу не проверяли
+        self.started = None   # когда началась идущая сейчас проверка
+        self.stopped = False
+        threading.Thread(target=self.run, daemon=True).start()
+
+    def run(self):
+        while not self.stopped:
+            self.started = time.monotonic()
+            try:
+                with open(self.file, "rb") as file:  # открыть и прочитать — нужен ответ сервера
+                    ok = len(file.read(100)) == 100
+            except OSError:
+                ok = False
+            self.ok, self.started = ok, None
+            time.sleep(self.EVERY)
+
+    def online(self):
+        started = self.started
+        if started is not None and time.monotonic() - started > self.HANG:
+            return False
+        return bool(self.ok)
+
+    def stop(self):
+        self.stopped = True
 
 
 class TeamError(Exception):
