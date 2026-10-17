@@ -317,6 +317,9 @@ def main(out):
     for name, on in (("check_off", False), ("check_on", True)):
         (out / f"{name}.png").write_bytes(png(render(checkbox(on), 18, 18, 1.0)))
         (out / f"{name}_dark.png").write_bytes(png(render(checkbox(on, dark=True), 18, 18, 1.0)))
+    # логотип в заголовке окна — та же картинка, что на значке программы (make_icon.py)
+    from make_icon import icon_shape
+    (out / "logo.png").write_bytes(png(render(icon_shape(34), 34, 34, 1.0, ss=6)))
 
 
 if __name__ == "__main__":

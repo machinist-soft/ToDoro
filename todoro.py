@@ -92,6 +92,7 @@ PALETTES = {
         CATBUS_KEY="#f3f5fa",       # «прозрачный» цвет окна Котобуса — почти цвет фона
         SIGN_TEXT="#166534", SIGN_BG="#e8f7ee", SIGN_BORDER="#86d3a3",
         TINT_BASE="#ffffff",        # к какому цвету «разбавляются» цвета колонок доски
+        BRAND="#00978c",            # бирюзовый цвет значка ToDoro (логотип вверху окна)
     ),
     "dark": dict(
         BG="#15181e",
@@ -119,6 +120,7 @@ PALETTES = {
         CATBUS_KEY="#16191f",
         SIGN_TEXT="#86efac", SIGN_BG="#1f3329", SIGN_BORDER="#2f5a41",
         TINT_BASE="#1e222a",
+        BRAND="#2bb8ac",
     ),
 }
 THEMES = {"light": "Светлая", "dark": "Тёмная", "system": "Как в Windows"}
@@ -4263,7 +4265,14 @@ class TodoApp:
         # Заголовок, счётчики-«таблетки», меню и справка
         header = ttk.Frame(page)
         header.pack(fill="x", pady=(4, 0))
-        ttk.Label(header, text=APP_NAME, style="Title.TLabel").pack(side="left")
+        # Логотип: значок программы и название, «Doro» — фирменным бирюзовым цветом значка
+        brand = tk.Frame(header, bg=BG)
+        brand.pack(side="left")
+        if "logo" in IMAGES:
+            tk.Label(brand, image=IMAGES["logo"], bg=BG, bd=0).pack(side="left", padx=(0, 10))
+        for part, color in (("To", TEXT), ("Doro", BRAND)):
+            tk.Label(brand, text=part, bg=BG, fg=color, font=("Segoe UI Semibold", 20), bd=0,
+                     padx=0, pady=0).pack(side="left")
         # Переключатель списков: «Личный ▾», «Команда ▾» …
         self.list_button = ttk.Button(header, style="TButton", cursor="hand2",
                                       command=self.show_lists_menu)
