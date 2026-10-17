@@ -3876,14 +3876,14 @@ class EisenhowerMatrix(KanbanBoard):
 
         self.columnconfigure(1, weight=1, uniform="q")
         self.columnconfigure(2, weight=1, uniform="q")
-        self.rowconfigure(1, weight=1, uniform="q")
-        self.rowconfigure(2, weight=1, uniform="q")
+        self.rowconfigure(1, weight=1, minsize=self.MIN_ROW)  # высоту строк задаёт render
+        self.rowconfigure(2, weight=1, minsize=self.MIN_ROW)
         # подписи осей: сверху «Срочно / Не срочно», слева (повёрнуто) «Важно / Не важно»
         for column, text in ((1, "Срочно"), (2, "Не срочно")):
             tk.Label(self, text=text, bg=BG, fg=MUTED, font=FONT_SMALL).grid(
                 row=0, column=column, pady=(0, 4))
         for row, text in ((1, "Важно"), (2, "Не важно")):
-            side = tk.Canvas(self, bg=BG, width=22, highlightthickness=0)
+            side = tk.Canvas(self, bg=BG, width=22, height=1, highlightthickness=0)  # высоту задаёт строка
             side.grid(row=row, column=0, sticky="ns", padx=(0, 4))
             label = side.create_text(11, 0, text=text, angle=90, fill=MUTED, font=FONT_SMALL)
             side.bind("<Configure>", lambda e, c=side, i=label: c.coords(i, 11, e.height / 2))
@@ -3900,6 +3900,7 @@ class EisenhowerMatrix(KanbanBoard):
 
     CARD = LANE_WIDTH - 20  # ширина карточки — как на доске
     GAP = 8                 # промежуток между карточками
+    MIN_ROW = 140           # высота строки четвертей, даже если в ней нет задач
 
     def resized(self, event):
         # карточки стоят сеткой: если в четверть теперь помещается другое число колонок,
@@ -3908,13 +3909,26 @@ class EisenhowerMatrix(KanbanBoard):
             if self.redraw_job:
                 self.after_cancel(self.redraw_job)
             self.redraw_job = self.after(150, lambda: self.render(*self.shown))
+        elif self.shown and self.card_size() + 20 != self.card_width:  # та же сетка, другая ширина
+            if self.redraw_job:
+                self.after_cancel(self.redraw_job)
+            self.redraw_job = self.after(150, lambda: self.render(*self.shown))
+
+    def inside_width(self):
+        """Ширина четверти, которую могут занять карточки."""
+        width = self.winfo_width()
+        quadrant = (width - 36) // 2 if width > 100 else 500
+        return quadrant - 30  # рамка, отступы и место под полосу прокрутки
 
     def columns(self):
         """Сколько карточек помещается в ряд в одной четверти."""
-        width = self.winfo_width()
-        quadrant = (width - 36) // 2 if width > 100 else 500
-        inside = quadrant - 22  # рамка, отступы и место под прокрутку
-        return max(1, (inside + self.GAP) // (self.CARD + self.GAP))
+        return max(1, (self.inside_width() + self.GAP) // (self.CARD + self.GAP))
+
+    def card_size(self):
+        """Ширина карточки: карточки растягиваются на всю ширину четверти, чтобы справа не
+        пустовало место (на небольшом экране — одна широкая колонка вместо узкой)."""
+        columns = self.drawn_columns
+        return max(self.CARD, (self.inside_width() - self.GAP * (columns - 1)) // columns)
 
     def level(self, task_id, urgent, important):
         """Четверть задачи: просроченная считается срочной."""
@@ -3925,10 +3939,16 @@ class EisenhowerMatrix(KanbanBoard):
         self.redraw_job = None
         self.shown = (statuses, rows, overdue_ids)
         self.drawn_columns = self.columns()
+        self.card_width = self.card_size() + 20  # переносы текста — по настоящей ширине карточки
         colors = {sid: color for sid, _, color, _ in statuses}
         by_level = {}
         for row in rows:
             by_level.setdefault(self.level(row[0], row[6], row[7]), []).append(row)
+        # Высота строк — по числу рядов карточек: где задач больше, там больше места
+        # (на небольшом экране пустые четверти не отнимают его у заполненных)
+        for grid_row, levels in ((1, (1, 2)), (2, (3, 4))):
+            card_rows = max(-(-len(by_level.get(level, [])) // self.drawn_columns) for level in levels)
+            self.rowconfigure(grid_row, weight=max(1, card_rows))
         self.lanes, self.cards = [], {}
         for level, _, _, name, hint, color in self.QUADRANTS:
             self.make_quadrant(level, name, hint, color, by_level.get(level, []), colors, overdue_ids)
@@ -3952,15 +3972,20 @@ class EisenhowerMatrix(KanbanBoard):
             side="left", padx=(8, 0))
         tk.Label(head, text=hint, bg=bg, fg=MUTED, font=FONT_SMALL).pack(side="right")
 
-        # карточки — сеткой в прокручиваемой области; цветная полоска карточки — цвет её статуса
+        # карточки — сеткой в прокручиваемой области; цветная полоска карточки — цвет её статуса.
+        # Не поместились (маленький экран) — справа появляется полоса прокрутки.
+        bar_style = f"Quadrant{level}.Vertical.TScrollbar"
+        ttk.Style().configure(bar_style, troughcolor=bg, bordercolor=bg)
         area = tk.Canvas(box, bg=bg, highlightthickness=0)
+        bar = ttk.Scrollbar(box, orient="vertical", command=area.yview, style=bar_style)
+        area.configure(yscrollcommand=lambda first, last: self.update_bar(bar, area, first, last))
         area.pack(fill="both", expand=True, padx=(10, 6), pady=(0, 10))
         cards = tk.Frame(area, bg=bg)
         area.create_window(0, 0, window=cards, anchor="nw")
         cards.bind("<Configure>", lambda e: area.configure(scrollregion=area.bbox("all")))
         columns = self.drawn_columns
         for column in range(columns):
-            cards.columnconfigure(column, minsize=self.CARD, uniform="card")
+            cards.columnconfigure(column, minsize=self.card_width - 20, uniform="card")
         for index, row in enumerate(rows):
             cell = tk.Frame(cards, bg=bg)
             cell.grid(row=index // columns, column=index % columns, sticky="nsew",
@@ -3976,6 +4001,18 @@ class EisenhowerMatrix(KanbanBoard):
                   lambda e: area.yview_scroll(-1 if e.delta > 0 else 1, "units")
                   if area.bbox("all") and area.bbox("all")[3] > area.winfo_height() else None)
         self.lanes.append((level, box, bg))
+
+    @staticmethod
+    def update_bar(bar, area, first, last):
+        """Полоса прокрутки четверти — только когда карточки в неё не помещаются."""
+        needed = not (float(first) <= 0 and float(last) >= 1)
+        if needed and not bar.winfo_ismapped():
+            bar.pack(side="right", fill="y", padx=(0, 4), pady=(0, 10), before=area)
+            area.pack_configure(padx=(10, 2))
+        elif not needed and bar.winfo_ismapped():
+            bar.pack_forget()
+            area.pack_configure(padx=(10, 6))
+        bar.set(first, last)
 
     def on_release(self, event):
         drag, self.drag = self.drag, None
