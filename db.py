@@ -59,9 +59,55 @@ DEFAULT_STATUSES = [
 ]
 
 
-def connect(path=None, timeout=5):
-    """timeout — сколько секунд ждать, если файл сейчас пишет кто-то другой (общие списки)."""
-    conn = sqlite3.connect(path or default_path(), timeout=timeout)
+class SharedConnection(sqlite3.Connection):
+    """Соединение с общим списком в сетевой папке.
+
+    Каждое отдельное чтение из файла — это захват и снятие блокировки, то есть несколько
+    «поездок» до сервера; через VPN одна такая поездка занимает десятки миллисекунд, а одно
+    действие в окне (перенести задачу, сохранить правку) читает файл десятки раз.
+    Поэтому все чтения, сделанные за одно действие, идут в одной транзакции (одна блокировка),
+    а закрывается она, когда окно освободилось (after_idle). Перед записью транзакция
+    чтения закрывается, чтобы запись ждала других участников как обычно (иначе SQLite сразу
+    ответил бы «база занята»)."""
+    root = None      # окно Tk; пока не задано — соединение работает как обычное
+    reading = False  # открыта наша транзакция чтения
+
+    def execute(self, sql, *args):
+        if self.root is not None:
+            word = sql.lstrip()[:6].upper()
+            if word == "SELECT":
+                if not self.in_transaction:
+                    super().execute("BEGIN")
+                    self.reading = True
+                    self.root.after_idle(self.end_reading)
+            elif word != "PRAGMA":
+                self.end_reading()
+        return super().execute(sql, *args)
+
+    def executemany(self, sql, *args):
+        self.end_reading()
+        return super().executemany(sql, *args)
+
+    def executescript(self, sql):
+        self.end_reading()
+        return super().executescript(sql)
+
+    def end_reading(self):
+        if self.reading:
+            self.reading = False
+            if self.in_transaction:
+                self.commit()
+
+    def close(self):
+        self.reading = False  # отложенный end_reading не должен трогать закрытое соединение
+        super().close()
+
+
+def connect(path=None, timeout=5, shared=False):
+    """timeout — сколько секунд ждать, если файл сейчас пишет кто-то другой (общие списки).
+    shared — файл в общей сетевой папке (см. SharedConnection)."""
+    conn = sqlite3.connect(path or default_path(), timeout=timeout,
+                           factory=SharedConnection if shared else sqlite3.Connection)
     # Таблица tasks — это как лист Excel: каждая строка — одна задача.
     conn.execute(
         """

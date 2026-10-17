@@ -193,6 +193,35 @@ class TeamTests(TempDir):
             team.time.sleep(0.02)
         return False
 
+    def test_shared_connection_batches_reads(self):
+        class FakeRoot:  # вместо окна Tk: after_idle просто запоминает, что вызвать
+            idle = []
+            def after_idle(self, func):
+                self.idle.append(func)
+
+        path = self.dir / "list.db"
+        mine = db.connect(path, timeout=1, shared=True)
+        other = db.connect(path, timeout=1)
+        mine.root = root = FakeRoot()
+        task = db.add_task(mine, "Первая")
+        self.assertFalse(mine.in_transaction)  # запись сохранена сразу
+        root.idle.clear()
+        db.list_tasks(mine)
+        db.list_tasks(mine)
+        self.assertTrue(mine.in_transaction)  # оба чтения — в одной транзакции
+        self.assertEqual(len(root.idle), 1)
+        db.set_task_status(mine, task, db.list_statuses(mine)[1][0])  # запись закрывает чтение
+        self.assertFalse(mine.in_transaction)
+        db.list_tasks(mine)
+        for func in root.idle:  # окно освободилось
+            func()
+        self.assertFalse(mine.in_transaction)
+        db.add_task(other, "Вторая")  # другой участник может писать
+        self.assertEqual(len(db.list_tasks(mine)), 2)
+        mine.close()
+        root.idle[-1]()  # отложенное закрытие транзакции после close не падает
+        other.close()
+
     def test_unreachable_folder_gives_clear_error(self):
         blocker = self.dir / "file"
         blocker.write_text("not a folder")

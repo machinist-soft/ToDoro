@@ -6370,7 +6370,9 @@ class TodoApp:
         if list_id not in self.list_conns:
             item = next(i for i in self.lists if i["id"] == list_id)
             if item["shared"]:
-                self.list_conns[list_id] = db.connect(self.team.path(item), timeout=team.TIMEOUT)
+                conn = db.connect(self.team.path(item), timeout=team.TIMEOUT, shared=True)
+                conn.root = self.root  # чтения одного действия — одним обращением к сети
+                self.list_conns[list_id] = conn
             else:
                 self.list_conns[list_id] = db.connect(db.list_path(item))
         return self.list_conns[list_id]
