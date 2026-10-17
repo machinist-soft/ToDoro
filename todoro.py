@@ -371,7 +371,7 @@ def dark_titlebar(window):
     if THEME != "dark":
         return
     try:
-        hwnd = ctypes.windll.user32.GetParent(window.winfo_id()) or window.winfo_id()
+        hwnd = int(window.wm_frame(), 16)  # рамка окна (создаётся, даже если окно ещё не показано)
         on = ctypes.c_int(1)
         for attribute in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE (новые и старые сборки)
             if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(on),
@@ -384,13 +384,21 @@ def dark_titlebar(window):
 
 
 def center_on_screen(window, width=None, height=None):
-    """Ставит окно по центру экрана."""
+    """Ставит окно по центру экрана. Новое окно сначала прячем: иначе оно мелькает в углу
+    и в тёмной теме остаётся со светлым заголовком."""
+    hide = (isinstance(window, tk.Toplevel) and not window.winfo_ismapped()
+            and window.state() == "normal")
+    if hide:
+        window.withdraw()
     window.update_idletasks()
     width = width or window.winfo_reqwidth()
     height = height or window.winfo_reqheight()
     x = (window.winfo_screenwidth() - width) // 2
     y = (window.winfo_screenheight() - height) // 2
     window.geometry(f"{width}x{height}+{x}+{max(y, 0)}")
+    if hide:
+        dark_titlebar(window)  # тёмный заголовок — ещё до показа окна
+        window.deiconify()
 
 
 def format_due(due_at):
