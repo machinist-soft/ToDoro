@@ -673,13 +673,16 @@ class AlertDialog(tk.Toplevel):
 
         bar = tk.Frame(self, bg=BG, highlightthickness=1, highlightbackground=BORDER)
         bar.pack(fill="x", side="bottom")
-        focus = None
-        for label, value, style in reversed(buttons):
+        focus, made = None, []
+        for label, value, style in reversed(buttons):  # pack справа налево — сначала крайняя
             button = ttk.Button(bar, text=label, style=style, cursor="hand2",
                                 command=lambda v=value: self.finish(v))
-            button.pack(side="right", padx=(0, 10 if focus is None else 8), pady=12)
+            button.pack(side="right", padx=(0, 8 if made else 10), pady=12)
+            made.append(button)
             if value == default:
                 focus = button
+        for button in reversed(made):  # Tab — слева направо
+            button.lift()
         self.bind("<Escape>", lambda e: self.finish(cancel))
         self.bind("<Return>", lambda e: self.finish(default))
         self.protocol("WM_DELETE_WINDOW", lambda: self.finish(cancel))
@@ -748,8 +751,8 @@ class ui:
 
     @staticmethod
     def askokcancel(title, message, parent=None, **_):
-        return ui._show(title, message, "info", [("Отмена", False, "TButton"),
-                                                 ("Продолжить", True, "Accent.TButton")],
+        return ui._show(title, message, "info", [("Продолжить", True, "Accent.TButton"),
+                                                 ("Отмена", False, "TButton")],
                         True, False, parent)
 
 
@@ -984,9 +987,12 @@ class TaskForm(ttk.Frame):
         if not compact:  # в правой панели кнопки — в нижней строке панели (SidePanel.show_form)
             buttons = ttk.Frame(self, style=self["style"])
             buttons.pack(fill="x", pady=(18, 0))
-            ttk.Button(buttons, text="Сохранить", style="Accent.TButton", command=self.save).pack(side="right")
-            ttk.Button(buttons, text="Отмена", style="TButton", command=on_cancel).pack(
+            # кнопки справа: «Сохранить», затем «Отмена» (pack справа налево — сначала крайняя)
+            cancel = ttk.Button(buttons, text="Отмена", style="TButton", command=on_cancel)
+            cancel.pack(side="right")
+            ttk.Button(buttons, text="Сохранить", style="Accent.TButton", command=self.save).pack(
                 side="right", padx=(0, 8))
+            cancel.lift()  # Tab: сначала «Сохранить», потом «Отмена»
 
         self.date_changed()
         self.initial = self.values()
@@ -1874,10 +1880,12 @@ class SidePanel(tk.Frame):
         self.form = TaskForm(area.inner, task, statuses, on_save, on_cancel, compact=True,
                              members=members)
         self.form.pack(fill="x", padx=18, pady=(0, 16))
+        cancel = ttk.Button(buttons, text="Отмена", style="Soft.TButton", cursor="hand2",
+                            command=on_cancel)
+        cancel.pack(side="right")
         ttk.Button(buttons, text="Сохранить", style="Accent.TButton", cursor="hand2",
-                   command=self.form.save).pack(side="right")
-        ttk.Button(buttons, text="Отмена", style="Soft.TButton", cursor="hand2",
-                   command=on_cancel).pack(side="right", padx=(0, 8))
+                   command=self.form.save).pack(side="right", padx=(0, 8))
+        cancel.lift()  # Tab: сначала «Сохранить», потом «Отмена»
         area.bind_wheel()
         self.switch("edit", self.editor)
         self.form.focus_title()
@@ -2201,9 +2209,14 @@ class ModernDialog(tk.Toplevel):
         self.content.pack(fill="both", expand=True)
         buttons = tk.Frame(self.body, bg=SURFACE)
         buttons.pack(fill="x", pady=(22, 0))
-        ttk.Button(buttons, text=ok_text, style="Accent.TButton", command=self.ok).pack(side="right")
-        ttk.Button(buttons, text="Отмена", style="Soft.TButton", command=self.destroy).pack(
-            side="right", padx=(0, 8))
+        self.buttons = buttons
+        # главная кнопка слева, «Отмена» справа (pack справа налево — сначала крайняя)
+        self.cancel_button = ttk.Button(buttons, text="Отмена", style="Soft.TButton",
+                                        command=self.destroy)
+        self.cancel_button.pack(side="right")
+        self.ok_button = ttk.Button(buttons, text=ok_text, style="Accent.TButton", command=self.ok)
+        self.ok_button.pack(side="right", padx=(0, 8))
+        self.cancel_button.lift()  # Tab: сначала главная кнопка, потом «Отмена»
         self.bind("<Escape>", lambda e: self.destroy())
         self.bind("<Return>", lambda e: self.ok())
 
@@ -2231,13 +2244,17 @@ class ConflictDialog(ModernDialog):
             text += "\n«Вернуться к правке» — продолжить редактировать (форма останется открытой)."
         tk.Label(self.content, text=text, bg=SURFACE, fg=TEXT, font=FONT_SMALL, justify="left",
                  wraplength=440).pack(anchor="w")
-        # кнопки: [Вернуться] [Оставить их] ... [Сохранить мой] (последняя — из ModernDialog)
-        buttons = self.content.master.winfo_children()[-1]
-        cancel = [w for w in buttons.winfo_children() if isinstance(w, ttk.Button)][-1]
-        cancel.configure(text=f"Оставить вариант {who}", command=self.theirs)
+        # кнопки: [Сохранить мой] [Оставить их] [Вернуться к правке]
+        self.cancel_button.configure(text=f"Оставить вариант {who}", command=self.theirs)
         if can_return:
-            ttk.Button(buttons, text="Вернуться к правке", style="Soft.TButton",
-                       command=self.destroy).pack(side="right", padx=(0, 8))
+            self.ok_button.pack_forget()
+            self.cancel_button.pack_forget()
+            back = ttk.Button(self.buttons, text="Вернуться к правке", style="Soft.TButton",
+                              command=self.destroy)
+            back.pack(side="right")
+            self.cancel_button.pack(side="right", padx=(0, 8))
+            self.ok_button.pack(side="right", padx=(0, 8))
+            back.lift()
         self.result = "back" if can_return else "theirs"
 
     def ok(self):
@@ -2422,10 +2439,11 @@ class SettingsDialog(tk.Toplevel):
 
         bar = tk.Frame(self, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
         bar.pack(fill="x", side="bottom")
+        cancel = ttk.Button(bar, text="Отмена", style="Soft.TButton", command=self.destroy)
+        cancel.pack(side="right", padx=(0, 18), pady=12)
         ttk.Button(bar, text="Сохранить", style="Accent.TButton", command=self.ok).pack(
-            side="right", padx=(0, 18), pady=12)
-        ttk.Button(bar, text="Отмена", style="Soft.TButton", command=self.destroy).pack(
             side="right", padx=(0, 8), pady=12)
+        cancel.lift()  # Tab: сначала «Сохранить», потом «Отмена»
 
         self.page = None
         self.show_page(page)
@@ -2812,9 +2830,10 @@ class UpdateDialog(tk.Toplevel):
         self.ok_button = ttk.Button(
             buttons, text="Обновить" if self.self_update else "Открыть страницу выпуска",
             style="Accent.TButton", command=self.update_now)
-        self.ok_button.pack(side="right")
         self.later_button = ttk.Button(buttons, text="Позже", style="Soft.TButton", command=self.destroy)
-        self.later_button.pack(side="right", padx=(0, 8))
+        self.later_button.pack(side="right")
+        self.ok_button.pack(side="right", padx=(0, 8))
+        self.later_button.lift()  # Tab: сначала «Обновить», потом «Позже»
         self.bind("<Escape>", lambda e: self.destroy() if self.later_button.instate(["!disabled"]) else None)
         self.bind("<Return>", lambda e: self.update_now() if self.ok_button.instate(["!disabled"]) else None)
         center_on_screen(self)
