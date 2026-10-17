@@ -251,8 +251,10 @@ def dot(color):
     return lambda u, v: color if (u - 0.5) ** 2 + (v - 0.5) ** 2 <= 0.16 else None
 
 
-def checkbox(on):
-    accent, border = (37, 99, 235), (184, 192, 204)
+def checkbox(on, dark=False):
+    """Галочка «Срочно / Важно». dark — для тёмной темы (тёмное поле, светлее рамка)."""
+    accent, border = ((79, 140, 255), (91, 99, 114)) if dark else ((37, 99, 235), (184, 192, 204))
+    field = (30, 34, 42) if dark else WHITE
 
     def shape(u, v):
         d = sd_round_rect(u, v, 0.03, 0.03, 0.97, 0.97, 0.2)
@@ -262,7 +264,7 @@ def checkbox(on):
             if sd_segment(u, v, 0.27, 0.52, 0.43, 0.68) < 0.065 or sd_segment(u, v, 0.43, 0.68, 0.74, 0.34) < 0.065:
                 return WHITE
             return accent
-        return border if d > -0.085 else WHITE
+        return border if d > -0.085 else field
     return shape
 
 
@@ -312,8 +314,9 @@ def main(out):
     (out / "catbus.png").write_bytes(png(render(lambda u, v: catbus(1 - u, v), 112, 72, 0.643)))
     for level, color in ((1, (239, 68, 68)), (2, (245, 158, 11)), (3, (59, 130, 246))):
         (out / f"priority_{level}.png").write_bytes(png(render(dot(color), 14, 14, 1.0)))
-    for name, on in (("check_off.png", False), ("check_on.png", True)):
-        (out / name).write_bytes(png(render(checkbox(on), 18, 18, 1.0)))
+    for name, on in (("check_off", False), ("check_on", True)):
+        (out / f"{name}.png").write_bytes(png(render(checkbox(on), 18, 18, 1.0)))
+        (out / f"{name}_dark.png").write_bytes(png(render(checkbox(on, dark=True), 18, 18, 1.0)))
 
 
 if __name__ == "__main__":

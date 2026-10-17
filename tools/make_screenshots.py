@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import db  # noqa: E402
 
+DARK = "dark" in sys.argv[1:]  # python tools/make_screenshots.py dark — только снимок тёмной темы
 work = Path(tempfile.mkdtemp(prefix="todoro-shots-"))
 out = ROOT / "docs" / "screenshots"
 out.mkdir(parents=True, exist_ok=True)
@@ -29,6 +30,8 @@ db.DB_PATH = work / "todoro.db"
 db.LISTS_DIR = work / "lists"
 db.OLD_DB_PATHS = []
 
+# тема читается при загрузке todoro.py — записываем её до этого
+db.set_setting(db.connect(), "theme", "dark" if DARK else "light")
 import team  # noqa: E402
 import todoro as T  # noqa: E402
 from examples import make_examples  # noqa: E402
@@ -76,7 +79,8 @@ share.close()
 
 for key, value in (("update_auto", "0"), ("start_mode", "window"), ("view", "list"),
                    ("update_checked", "2099-01-01"), ("shared_folder", str(work / "share")),
-                   ("user_name", ME), ("current_list", item["id"])):
+                   ("user_name", ME), ("current_list", item["id"]),
+                   ("theme", "dark" if DARK else "light")):
     db.set_setting(prefs, key, value)
 # уже «видели» все назначенные задачи — чтобы окно «Вам назначены задачи» не попало в кадр
 db.set_json_setting(prefs, "assigned_seen_lists", [item["id"]])
@@ -120,6 +124,17 @@ def grab(name, box=None, window=None):
 def select(title):
     app.select_task(ids[title])
     root.update()
+
+
+def run_dark():
+    """Тёмная тема: доска общего списка."""
+    for _ in range(6):
+        root.update()
+        time.sleep(0.2)
+    app.view.set("board")
+    app.switch_view()
+    grab("dark.png")
+    root.destroy()
 
 
 def run():
@@ -207,5 +222,5 @@ def make_gif(frames):
     print("saved catbus.gif", len(gif), "frames", (out / "catbus.gif").stat().st_size // 1024, "KB")
 
 
-root.after(1200, run)
+root.after(1200, run_dark if DARK else run)
 root.mainloop()

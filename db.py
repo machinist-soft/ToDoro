@@ -219,6 +219,22 @@ def get_setting(conn, key, default=None):
     return row[0] if row else default
 
 
+def peek_setting(key, default=None):
+    """Настройка из основного файла — без создания таблиц и без записи (до запуска окна:
+    например, тема оформления). Нет файла или настройки — default."""
+    if not DB_PATH.exists():
+        return default
+    try:
+        conn = sqlite3.connect(DB_PATH.as_uri() + "?mode=ro", uri=True)
+        try:
+            row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return default
+    return row[0] if row else default
+
+
 def set_setting(conn, key, value):
     with conn:
         conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))

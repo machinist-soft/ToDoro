@@ -7,6 +7,8 @@ import os
 import random
 import re
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
 import time as time_module
@@ -54,18 +56,83 @@ FONT_SMALL = ("Segoe UI", 10)
 FONT_BOLD = ("Segoe UI Semibold", 11)
 FONT_TITLE = ("Segoe UI Semibold", 20)
 
-# Палитра
-BG = "#f4f6fb"            # фон окна
-SURFACE = "#ffffff"       # карточки, поля ввода
-BORDER = "#e3e7ef"
-TEXT = "#1f2937"
-MUTED = "#6b7280"
-ACCENT = "#2563eb"
-ACCENT_HOVER = "#1d4ed8"
-ACCENT_SOFT = "#e8efff"   # выделенная строка, наведение
-DANGER = "#dc2626"
-DONE = "#9ca3af"
-SEGMENT_BG = "#e7ebf3"
+# Палитры: светлая и тёмная. Все цвета интерфейса берутся отсюда по имени.
+# Тема выбирается в настройках и применяется при запуске программы.
+PALETTES = {
+    "light": dict(
+        BG="#f4f6fb",               # фон окна
+        SURFACE="#ffffff",          # карточки, поля ввода
+        BORDER="#e3e7ef",
+        TEXT="#1f2937",
+        MUTED="#6b7280",
+        DONE="#9ca3af",             # выполненные задачи, подсказки
+        ACCENT="#2563eb", ACCENT_HOVER="#1d4ed8", ACCENT_PRESSED="#1e40af",
+        ACCENT_SOFT="#e8efff",      # выделенная строка, выбранный раздел
+        ACCENT_SOFT_HOVER="#dbe6ff",
+        DANGER="#dc2626", DANGER_SOFT="#fdf0f0", DANGER_SOFT_HOVER="#fbe1e1",
+        SEGMENT_BG="#e7ebf3", SEGMENT_HOVER="#dde3ee",
+        HOVER="#e9edf4",            # наведение на мягкие кнопки и пункты
+        BUTTON_HOVER="#f3f5f9", BUTTON_PRESSED="#e5e7eb", SOFT_PRESSED="#dfe4ec",
+        ROW_HOVER="#f6f8fc", HEADING_LINE="#dfe3ea",
+        SCROLL="#d6dbe4", SCROLL_ACTIVE="#b8c0cc", CHECK_BORDER="#b8c0cc",
+        POPUP_BORDER="#cbd2dd", MENU_BORDER="#d3d9e3", DASHED="#cfd5df",
+        OTHER_MONTH="#c4c9d2", FOUND="#fff1a8",
+        ALERT_BG="#fdeeee", ALERT_BORDER="#f3c4c4",
+        GOOD_BG="#eaf7ef", GOOD_BORDER="#bfe5cc", GOOD_TEXT="#15803d",
+        CHIP_BG="#eef1f6", CHIP_GOOD_BG="#e8f7ee",
+        OK_DOT="#16a34a", WARN="#d97706", BUSY="#f59e0b",
+        CARD_BORDER="#e9ecf2",      # рамка карточки на доске (у выбранной — синяя)
+        CATBUS_KEY="#f3f5fa",       # «прозрачный» цвет окна Котобуса — почти цвет фона
+        SIGN_TEXT="#166534", SIGN_BG="#e8f7ee", SIGN_BORDER="#86d3a3",
+        TINT_BASE="#ffffff",        # к какому цвету «разбавляются» цвета колонок доски
+    ),
+    "dark": dict(
+        BG="#15181e",
+        SURFACE="#1e222a",
+        BORDER="#2e3440",
+        TEXT="#e5e7eb",
+        MUTED="#9aa3b2",
+        DONE="#6b7280",
+        ACCENT="#4f8cff", ACCENT_HOVER="#6a9dff", ACCENT_PRESSED="#3b74e0",
+        ACCENT_SOFT="#22324f",
+        ACCENT_SOFT_HOVER="#2a3d60",
+        DANGER="#f87171", DANGER_SOFT="#3a2226", DANGER_SOFT_HOVER="#4a2a2f",
+        SEGMENT_BG="#262b34", SEGMENT_HOVER="#30363f",
+        HOVER="#2a303a",
+        BUTTON_HOVER="#272c35", BUTTON_PRESSED="#323844", SOFT_PRESSED="#323844",
+        ROW_HOVER="#242933", HEADING_LINE="#363d4a",
+        SCROLL="#3a404c", SCROLL_ACTIVE="#4b5262", CHECK_BORDER="#5b6372",
+        POPUP_BORDER="#3a404c", MENU_BORDER="#3a404c", DASHED="#4b5262",
+        OTHER_MONTH="#4b5262", FOUND="#5c4a10",
+        ALERT_BG="#3a2226", ALERT_BORDER="#5c2f35",
+        GOOD_BG="#1f3329", GOOD_BORDER="#2f5a41", GOOD_TEXT="#4ade80",
+        CHIP_BG="#262b34", CHIP_GOOD_BG="#1f3329",
+        OK_DOT="#22c55e", WARN="#f59e0b", BUSY="#f59e0b",
+        CARD_BORDER="#2a303a",
+        CATBUS_KEY="#16191f",
+        SIGN_TEXT="#86efac", SIGN_BG="#1f3329", SIGN_BORDER="#2f5a41",
+        TINT_BASE="#1e222a",
+    ),
+}
+THEMES = {"light": "Светлая", "dark": "Тёмная", "system": "Как в Windows"}
+
+
+def windows_dark_mode():
+    """Включена ли в Windows тёмная тема для приложений."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+            return winreg.QueryValueEx(key, "AppsUseLightTheme")[0] == 0
+    except OSError:
+        return False
+
+
+THEME_SETTING = db.peek_setting("theme", "light")  # light, dark или system
+THEME = ("dark" if windows_dark_mode() else "light") if THEME_SETTING == "system" else THEME_SETTING
+if THEME not in PALETTES:
+    THEME = "light"
+globals().update(PALETTES[THEME])  # BG, SURFACE, TEXT, … — цвета выбранной темы
 
 # Варианты фильтра: подпись кнопки -> какие задачи показывать
 FILTERS = {
@@ -128,9 +195,10 @@ def load_images():
         IMAGES[path.stem] = tk.PhotoImage(file=str(path))
     # Свои картинки для галочек: стандартная в этой теме выглядит как крестик.
     style = ttk.Style()
+    suffix = "_dark" if THEME == "dark" and "check_on_dark" in IMAGES else ""
     if "check_on" in IMAGES and "Nice.indicator" not in style.element_names():
-        style.element_create("Nice.indicator", "image", IMAGES["check_off"],
-                             ("selected", IMAGES["check_on"]), sticky="w", width=26)
+        style.element_create("Nice.indicator", "image", IMAGES["check_off" + suffix],
+                             ("selected", IMAGES["check_on" + suffix]), sticky="w", width=26)
         style.layout("TCheckbutton", [
             ("Checkbutton.padding", {"sticky": "nswe", "children": [
                 ("Nice.indicator", {"side": "left", "sticky": ""}),
@@ -158,6 +226,8 @@ def setup_style(root):
     """Внешний вид всех элементов: плоские кнопки, светлый фон, акцентный синий."""
     root.configure(bg=BG)
     root.option_add("*TCombobox*Listbox.font", FONT)
+    root.option_add("*TCombobox*Listbox.background", SURFACE)
+    root.option_add("*TCombobox*Listbox.foreground", TEXT)
     root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
     root.option_add("*TCombobox*Listbox.selectForeground", "white")
     root.option_add("*Menu.font", FONT_SMALL)
@@ -181,19 +251,19 @@ def setup_style(root):
                     bordercolor=ACCENT, lightcolor=ACCENT, darkcolor=ACCENT,
                     focuscolor=ACCENT, **flat)
     style.map("Accent.TButton",
-              background=[("pressed", "#1e40af"), ("active", ACCENT_HOVER)],
+              background=[("pressed", ACCENT_PRESSED), ("active", ACCENT_HOVER)],
               bordercolor=[("active", ACCENT_HOVER)],
               lightcolor=[("active", ACCENT_HOVER)], darkcolor=[("active", ACCENT_HOVER)],
               focuscolor=[("active", ACCENT_HOVER)])
     style.configure("TButton", background=SURFACE, foreground=TEXT,
                     lightcolor=SURFACE, darkcolor=SURFACE, focuscolor=SURFACE, **flat)
     style.map("TButton",
-              background=[("pressed", "#e5e7eb"), ("active", "#f3f5f9")],
-              lightcolor=[("active", "#f3f5f9")], darkcolor=[("active", "#f3f5f9")],
-              focuscolor=[("active", "#f3f5f9")])
+              background=[("pressed", BUTTON_PRESSED), ("active", BUTTON_HOVER)],
+              lightcolor=[("active", BUTTON_HOVER)], darkcolor=[("active", BUTTON_HOVER)],
+              focuscolor=[("active", BUTTON_HOVER)])
     style.configure("Danger.TButton", foreground=DANGER)
-    for name, fg, bg, hover in (("AccentSoft", ACCENT, ACCENT_SOFT, "#dbe6ff"),
-                                ("DangerSoft", DANGER, "#fdf0f0", "#fbe1e1")):
+    for name, fg, bg, hover in (("AccentSoft", ACCENT, ACCENT_SOFT, ACCENT_SOFT_HOVER),
+                                ("DangerSoft", DANGER, DANGER_SOFT, DANGER_SOFT_HOVER)):
         style.configure(f"{name}.TButton", foreground=fg, background=bg, lightcolor=bg,
                         darkcolor=bg, bordercolor=bg, focuscolor=bg, padding=(12, 6),
                         font=FONT_SMALL)
@@ -202,14 +272,14 @@ def setup_style(root):
                   focuscolor=[("active", hover)])
     style.configure("Soft.TButton", background=BG, lightcolor=BG, darkcolor=BG,
                     bordercolor=BG, focuscolor=BG, padding=(12, 6))
-    style.map("Soft.TButton", background=[("pressed", "#dfe4ec"), ("active", "#e9edf4")],
-              lightcolor=[("active", "#e9edf4")], darkcolor=[("active", "#e9edf4")],
-              bordercolor=[("active", "#e9edf4")], focuscolor=[("active", "#e9edf4")])
+    style.map("Soft.TButton", background=[("pressed", SOFT_PRESSED), ("active", HOVER)],
+              lightcolor=[("active", HOVER)], darkcolor=[("active", HOVER)],
+              bordercolor=[("active", HOVER)], focuscolor=[("active", HOVER)])
 
     # Галочки «Срочно» / «Важно»
     style.configure("TCheckbutton", background=BG, foreground=TEXT, font=FONT,
                     indicatorbackground=SURFACE, indicatorforeground="white",
-                    upperbordercolor="#b8c0cc", lowerbordercolor="#b8c0cc",
+                    upperbordercolor=CHECK_BORDER, lowerbordercolor=CHECK_BORDER,
                     focuscolor=BG, indicatormargin=(0, 0, 8, 0), padding=(0, 2))
     style.map("TCheckbutton",
               indicatorbackground=[("selected", ACCENT), ("active", ACCENT_SOFT)],
@@ -222,18 +292,18 @@ def setup_style(root):
     style.configure("Icon.TButton", padding=(6, 3), font=FONT)
 
     # Поля ввода и выпадающие списки
-    style.configure("TEntry", fieldbackground=SURFACE, lightcolor=SURFACE,
+    style.configure("TEntry", fieldbackground=SURFACE, foreground=TEXT, lightcolor=SURFACE,
                     darkcolor=SURFACE, padding=(8, 6), insertcolor=TEXT)
     style.map("TEntry",
               bordercolor=[("focus", ACCENT)], lightcolor=[("focus", ACCENT)],
               fieldbackground=[("readonly", SURFACE)])
     style.configure("Placeholder.TEntry", foreground=DONE)
-    style.configure("TCombobox", fieldbackground=SURFACE, background=SURFACE,
+    style.configure("TCombobox", fieldbackground=SURFACE, background=SURFACE, foreground=TEXT,
                     lightcolor=SURFACE, darkcolor=SURFACE, arrowcolor=MUTED, padding=(6, 4))
     style.map("TCombobox",
               fieldbackground=[("disabled", BG), ("readonly", SURFACE)],
               foreground=[("disabled", DONE)],
-              background=[("disabled", BG), ("active", "#f3f5f9")],
+              background=[("disabled", BG), ("active", BUTTON_HOVER)],
               bordercolor=[("focus", ACCENT)],
               selectbackground=[("readonly", SURFACE)], selectforeground=[("readonly", TEXT)])
 
@@ -244,7 +314,7 @@ def setup_style(root):
     style.configure("Segment.TRadiobutton", background=SEGMENT_BG, foreground=MUTED,
                     padding=(14, 5), font=FONT_SMALL, anchor="center")
     style.map("Segment.TRadiobutton",
-              background=[("selected", SURFACE), ("active", "#dde3ee")],
+              background=[("selected", SURFACE), ("active", SEGMENT_HOVER)],
               foreground=[("selected", ACCENT), ("active", TEXT)])
     style.configure("Segments.TFrame", background=SEGMENT_BG)
     style.layout("Segment.TCheckbutton", [
@@ -253,7 +323,7 @@ def setup_style(root):
     style.configure("Segment.TCheckbutton", background=SEGMENT_BG, foreground=MUTED,
                     padding=(14, 5), font=FONT_SMALL, anchor="center")
     style.map("Segment.TCheckbutton",
-              background=[("selected", SURFACE), ("active", "#dde3ee")],
+              background=[("selected", SURFACE), ("active", SEGMENT_HOVER)],
               foreground=[("selected", ACCENT), ("active", TEXT)])
 
     # Таблица задач
@@ -265,24 +335,52 @@ def setup_style(root):
     # Тонкие линии между заголовками столбцов — видно, где тянуть, чтобы изменить ширину
     style.configure("Treeview.Heading", background=SURFACE, foreground=MUTED,
                     font=("Segoe UI Semibold", 9), relief="raised", borderwidth=1,
-                    padding=(10, 8), bordercolor=SURFACE, lightcolor=SURFACE, darkcolor="#dfe3ea")
-    style.map("Treeview.Heading", background=[("active", "#f6f8fc")])
+                    padding=(10, 8), bordercolor=SURFACE, lightcolor=SURFACE, darkcolor=HEADING_LINE)
+    style.map("Treeview.Heading", background=[("active", ROW_HOVER)])
 
     # Тонкая полоса прокрутки без стрелок
     style.layout("Vertical.TScrollbar", [
         ("Vertical.Scrollbar.trough", {"sticky": "ns", "children": [
             ("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
-    style.configure("Vertical.TScrollbar", troughcolor=SURFACE, background="#d6dbe4",
-                    bordercolor=SURFACE, lightcolor="#d6dbe4", darkcolor="#d6dbe4",
+    style.configure("Vertical.TScrollbar", troughcolor=SURFACE, background=SCROLL,
+                    bordercolor=SURFACE, lightcolor=SCROLL, darkcolor=SCROLL,
                     gripcount=0, width=8)
-    style.map("Vertical.TScrollbar", background=[("active", "#b8c0cc")])
+    style.map("Vertical.TScrollbar", background=[("active", SCROLL_ACTIVE)])
     style.layout("Horizontal.TScrollbar", [
         ("Horizontal.Scrollbar.trough", {"sticky": "we", "children": [
             ("Horizontal.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
-    style.configure("Horizontal.TScrollbar", troughcolor=BG, background="#d6dbe4",
-                    bordercolor=BG, lightcolor="#d6dbe4", darkcolor="#d6dbe4",
+    style.configure("Horizontal.TScrollbar", troughcolor=BG, background=SCROLL,
+                    bordercolor=BG, lightcolor=SCROLL, darkcolor=SCROLL,
                     gripcount=0, width=8)
-    style.map("Horizontal.TScrollbar", background=[("active", "#b8c0cc")])
+    style.map("Horizontal.TScrollbar", background=[("active", SCROLL_ACTIVE)])
+
+
+def tint(color, amount, base=None):
+    """Смесь цвета с base (по умолчанию — цвет-основа темы: белый в светлой, тёмный в тёмной):
+    amount=0 — сам цвет, 1 — base. В тёмной теме колонки доски получаются тёмными с оттенком."""
+    base = base or TINT_BASE
+    if THEME == "dark" and base == TINT_BASE:
+        amount = min(amount, 0.86)  # на тёмном фоне оттенок должен оставаться заметным, но не ярким
+    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+    br, bgc, bb = (int(base[i:i + 2], 16) for i in (1, 3, 5))
+    return "#%02x%02x%02x" % tuple(round(c + (t - c) * amount) for c, t in ((r, br), (g, bgc), (b, bb)))
+
+
+def dark_titlebar(window):
+    """В тёмной теме — тёмная полоса заголовка окна (Windows 10 2004+ и Windows 11)."""
+    if THEME != "dark":
+        return
+    try:
+        hwnd = ctypes.windll.user32.GetParent(window.winfo_id()) or window.winfo_id()
+        on = ctypes.c_int(1)
+        for attribute in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE (новые и старые сборки)
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(on),
+                                                          ctypes.sizeof(on)) == 0:
+                break
+        # перерисовать рамку окна, иначе цвет заголовка сменится только после переключения окон
+        ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0020)
+    except (AttributeError, OSError, tk.TclError):
+        pass
 
 
 def center_on_screen(window, width=None, height=None):
@@ -526,7 +624,7 @@ class AlertDialog(tk.Toplevel):
     """Сообщение или вопрос в стиле программы (вместо стандартных серых окон Windows)."""
 
     # значок (шрифт Segoe MDL2 Assets) и его цвет
-    KINDS = {"info": ("", ACCENT), "warning": ("", "#d97706"),
+    KINDS = {"info": ("", ACCENT), "warning": ("", WARN),
              "error": ("", DANGER), "question": ("", ACCENT)}
 
     def __init__(self, parent, title, message, kind, buttons, default, cancel):
@@ -668,7 +766,7 @@ class DatePicker(ttk.Frame):
         self.month = (self.value or date.today()).replace(day=1)
         self.popup = tk.Toplevel(self)
         self.popup.overrideredirect(True)  # окно без рамки и заголовка
-        self.popup.configure(bg=SURFACE, highlightthickness=1, highlightbackground="#cbd2dd")
+        self.popup.configure(bg=SURFACE, highlightthickness=1, highlightbackground=POPUP_BORDER)
         x = self.entry.winfo_rootx()
         y = self.entry.winfo_rooty() + self.entry.winfo_height() + 4
         self.popup.geometry(f"+{x}+{y}")
@@ -735,7 +833,7 @@ class DatePicker(ttk.Frame):
                 if day == self.value:
                     style.update(bg=ACCENT, fg="white", font=FONT_BOLD)
                 elif day.month != self.month.month:
-                    style.update(fg="#c4c9d2")
+                    style.update(fg=OTHER_MONTH)
                 elif col >= 5:
                     style.update(fg=DANGER)
                 if day == today and day != self.value:
@@ -1023,7 +1121,7 @@ class HelpWindow(tk.Toplevel):
         text.tag_configure("b", font=FONT_BOLD)
         text.tag_configure("key", font=("Segoe UI Semibold", 10), background=SEGMENT_BG)
         text.tag_configure("link", foreground=ACCENT, underline=True)
-        text.tag_configure("found", background="#fff1a8")
+        text.tag_configure("found", background=FOUND)
         text.tag_bind("link", "<Button-1>", lambda e: webbrowser.open(PROJECT_URL))
         for tag in ("link", "goto"):
             text.tag_bind(tag, "<Enter>", lambda e: text.configure(cursor="hand2"))
@@ -1115,7 +1213,7 @@ class HelpWindow(tk.Toplevel):
         if index == self.current:
             row.configure(bg=ACCENT_SOFT, fg=ACCENT, font=("Segoe UI Semibold", 10))
         else:
-            row.configure(bg="#e9edf4" if hover else BG, fg=TEXT, font=FONT_SMALL)
+            row.configure(bg=HOVER if hover else BG, fg=TEXT, font=FONT_SMALL)
 
     # --- поиск ---
 
@@ -1340,9 +1438,9 @@ class TotoroPanel(tk.Frame):
 
     BUBBLE = {  # заливка и рамка облачка в зависимости от настроения
         "normal": (BG, BORDER, TEXT),
-        "alert": ("#fdeeee", "#f3c4c4", DANGER),
-        "done": ("#eaf7ef", "#bfe5cc", "#15803d"),
-        "sleep": ("#eaf7ef", "#bfe5cc", "#15803d"),  # всё сделано — Тоторо спит
+        "alert": (ALERT_BG, ALERT_BORDER, DANGER),
+        "done": (GOOD_BG, GOOD_BORDER, GOOD_TEXT),
+        "sleep": (GOOD_BG, GOOD_BORDER, GOOD_TEXT),  # всё сделано — Тоторо спит
     }
 
     # Анимация: Тоторо «дышит» (чуть покачивается), моргает, радуется, когда на него наводят
@@ -1518,7 +1616,7 @@ class TotoroPanel(tk.Frame):
             self.zzz = []
 
     ZZZ_LIFE = 2600
-    ZZZ_COLORS = ["#6b7280", "#7f8794", "#949ba6", "#a9afb8", "#bec3ca", "#d3d7dc", "#e8eaed"]
+    ZZZ_COLORS = []  # от приглушённого цвета текста к цвету фона (заполняется после tint)
 
     def float_zzz(self, t):
         """Над спящим Тоторо всплывают и тают буквы «z»."""
@@ -1541,6 +1639,9 @@ class TotoroPanel(tk.Frame):
                                                            len(self.ZZZ_COLORS) - 1)])
             alive.append((item, born))
         self.zzz = alive
+
+
+TotoroPanel.ZZZ_COLORS = [tint(MUTED, k / 6, SURFACE) for k in range(7)]
 
 
 class TaskCard(tk.Frame):
@@ -1758,7 +1859,6 @@ class SidePanel(tk.Frame):
         self.form.focus_title()
 
 
-MENU_BORDER = "#d3d9e3"
 MENU_FONT = ("Segoe UI", 10)
 
 
@@ -2233,7 +2333,7 @@ class Toggle(tk.Canvas):
         on = self.variable.get()
         focus = self.focus_get() is self
         round_rect(self, 1, 1, self.W - 1, self.H - 1, (self.H - 2) // 2,
-                   fill=ACCENT if on else "#cfd5df", outline=ACCENT_HOVER if focus else "")
+                   fill=ACCENT if on else DASHED, outline=ACCENT_HOVER if focus else "")
         x = self.W - self.H // 2 - 1 if on else self.H // 2
         self.create_oval(x - 7, self.H // 2 - 7, x + 7, self.H // 2 + 7, fill="white", outline="")
 
@@ -2249,7 +2349,7 @@ class SettingsDialog(tk.Toplevel):
 
     def __init__(self, parent, start_mode, card_fields, update_auto, shared_folder="", user_name="",
                  team_status=None, page="general", check_folder=None, check_update=None,
-                 animate=True):
+                 animate=True, theme="light"):
         super().__init__(parent)
         self.result = None
         self.update_found = None  # найденная новая версия: откроется после закрытия настроек
@@ -2263,6 +2363,7 @@ class SettingsDialog(tk.Toplevel):
         self.fields = {key: tk.BooleanVar(value=key in card_fields) for key in CARD_FIELDS}
         self.update_auto = tk.BooleanVar(value=update_auto)
         self.animate = tk.BooleanVar(value=animate)
+        self.theme = tk.StringVar(value=theme)
 
         body = tk.Frame(self, bg=BG)
         body.pack(fill="both", expand=True)
@@ -2313,7 +2414,7 @@ class SettingsDialog(tk.Toplevel):
         if key == self.page:
             bg, fg, font = ACCENT_SOFT, ACCENT, ("Segoe UI Semibold", 10)
         else:
-            bg, fg, font = ("#e9edf4" if hover else BG), TEXT, FONT_SMALL
+            bg, fg, font = (HOVER if hover else BG), TEXT, FONT_SMALL
         for widget in (item, mark, text):
             widget.configure(bg=bg)
         mark.configure(fg=ACCENT if key == self.page else MUTED)
@@ -2358,7 +2459,7 @@ class SettingsDialog(tk.Toplevel):
     # --- страницы ---
 
     def page_general(self):
-        page = self.new_page("Общие", "Как открывается окно программы.")
+        page = self.new_page("Общие", "Окно программы, тема оформления и Тоторо.")
         card = self.card(page)
         control = self.row(card, "Запуск программы", "Каким открывать окно ToDoro при запуске.",
                            first=True)
@@ -2366,6 +2467,12 @@ class SettingsDialog(tk.Toplevel):
         segments.pack()
         for value, label in (("window", "Окном"), ("maximized", "На весь экран")):
             ttk.Radiobutton(segments, text=label, value=value, variable=self.start_mode,
+                            style="Segment.TRadiobutton", cursor="hand2").pack(side="left")
+        control = self.row(card, "Тема оформления", "Сменится после перезапуска программы.")
+        segments = ttk.Frame(control, style="Segments.TFrame", padding=3)
+        segments.pack()
+        for value, label in THEMES.items():
+            ttk.Radiobutton(segments, text=label, value=value, variable=self.theme,
                             style="Segment.TRadiobutton", cursor="hand2").pack(side="left")
         control = self.row(card, "Оживлять Тоторо",
                            "Тоторо дышит, моргает, радуется, волнуется о просроченных задачах "
@@ -2400,7 +2507,7 @@ class SettingsDialog(tk.Toplevel):
         on = {key for key, var in self.fields.items() if var.get()}
         holder = tk.Frame(self.preview, bg=SURFACE)
         holder.pack(fill="both")
-        tk.Frame(holder, bg="#3b82f6", width=4).pack(side="left", fill="y")
+        tk.Frame(holder, bg=LANE_COLORS[0][1], width=4).pack(side="left", fill="y")
         inner = tk.Frame(holder, bg=SURFACE, padx=12, pady=10)
         inner.pack(side="left", fill="both")
         top = tk.Frame(inner, bg=SURFACE)
@@ -2467,7 +2574,7 @@ class SettingsDialog(tk.Toplevel):
         return page
 
     def set_status(self, kind, text):
-        color = {"ok": "#16a34a", "error": DANGER, "busy": "#f59e0b"}.get(kind, DONE)
+        color = {"ok": OK_DOT, "error": DANGER, "busy": BUSY}.get(kind, DONE)
         self.status_dot.configure(fg=color)
         self.status_text.configure(text=text)
 
@@ -2535,7 +2642,7 @@ class SettingsDialog(tk.Toplevel):
         self.result = dict(start_mode=self.start_mode.get(),
                            card_fields=[key for key, var in self.fields.items() if var.get()],
                            update_auto=self.update_auto.get(), shared_folder=folder, user_name=name,
-                           animate=self.animate.get())
+                           animate=self.animate.get(), theme=self.theme.get())
         self.destroy()
 
     def show(self):
@@ -2744,7 +2851,7 @@ class CatbusRun(tk.Toplevel):
     Прозрачное окно поверх приложения: всё, что цвета KEY, Windows делает прозрачным.
     """
 
-    KEY = "#f3f5fa"  # почти цвет фона — края рисунка на светлом интерфейсе не видны
+    KEY = CATBUS_KEY  # почти цвет фона — края рисунка на интерфейсе не видны
     HEIGHT = 124
     ENTER, STOP, LEAVE = 1500, 1700, 1300  # въезд, остановка, отъезд — в миллисекундах
 
@@ -2769,12 +2876,12 @@ class CatbusRun(tk.Toplevel):
         self.bus = self.canvas.create_image(-bus.width(), self.HEIGHT - 4, image=bus, anchor="sw")
         # табличка с названием задачи над Котобусом
         label = f"✔ Выполнено: {short_text(text, 40)}"
-        self.sign_text = self.canvas.create_text(0, 0, text=label, font=FONT_BOLD, fill="#166534",
+        self.sign_text = self.canvas.create_text(0, 0, text=label, font=FONT_BOLD, fill=SIGN_TEXT,
                                                  anchor="s")
         x1, y1, x2, y2 = self.canvas.bbox(self.sign_text)
         self.sign_w, self.sign_h = x2 - x1 + 20, y2 - y1 + 8
         self.sign = round_rect(self.canvas, 0, 0, self.sign_w, self.sign_h, 8,
-                               fill="#e8f7ee", outline="#86d3a3")
+                               fill=SIGN_BG, outline=SIGN_BORDER)
         self.canvas.tag_raise(self.sign_text)
         self.width, self.bus_w, self.bus_h = width, bus.width(), bus.height()
         self.start = None
@@ -2819,19 +2926,12 @@ class CatbusRun(tk.Toplevel):
 
 
 LANE_WIDTH = 250
-CARD_BORDER = "#e9ecf2"  # рамка карточки на доске (у выбранной — синяя)
 # Готовые цвета для колонок доски
 LANE_COLORS = [
     ("Синий", "#3b82f6"), ("Голубой", "#06b6d4"), ("Зелёный", "#22c55e"),
     ("Жёлтый", "#eab308"), ("Оранжевый", "#f59e0b"), ("Красный", "#ef4444"),
     ("Розовый", "#ec4899"), ("Фиолетовый", "#8b5cf6"), ("Серый", "#64748b"),
 ]
-
-
-def tint(color, amount):
-    """Светлый оттенок цвета: amount=0 — сам цвет, 1 — белый."""
-    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
-    return "#%02x%02x%02x" % tuple(round(c + (255 - c) * amount) for c in (r, g, b))
 
 
 def swatch(color):
@@ -2901,11 +3001,11 @@ class KanbanBoard(tk.Frame):
 
         add = tk.Label(self.inner, text="＋  Колонка", bg=BG, fg=MUTED, font=FONT_SMALL,
                        cursor="hand2", padx=18, pady=10, highlightthickness=1,
-                       highlightbackground="#cfd5df")
+                       highlightbackground=DASHED)
         add.pack(side="left", anchor="n", pady=(0, 4))
         add.bind("<Button-1>", lambda e: self.app.add_lane())
         add.bind("<Enter>", lambda e: add.configure(fg=ACCENT, highlightbackground=ACCENT))
-        add.bind("<Leave>", lambda e: add.configure(fg=MUTED, highlightbackground="#cfd5df"))
+        add.bind("<Leave>", lambda e: add.configure(fg=MUTED, highlightbackground=DASHED))
 
         if self.selected_id not in self.cards:
             self.selected_id = None
@@ -2927,7 +3027,7 @@ class KanbanBoard(tk.Frame):
         tk.Label(head, text=f" {len(rows)} ", bg=SURFACE, fg=MUTED, font=FONT_SMALL,
                  cursor="fleur").pack(side="left", padx=(8, 0))
         if is_done:
-            tk.Label(head, text="✔", bg=lane_bg, fg="#15803d", font=FONT_SMALL, cursor="fleur").pack(
+            tk.Label(head, text="✔", bg=lane_bg, fg=GOOD_TEXT, font=FONT_SMALL, cursor="fleur").pack(
                 side="left", padx=(6, 0))
         bind_tree(head, "<ButtonPress-1>", lambda e: self.lane_press(e, status_id))
         bind_tree(head, "<B1-Motion>", self.lane_motion)
@@ -3207,6 +3307,9 @@ class TodoApp:
             root.iconbitmap(default=str(ICON_PATH))  # иконка для всех окон программы
         setup_style(root)
         setup_text_editing(root)
+        # тёмная тема — тёмные заголовки у главного окна и у всех остальных окон программы
+        root.bind_class("Toplevel", "<Map>", lambda e: dark_titlebar(e.widget)
+                        if isinstance(e.widget, tk.Toplevel) else None, add="+")
         load_images()
         center_on_screen(root, 1290, 720)
         root.minsize(820, 480)
@@ -3225,8 +3328,8 @@ class TodoApp:
         chips = ttk.Frame(header)
         chips.pack(side="left", padx=(18, 0), pady=(6, 0))
         self.chips = {}
-        for key, bg, fg in (("active", "#eef1f6", MUTED), ("done", "#eef1f6", MUTED),
-                            ("today", "#e8f7ee", "#15803d")):
+        for key, bg, fg in (("active", CHIP_BG, MUTED), ("done", CHIP_BG, MUTED),
+                            ("today", CHIP_GOOD_BG, GOOD_TEXT)):
             chip = tk.Label(chips, bg=bg, fg=fg, font=FONT_SMALL, padx=10, pady=3)
             chip.pack(side="left", padx=(0, 6))
             self.chips[key] = chip
@@ -3373,7 +3476,7 @@ class TodoApp:
         self.resizing_column = False
         self.tree.bind("<ButtonPress-1>", lambda e: setattr(
             self, "resizing_column", self.tree.identify_region(e.x, e.y) == "separator"), add="+")
-        self.tree.tag_configure("hover", background="#f6f8fc")
+        self.tree.tag_configure("hover", background=ROW_HOVER)
         self.hover_row = None
         self.tree.bind("<Motion>", self.tree_motion)
         self.tree.bind("<Leave>", lambda e: self.set_hover(None))
@@ -3418,6 +3521,7 @@ class TodoApp:
             root.state("zoomed")  # развёрнуто на весь экран; «восстановить» вернёт обычное окно
         else:
             root.deiconify()
+        dark_titlebar(root)
         root.after(200, self.repaint)  # ещё раз, когда окно уже показано
         root.after(600, self.reset_cursor)  # и обычный курсор — на случай, если ⟷ «залип» при запуске
         self.show_placeholder()
@@ -3493,7 +3597,7 @@ class TodoApp:
             self.auto_update_enabled(), db.get_setting(self.prefs, "shared_folder", ""),
             db.get_setting(self.prefs, "user_name", "") or os.environ.get("USERNAME", ""),
             status, page, check_folder=self.check_folder, check_update=self.check_update_inline,
-            animate=self.side.totoro.animate)
+            animate=self.side.totoro.animate, theme=THEME_SETTING)
         result = dialog.show()
         if dialog.update_found:  # нашли новую версию кнопкой в настройках
             UpdateDialog(self.root, dialog.update_found, self.close)
@@ -3504,6 +3608,13 @@ class TodoApp:
         db.set_setting(self.prefs, "totoro_animate", "1" if result["animate"] else "0")
         self.side.totoro.animate = result["animate"]
         self.side.totoro.render_frame(force=True)
+        if result["theme"] != THEME_SETTING:
+            db.set_setting(self.prefs, "theme", result["theme"])
+            if ui.askyesno("Тема оформления", f"Тема «{THEMES[result['theme']]}» включится после "
+                           "перезапуска программы.\n\nПерезапустить сейчас? Задачи и правки "
+                           "сохранятся.", parent=self.root):
+                self.restart()
+                return
         if result["card_fields"] != self.card_fields:
             self.card_fields = result["card_fields"]
             db.set_json_setting(self.prefs, "card_fields", self.card_fields)
@@ -4952,6 +5063,20 @@ class TodoApp:
             else:
                 ui.showinfo(APP_NAME, f"У вас последняя версия — {APP_VERSION}.", parent=self.root)
         in_background(self.root, updater.fetch_latest, done)
+
+    def restart(self):
+        """Перезапуск программы (например, чтобы включить другую тему)."""
+        if getattr(sys, "frozen", False):  # установленный ToDoro.exe
+            command = [sys.executable]
+        else:  # запуск из исходного кода: тот же Python (pythonw — без чёрного окна)
+            command = [sys.executable, str(Path(__file__).resolve())]
+        try:
+            subprocess.Popen(command, close_fds=True)
+        except OSError as error:
+            ui.showerror(APP_NAME, f"Не удалось перезапустить программу: {error}\n\n"
+                         "Закройте и откройте её сами.", parent=self.root)
+            return
+        self.close()
 
     def close(self):
         self.finish_editing()  # есть несохранённая правка задачи — спросим, сохранить ли её
