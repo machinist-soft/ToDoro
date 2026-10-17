@@ -26,6 +26,7 @@ from tkinter import colorchooser, filedialog, ttk
 import db
 import outlook
 import team
+import tray
 import updater
 from examples import make_examples
 from help_text import HELP
@@ -2677,7 +2678,7 @@ class SettingsDialog(tk.Toplevel):
 
     def __init__(self, parent, start_mode, card_fields, update_auto, shared_folder="", user_name="",
                  team_status=None, page="general", check_folder=None, check_update=None,
-                 animate=True, theme="light", tour=True):
+                 animate=True, theme="light", tour=True, tray_on=False):
         super().__init__(parent)
         self.result = None
         self.update_found = None  # найденная новая версия: откроется после закрытия настроек
@@ -2693,6 +2694,7 @@ class SettingsDialog(tk.Toplevel):
         self.animate = tk.BooleanVar(value=animate)
         self.theme = tk.StringVar(value=theme)
         self.tour = tk.BooleanVar(value=tour)
+        self.tray_on = tk.BooleanVar(value=tray_on)
 
         body = tk.Frame(self, bg=BG)
         body.pack(fill="both", expand=True)
@@ -2715,7 +2717,7 @@ class SettingsDialog(tk.Toplevel):
                 widget.bind("<Leave>", lambda e, k=key: self.paint_nav(k))
             self.nav_items[key] = (item, mark, text)
 
-        self.content = tk.Frame(body, bg=BG, width=560, height=440)
+        self.content = tk.Frame(body, bg=BG, width=560, height=470)
         self.content.pack(side="left", fill="both", expand=True, padx=(10, 22), pady=16)
         self.content.pack_propagate(False)
         self.pages = {
@@ -2812,6 +2814,10 @@ class SettingsDialog(tk.Toplevel):
                            "Показывать при запуске программы тур по её главным возможностям. "
                            "Пройти его в любой момент: «☰ Меню» → «Ознакомительный тур».")
         Toggle(control, self.tour).pack()
+        control = self.row(card, "Значок в трее при входе в Windows",
+                           f"Значок возле часов: {OUTLOOK_HOTKEY_NAME} в Outlook делает задачу из письма, "
+                           "даже если ToDoro не открыт.")
+        Toggle(control, self.tray_on).pack()
         return page
 
     def page_board(self):
@@ -2978,7 +2984,7 @@ class SettingsDialog(tk.Toplevel):
                            card_fields=[key for key, var in self.fields.items() if var.get()],
                            update_auto=self.update_auto.get(), shared_folder=folder, user_name=name,
                            animate=self.animate.get(), theme=self.theme.get(),
-                           tour=self.tour.get())
+                           tour=self.tour.get(), tray=self.tray_on.get())
         self.destroy()
 
     def show(self):
@@ -3170,6 +3176,7 @@ class UpdateDialog(tk.Toplevel):
                 return
             self.status.configure(text="Устанавливаю… ToDoro закроется и откроется снова.")
             self.update_idletasks()
+            tray.stop()  # иначе установщик не сможет заменить ToDoro.exe, занятый значком в трее
             try:
                 updater.run_installer(path)
             except OSError as error:
@@ -4232,7 +4239,8 @@ class TodoApp:
         self.show_placeholder()
         self.entry.focus()
         root.after(1000, self.check_reminders)
-        self.mail_hotkey = start_hotkey(root, self.from_outlook)  # Ctrl+Alt+T — из любой программы
+        start_hotkey(root, self.from_outlook)  # Ctrl+Alt+T — из любой программы
+        self.start_tray()
         root.after(WATCH_EVERY_MS, self.watch_changes)  # изменения других участников в общих списках
         root.after(4000, self.auto_check_update)  # раз в день — нет ли новой версии
         self.tour = None
@@ -4314,7 +4322,8 @@ class TodoApp:
             db.get_setting(self.prefs, "user_name", "") or os.environ.get("USERNAME", ""),
             status, page, check_folder=self.check_folder, check_update=self.check_update_inline,
             animate=self.side.totoro.animate, theme=THEME_SETTING,
-            tour=db.get_setting(self.prefs, "tour_show", "1") == "1")
+            tour=db.get_setting(self.prefs, "tour_show", "1") == "1",
+            tray_on=tray.autostart_enabled())
         result = dialog.show()
         if dialog.update_found:  # нашли новую версию кнопкой в настройках
             UpdateDialog(self.root, dialog.update_found, self.close)
@@ -4324,6 +4333,14 @@ class TodoApp:
         db.set_setting(self.prefs, "update_auto", "1" if result["update_auto"] else "0")
         db.set_setting(self.prefs, "totoro_animate", "1" if result["animate"] else "0")
         db.set_setting(self.prefs, "tour_show", "1" if result["tour"] else "0")
+        if result["tray"] != tray.autostart_enabled():
+            if not tray.set_autostart(result["tray"]):
+                ui.showerror("Значок в трее", "Не удалось изменить автозапуск в реестре Windows.",
+                             parent=self.root)
+            elif result["tray"]:
+                tray.start()
+            else:
+                tray.stop()
         self.side.totoro.animate = result["animate"]
         self.side.totoro.render_frame(force=True)
         if result["theme"] != THEME_SETTING:
@@ -6061,6 +6078,20 @@ class TodoApp:
             return
         self.close()
 
+    # --- значок в трее ---
+
+    def start_tray(self):
+        """Значок в трее с Ctrl+Alt+T запускается вместе с Windows (выключается в настройках).
+        При первом запуске версии со значком включаем его сами и показываем прямо сейчас."""
+        if os.name != "nt":
+            return
+        if not db.get_setting(self.prefs, "tray_offered"):
+            tray.set_autostart(True)
+            db.set_setting(self.prefs, "tray_offered", "1")
+        if tray.autostart_enabled():
+            tray.set_autostart(True)  # путь к программе мог смениться (переустановка в другую папку)
+            tray.start()
+
     # --- задача из письма Outlook ---
 
     def mail_task(self, mail):
@@ -6190,24 +6221,23 @@ OUTLOOK_HOTKEY_NAME = "Ctrl+Alt+T"
 def start_hotkey(root, action):
     """Регистрирует Ctrl+Alt+T для всей Windows. Нажатие ловит отдельный поток (у него своя
     очередь сообщений Windows), а действие выполняется в главном потоке окна.
-    Возвращает False, если сочетание уже занято другой программой."""
-    pressed, registered, ready = threading.Event(), threading.Event(), threading.Event()
+    Сочетание занято (обычно значком ToDoro в трее — он сам разбудит это окно) — поток пробует
+    снова каждые 5 секунд: значок закроют — Ctrl+Alt+T продолжит работать."""
+    pressed = threading.Event()
 
     def listen():
         try:
             user32 = ctypes.windll.user32
-            if user32.RegisterHotKey(None, 1, *OUTLOOK_HOTKEY):
-                registered.set()
-            ready.set()
+            while not user32.RegisterHotKey(None, 1, *OUTLOOK_HOTKEY):
+                time_module.sleep(5)
             msg = wintypes.MSG()
-            while registered.is_set() and user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
                 if msg.message == 0x0312:  # WM_HOTKEY
                     pressed.set()
         except (AttributeError, OSError):
-            ready.set()
+            pass
 
     threading.Thread(target=listen, daemon=True).start()
-    ready.wait(2)
 
     def poll():
         if pressed.is_set():
@@ -6215,9 +6245,34 @@ def start_hotkey(root, action):
             action()
         root.after(150, poll)
 
-    if registered.is_set():
-        poll()
-    return registered.is_set()
+    poll()
+
+
+def wake_app(mail=False):
+    """Для значка в трее: показать окно ToDoro (mail=True — и сделать задачу из письма Outlook).
+    ToDoro открыт — будим его (как при повторном запуске), не открыт — запускаем."""
+    if mail:
+        try:
+            OUTLOOK_FLAG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            OUTLOOK_FLAG_FILE.touch()
+        except OSError:
+            pass
+    kernel32 = ctypes.windll.kernel32
+    kernel32.OpenEventW.restype = wintypes.HANDLE
+    kernel32.SetEvent.argtypes = kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    # Значок только что получил нажатие — разрешаем окну ToDoro выйти на передний план
+    ctypes.windll.user32.AllowSetForegroundWindow(wintypes.DWORD(-1).value)  # ASFW_ANY
+    event = kernel32.OpenEventW(0x0002, False, SHOW_EVENT)  # EVENT_MODIFY_STATE
+    if event:
+        kernel32.SetEvent(event)
+        kernel32.CloseHandle(event)
+    else:
+        tray.launch(*([OUTLOOK_FLAG] if mail else []))
+
+
+def run_tray():
+    tray.run(ICON_PATH, f"{APP_NAME}\n{OUTLOOK_HOTKEY_NAME} — задача из письма Outlook",
+             OUTLOOK_HOTKEY, OUTLOOK_HOTKEY_NAME, open_app=wake_app, mail_task=lambda: wake_app(mail=True))
 
 
 def single_instance(wait_ms=0):
@@ -6246,6 +6301,12 @@ def single_instance(wait_ms=0):
 
 
 if __name__ == "__main__":
+    if tray.TRAY_FLAG in sys.argv:  # значок в трее (запускается вместе с Windows)
+        run_tray()
+        sys.exit(0)
+    if tray.TRAY_QUIT_FLAG in sys.argv:  # установщик просит закрыть значок
+        tray.stop()
+        sys.exit(0)
     if OUTLOOK_FLAG in sys.argv:
         try:
             OUTLOOK_FLAG_FILE.parent.mkdir(parents=True, exist_ok=True)

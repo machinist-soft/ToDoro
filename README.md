@@ -45,7 +45,8 @@
   отключить и пройти снова из меню).
 - **Задача из письма Outlook**: выделите письмо в Outlook и нажмите **Ctrl+Alt+T** — тема, текст,
   вложения и само письмо попадут в новую задачу, а письму поставится категория «В ToDoro»;
-  письмо по такой задаче сразу адресовано отправителю.
+  письмо по такой задаче сразу адресовано отправителю. Значок ToDoro в трее запускается вместе
+  с Windows, поэтому Ctrl+Alt+T работает, даже если ToDoro не открыт (значок можно выключить).
 - **Тёмная тема**, экспорт и импорт **CSV (Excel)**, письмо по задаче, подробная справка (F1).
 - **Обновления в один клик**: программа сама сообщает о новой версии и ставит её — задачи
   сохраняются.
@@ -57,7 +58,8 @@ filters, search and column sorting · several lists, personal and shared with a 
 folder (VPN works) · author and assignee, “My tasks”, “assigned to you” notices, last editor,
 protection against overwriting others’ edits · a living Totoro helper and the Catbus · a guided
 tour on first launch · create a task from an Outlook e-mail (Ctrl+Alt+T): subject, text,
-attachments and the message itself, replies go to the sender · dark theme,
+attachments and the message itself, replies go to the sender; a tray icon started with Windows
+keeps Ctrl+Alt+T working even when ToDoro is closed · dark theme,
 CSV export / import, e-mail a task, built-in help · one-click updates.*
 
 ### Котобус увозит выполненную задачу / The Catbus carries away a finished task

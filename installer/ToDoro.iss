@@ -56,3 +56,15 @@ Name: "{autodesktop}\ToDoro"; Filename: "{app}\ToDoro.exe"; AppUserModelID: "ToD
 Filename: "{app}\ToDoro.exe"; Description: "{cm:LaunchProgram,ToDoro}"; Flags: nowait postinstall
 
 ; Задачи (%APPDATA%\ToDoro\todoro.db) при удалении программы НЕ удаляются.
+
+[UninstallRun]
+; Значок ToDoro в трее держит ToDoro.exe открытым — сначала закрываем его
+Filename: "{app}\ToDoro.exe"; Parameters: "--tray-quit"; RunOnceId: "TrayQuit"; Flags: runhidden waituntilterminated
+
+[Code]
+// Автозапуск значка в трее записывает сама программа; при удалении программы убираем его
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ToDoro');
+end;
