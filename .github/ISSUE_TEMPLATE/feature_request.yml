@@ -19,4 +19,4 @@ body:
     id: version
     attributes:
       label: Версия ToDoro
-      placeholder: "1.3"
+      placeholder: "2.4"

@@ -1,7 +1,7 @@
 # ToDoro
 
-Список дел и канбан-доска для Windows — для себя и для небольшой команды — с Тоторо-помощником.
-*A to-do list and kanban board for Windows — for yourself and a small team — with a Totoro helper.*
+Список дел, канбан-доска и матрица Эйзенхауэра для Windows — для себя и для небольшой команды — с Тоторо-помощником.
+*A to-do list, kanban board and Eisenhower matrix for Windows — for yourself and a small team — with a Totoro helper.*
 
 **[⬇ Скачать установщик / Download](https://github.com/machinist-soft/ToDoro/releases/latest)** ·
 [Что нового / What's new](RELEASE_NOTES.md) ·
@@ -43,12 +43,12 @@
 - **Обновления в один клик**: программа сама сообщает о новой версии и ставит её — задачи
   сохраняются.
 
-*Tasks with due dates, reminders and urgent / important priority · list, kanban board and
-Eisenhower matrix with
-custom columns, filters and column sorting · several lists, personal and shared with a team via a
-network folder (VPN works) · author and assignee, “My tasks”, “assigned to you” notices, last
-editor, protection against overwriting others’ edits · Totoro hints and the Catbus · CSV export /
-import, e-mail a task, built-in help · one-click updates.*
+*Tasks with due dates, reminders and urgent / important priority · list, kanban board with
+custom columns and Eisenhower matrix (drag a card to another quadrant to change its priority),
+filters, search and column sorting · several lists, personal and shared with a team via a network
+folder (VPN works) · author and assignee, “My tasks”, “assigned to you” notices, last editor,
+protection against overwriting others’ edits · a living Totoro helper and the Catbus · dark theme,
+CSV export / import, e-mail a task, built-in help · one-click updates.*
 
 ### Котобус увозит выполненную задачу / The Catbus carries away a finished task
 
