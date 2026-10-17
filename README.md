@@ -56,7 +56,8 @@ custom columns and Eisenhower matrix (drag a card to another quadrant to change 
 filters, search and column sorting · several lists, personal and shared with a team via a network
 folder (VPN works) · author and assignee, “My tasks”, “assigned to you” notices, last editor,
 protection against overwriting others’ edits · a living Totoro helper and the Catbus · a guided
-tour on first launch · dark theme,
+tour on first launch · create a task from an Outlook e-mail (Ctrl+Alt+T): subject, text,
+attachments and the message itself, replies go to the sender · dark theme,
 CSV export / import, e-mail a task, built-in help · one-click updates.*
 
 ### Котобус увозит выполненную задачу / The Catbus carries away a finished task
@@ -76,6 +77,13 @@ CSV export / import, e-mail a task, built-in help · one-click updates.*
 *Tasks sorted by urgent and important; drag a card to another quadrant to change its priority.*
 
 ![Матрица Эйзенхауэра / Eisenhower matrix](docs/screenshots/matrix.png)
+
+### Задача из письма Outlook / Task from an Outlook e-mail
+
+Выделите письмо в Outlook и нажмите Ctrl+Alt+T — задача заполнится по письму, а письмо и вложения приложатся к ней.
+*Select an e-mail in Outlook and press Ctrl+Alt+T — the task is filled in from the message, with the message and its attachments attached.*
+
+![Новая задача из письма Outlook / New task from an Outlook e-mail](docs/screenshots/outlook.png)
 
 ### Ознакомительный тур / Guided tour
 

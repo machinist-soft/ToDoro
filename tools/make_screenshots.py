@@ -97,6 +97,9 @@ for author, text in (("Олег", "Набросал макет слайдов �
                      ("Мария", "Хорошо! Добавлю цифры за квартал и пришлю к вечеру."),
                      (ME, "Смету приложил. Клиент просил уложиться в 15 минут.")):
     db.add_comment(shared, ids[EXTRAS_TASK], text, author)
+# задача из письма Outlook — со значком 📧 в списке и на доске
+db.set_mail_id(shared, ids["Ответить на письмо от бухгалтерии"], "<demo-buh@example.com>",
+               "Бухгалтерия <buh@example.com>")
 shared.close()
 share.close()
 
@@ -204,6 +207,29 @@ def run():
     card.tab.set("body")
     card.show_tab()
     app.clear_selection()
+    # 4в. Новая задача из письма Outlook (письмо выдуманное — настоящий Outlook не нужен)
+    friday = T.date.today() + T.timedelta(days=(4 - T.date.today().weekday()) % 7 or 7)
+    mail = dict(title="Согласовать договор с поставщиком", important=True,
+                body="От: Ирина Ковалёва <i.kovaleva@example.com>, " + T.date.today().strftime("%d.%m.%Y")
+                     + " 09:14\n\nДобрый день!\n\nПросьба согласовать договор поставки до пятницы. "
+                       "Проект договора — во вложении.\n\nС уважением,\nИрина",
+                due_at=friday.strftime("%Y-%m-%d 18:00"), mail_id="<demo@example.com>", entry_id="",
+                store_id="", mail_from="Ирина Ковалёва <i.kovaleva@example.com>",
+                files=[("Согласовать договор с поставщиком.msg", b"0"), ("Договор поставки.docx", b"0")])
+    T.outlook.read_selected = lambda: [mail]
+
+    def shoot_mail():
+        dialog = next((w for w in root.winfo_children() if isinstance(w, T.TaskDialog)), None)
+        if dialog is None:
+            root.after(100, shoot_mail)
+            return
+        dialog.attributes("-topmost", True)
+        grab("outlook.png", window=dialog)
+        dialog.destroy()  # «Отмена»: задачу не создаём
+
+    root.after(300, shoot_mail)
+    app.from_outlook()
+    root.attributes("-topmost", True)
     # 5. Доска
     app.view.set("board")
     app.switch_view()
