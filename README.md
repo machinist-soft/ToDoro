@@ -262,6 +262,7 @@ flowchart TB
 | `snip.py` | снимок области экрана / screen-area snapshot |
 | `tray.py` | значок в трее и горячие клавиши / tray icon and hotkeys |
 | `phone.py` | связь с телефоном: сервер в значке в трее / phone link: a server in the tray icon |
+| `android/` | приложение для Android (Kotlin, Jetpack Compose) / the Android app |
 | `updater.py` | проверка и установка обновлений / update check and install |
 
 ## Лицензия / License

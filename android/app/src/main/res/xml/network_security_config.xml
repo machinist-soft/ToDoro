@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Компьютер с ToDoro отвечает по обычному http в домашней сети или VPN (адреса заранее
+     неизвестны). Задачи защищает ключ из QR-кода. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

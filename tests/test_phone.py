@@ -84,6 +84,16 @@ class PhoneServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(self.call("GET", path)[0], 404)
 
+    def test_patch_through_post_override(self):
+        """Телефон шлёт PATCH как POST с заголовком X-HTTP-Method-Override."""
+        task = self.call("POST", "/api/v1/lists/personal/tasks", {"title": "Старое"})[1]["task"]
+        request = urllib.request.Request(f"{self.base}/api/v1/lists/personal/tasks/{task['id']}",
+                                         data=json.dumps({"title": "Новое"}).encode(), method="POST")
+        request.add_header("Authorization", f"Bearer {self.token}")
+        request.add_header("X-HTTP-Method-Override", "PATCH")
+        with urllib.request.urlopen(request, timeout=10) as response:
+            self.assertEqual(json.loads(response.read())["task"]["title"], "Новое")
+
     def test_comments_and_files(self):
         task_id = self.call("POST", "/api/v1/lists/personal/tasks", {"title": "Отчёт"})[1]["task"]["id"]
         path = f"/api/v1/lists/personal/tasks/{task_id}"

@@ -487,7 +487,9 @@ class Handler(BaseHTTPRequestHandler):
         self.handle_any("GET")
 
     def do_POST(self):
-        self.handle_any("POST")
+        # стандартный HttpURLConnection в Java не умеет PATCH — телефон шлёт POST с этим заголовком
+        override = self.headers.get("X-HTTP-Method-Override", "").upper()
+        self.handle_any("PATCH" if override == "PATCH" else "POST")
 
     def do_PATCH(self):
         self.handle_any("PATCH")
