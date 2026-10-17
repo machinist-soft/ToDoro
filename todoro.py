@@ -3525,11 +3525,11 @@ class TodoApp:
         self.refresh()
         # Всё построено — показываем окно сразу готовым
         root.update_idletasks()
+        dark_titlebar(root)  # тёмный заголовок — ещё до показа окна, иначе он остаётся белым
         if db.get_setting(self.prefs, "start_mode", "window") == "maximized":
             root.state("zoomed")  # развёрнуто на весь экран; «восстановить» вернёт обычное окно
         else:
             root.deiconify()
-        dark_titlebar(root)
         root.after(200, self.repaint)  # ещё раз, когда окно уже показано
         root.after(600, self.reset_cursor)  # и обычный курсор — на случай, если ⟷ «залип» при запуске
         self.show_placeholder()
