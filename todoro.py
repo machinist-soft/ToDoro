@@ -154,14 +154,14 @@ BUDDY_MAX_TASKS = 5  # сколько просроченных задач Тот
 # Варианты напоминания: подпись -> за сколько минут до срока напомнить
 REMIND_OPTIONS = {
     "Не напоминать": None,
-    "за 5 минут": 5,
-    "за 15 минут": 15,
-    "за 30 минут": 30,
-    "за 1 час": 60,
-    "за 2 часа": 120,
-    "за 1 день": 24 * 60,
-    "за 2 дня": 2 * 24 * 60,
-    "за 1 неделю": 7 * 24 * 60,
+    "За 5 минут": 5,
+    "За 15 минут": 15,
+    "За 30 минут": 30,
+    "За 1 час": 60,
+    "За 2 часа": 120,
+    "За 1 день": 24 * 60,
+    "За 2 дня": 2 * 24 * 60,
+    "За 1 неделю": 7 * 24 * 60,
 }
 REMIND_LABELS = {minutes: label for label, minutes in REMIND_OPTIONS.items()}
 
@@ -549,7 +549,7 @@ def parse_csv_date(text):
 
 
 def parse_csv_remind(text):
-    """«за 1 час» или число минут -> минуты; пусто или «Не напоминать» -> None."""
+    """«За 1 час» или число минут -> минуты; пусто или «Не напоминать» -> None."""
     text = text.strip()
     for label, minutes in REMIND_OPTIONS.items():
         if text.lower() == label.lower():
@@ -824,7 +824,7 @@ class DatePicker(ttk.Frame):
             self.on_change()
 
     def show(self):
-        self.text.set(self.value.strftime("%d.%m.%Y") if self.value else "не задан")
+        self.text.set(self.value.strftime("%d.%m.%Y") if self.value else "Не задан")
 
     # --- выпадающий календарь ---
 
@@ -1024,7 +1024,7 @@ class TaskForm(ttk.Frame):
         self.remind = ttk.Combobox(self, values=list(REMIND_OPTIONS), state="readonly",
                                    width=1 if compact else 18, font=FONT)
         self.remind.pack(fill="x" if compact else None, anchor="w")
-        self.remind.set(REMIND_LABELS.get(task["remind_before"], f"за {task['remind_before']} мин"))
+        self.remind.set(REMIND_LABELS.get(task["remind_before"], f"За {task['remind_before']} мин"))
 
         if not compact:  # в правой панели кнопки — в нижней строке панели (SidePanel.show_form)
             buttons = ttk.Frame(self, style=self["style"])
@@ -2025,16 +2025,16 @@ class TaskCard(tk.Frame):
                              "empty")
         self.body.configure(state="disabled")
         # важность и срочность отдельными строками; просроченная задача — срочная (как в матрице)
-        self.values["important"].configure(text="важно" if important else "не важно",
+        self.values["important"].configure(text="Важно" if important else "Не важно",
                                            fg=TEXT if important else MUTED,
                                            font=FONT_SMALL_BOLD if important else FONT_SMALL)
-        urgent_text = ("срочно" if urgent else "срочно — задача просрочена" if overdue
-                       else "не срочно")
+        urgent_text = ("Срочно" if urgent else "Срочно — задача просрочена" if overdue
+                       else "Не срочно")
         self.values["urgent"].configure(text=urgent_text,
                                         fg=DANGER if overdue else TEXT if urgent else MUTED,
                                         font=FONT_SMALL_BOLD if urgent or overdue else FONT_SMALL)
-        self.values["due"].configure(text=due or "не задан", fg=DANGER if overdue else TEXT)
-        self.values["remind"].configure(text=remind or "нет")
+        self.values["due"].configure(text=due or "Не задан", fg=DANGER if overdue else TEXT)
+        self.values["remind"].configure(text=remind or "Нет")
         self.values["created"].configure(text=created)
         # автор, исполнитель и «кто изменил» есть только в общих списках — в личных строк нет
         for key, value in (("author", author), ("assignee", assignee), ("updated", updated)):
@@ -2827,11 +2827,11 @@ class SettingsDialog(tk.Toplevel):
         if "body" in on:
             tk.Label(inner, text="Свести продажи по регионам\nи добавить графики…", bg=SURFACE,
                      fg=MUTED, font=FONT_SMALL, justify="left").pack(anchor="w", pady=(4, 0))
-        extra = [text for key, text in (("due", "срок 17.10 18:00"), ("remind", "напомнить за 1 час"),
-                                        ("created", "создана 16.10"), ("author", "автор Мария"))
+        extra = [text for key, text in (("due", "Срок 17.10 18:00"), ("remind", "Напомнить за 1 час"),
+                                        ("created", "Создана 16.10"), ("author", "Автор Мария"))
                  if key in on]
         if "assignee" in on:
-            extra.insert(0, "исполнитель Олег")
+            extra.insert(0, "Исполнитель Олег")
         if extra:
             tk.Label(inner, text="\n".join(extra), bg=SURFACE, fg=MUTED, font=("Segoe UI", 9),
                      justify="left").pack(anchor="w", pady=(6, 0))
@@ -3582,18 +3582,18 @@ class KanbanBoard(tk.Frame):
                      justify="left", anchor="w", wraplength=self.card_width - 60).pack(fill="x", pady=(4, 0))
         if "due" in fields and due_at:
             due_text = datetime.fromisoformat(due_at).strftime("%d.%m %H:%M")
-            tk.Label(content, text=("⚠ срок " if overdue else "срок ") + due_text, bg=SURFACE,
+            tk.Label(content, text=("⚠ Срок " if overdue else "Срок ") + due_text, bg=SURFACE,
                      fg=DANGER if overdue else MUTED, font=FONT_SMALL, anchor="w").pack(
                 fill="x", pady=(4, 0))
         extra = []
         if "remind" in fields and due_at and remind_before:
-            extra.append("напомнить " + REMIND_LABELS.get(remind_before, f"за {remind_before} мин"))
+            extra.append("Напомнить " + REMIND_LABELS.get(remind_before, f"За {remind_before} мин").lower())
         if "created" in fields:
-            extra.append("создана " + created[:5])
+            extra.append("Создана " + created[:5])
         if "assignee" in fields and self.app.assignees.get(task_id):
-            extra.insert(0, "исполнитель " + self.app.assignees[task_id])
+            extra.insert(0, "Исполнитель " + self.app.assignees[task_id])
         if "author" in fields and self.app.authors.get(task_id):
-            extra.append("автор " + self.app.authors[task_id])
+            extra.append("Автор " + self.app.authors[task_id])
         if extra:
             tk.Label(content, text=" · ".join(extra), bg=SURFACE, fg=MUTED, font=FONT_SMALL,
                      anchor="w", justify="left", wraplength=self.card_width - 60).pack(fill="x", pady=(2, 0))
@@ -3791,10 +3791,10 @@ class EisenhowerMatrix(KanbanBoard):
 
     # уровень приоритета (priority_level), срочно, важно, название, подсказка, цвет
     QUADRANTS = [
-        (1, True, True, "Сделать сейчас", "срочно и важно", "#ef4444"),
-        (2, False, True, "Запланировать", "важно, но не срочно", "#f59e0b"),
-        (3, True, False, "Поручить или сделать быстро", "срочно, но не важно", "#3b82f6"),
-        (4, False, False, "Отложить", "не срочно и не важно", "#9ca3af"),
+        (1, True, True, "Сделать сейчас", "Срочно и важно", "#ef4444"),
+        (2, False, True, "Запланировать", "Важно, но не срочно", "#f59e0b"),
+        (3, True, False, "Поручить или сделать быстро", "Срочно, но не важно", "#3b82f6"),
+        (4, False, False, "Отложить", "Не срочно и не важно", "#9ca3af"),
     ]
 
     def __init__(self, parent, app):
@@ -4647,7 +4647,7 @@ class TodoApp:
         name, color, _ = self.statuses.get(status_id, ("—", MUTED, done))
         overdue = bool(due_at and not done and datetime.fromisoformat(due_at) < datetime.now())
         level = priority_level(urgent, important)
-        remind = REMIND_LABELS.get(remind_before, f"за {remind_before} мин") if due_at and remind_before else ""
+        remind = REMIND_LABELS.get(remind_before, f"За {remind_before} мин") if due_at and remind_before else ""
         return dict(title=title, body=body, done=bool(done), overdue=overdue, status_id=status_id,
                     status=status_label(name, done, overdue), status_name=name, status_color=color,
                     level=level, priority=PRIORITY_NAMES[level], due=format_due(due_at),
@@ -4683,7 +4683,7 @@ class TodoApp:
             overdue=info["overdue"], done=info["done"],
             priority_level_=info["level"], priority_name=info["priority"],
             due=info["due"], remind=info["remind"], created=info["created"], author=info["author"],
-            assignee=info["assignee"] or ("не назначен" if info["shared"] else ""),
+            assignee=info["assignee"] or ("Не назначен" if info["shared"] else ""),
             updated=info["updated"], urgent=bool(info["urgent"]), important=bool(info["important"]),
         )
 
@@ -4879,7 +4879,7 @@ class TodoApp:
                 "Обязателен только «Заголовок». Статус — название колонки доски. "
                 "Приоритет — «Срочно и важно», «Важно», «Срочно» или «Обычный». "
                 "Срок — «16.10.2026 18:00» или просто дата (тогда 09:00). "
-                "Напомнить — «за 15 минут», «за 1 час», «за 1 день» и т. п.",
+                "Напомнить — «За 15 минут», «За 1 час», «За 1 день» и т. п.",
                 parent=self.root)
 
     def import_csv(self):
@@ -5072,9 +5072,9 @@ class TodoApp:
             me = self.user_name()
             rows = [r for r in rows if self.assignees.get(r[0]) == me]
         active = sum(1 for row in rows if not row[2])
-        self.chips["active"].configure(text=f"активных  {active}")
-        self.chips["done"].configure(text=f"выполнено  {len(rows) - active}")
-        self.chips["today"].configure(text=f"✔ сегодня  {self.done_today}")
+        self.chips["active"].configure(text=f"Активных  {active}")
+        self.chips["done"].configure(text=f"Выполнено  {len(rows) - active}")
+        self.chips["today"].configure(text=f"✔ Сегодня  {self.done_today}")
 
         wanted = FILTERS[self.filter.get()]
         now = datetime.now()
@@ -5092,7 +5092,7 @@ class TodoApp:
         self.tree.delete(*self.tree.get_children())
         self.due, self.row_status = {}, {}
         for task_id, title, done, created, due_at, remind_before, urgent, important, _, status_id in rows:
-            remind = REMIND_LABELS.get(remind_before, f"за {remind_before} мин") if due_at else ""
+            remind = REMIND_LABELS.get(remind_before, f"За {remind_before} мин") if due_at else ""
             if remind == "Не напоминать":
                 remind = ""
             level = priority_level(urgent, important)
