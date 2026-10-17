@@ -383,22 +383,36 @@ def dark_titlebar(window):
         pass
 
 
-def center_on_screen(window, width=None, height=None):
-    """Ставит окно по центру экрана. Новое окно сначала прячем: иначе оно мелькает в углу
-    и в тёмной теме остаётся со светлым заголовком."""
-    hide = (isinstance(window, tk.Toplevel) and not window.winfo_ismapped()
-            and window.state() == "normal")
-    if hide:
+def hide_new_window(window):
+    """Прячет только что созданное окно, пока его не поставили на место (см. place_window).
+    Возвращает True, если спрятали."""
+    if (isinstance(window, tk.Toplevel) and not window.winfo_ismapped()
+            and window.state() == "normal"):
         window.withdraw()
+        return True
+    return False
+
+
+def place_window(window, x, y, width=None, height=None, show=False):
+    """Ставит окно на место (x, y). show=True — окно было спрятано hide_new_window: показываем
+    его уже на месте и с тёмным заголовком, иначе оно мелькает в углу, а в тёмной теме
+    заголовок остаётся белым."""
+    size = f"{width}x{height}" if width and height else ""
+    window.geometry(f"{size}+{max(x, 0)}+{max(y, 0)}")
+    if show:
+        dark_titlebar(window)  # тёмный заголовок — ещё до показа окна
+        window.deiconify()
+
+
+def center_on_screen(window, width=None, height=None):
+    """Ставит окно по центру экрана."""
+    hidden = hide_new_window(window)
     window.update_idletasks()
     width = width or window.winfo_reqwidth()
     height = height or window.winfo_reqheight()
     x = (window.winfo_screenwidth() - width) // 2
     y = (window.winfo_screenheight() - height) // 2
-    window.geometry(f"{width}x{height}+{x}+{max(y, 0)}")
-    if hide:
-        dark_titlebar(window)  # тёмный заголовок — ещё до показа окна
-        window.deiconify()
+    place_window(window, x, y, width, height, show=hidden)
 
 
 def format_due(due_at):
@@ -677,14 +691,16 @@ class AlertDialog(tk.Toplevel):
 
     def show(self):
         parent = self.master if isinstance(self.master, (tk.Tk, tk.Toplevel)) else None
+        hidden = hide_new_window(self)
         self.update_idletasks()
+        w, h = self.winfo_reqwidth(), self.winfo_reqheight()
         if parent is not None and parent.winfo_viewable():  # по центру окна, из которого спросили
-            w, h = self.winfo_reqwidth(), self.winfo_reqheight()
             x = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
             y = parent.winfo_rooty() + (parent.winfo_height() - h) // 3
-            self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
         else:
-            center_on_screen(self)
+            x = (self.winfo_screenwidth() - w) // 2
+            y = (self.winfo_screenheight() - h) // 2
+        place_window(self, x, y, show=hidden)
         previous = self.grab_current()  # окно-диалог, из которого спросили, снова станет модальным
         self.grab_set()
         self.lift()
@@ -727,7 +743,7 @@ class ui:
     def askyesno(title, message, parent=None, icon="question", default="yes", **_):
         danger = icon == "warning"  # опасное действие (удаление) — «Да» красная
         yes = ("Да", True, "DangerSoft.TButton" if danger else "Accent.TButton")
-        return ui._show(title, message, "warning" if danger else "question", [ui.NO, yes],
+        return ui._show(title, message, "warning" if danger else "question", [yes, ui.NO],
                         default != "no", False, parent)
 
     @staticmethod
