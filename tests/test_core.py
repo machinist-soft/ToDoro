@@ -226,6 +226,8 @@ class OutlookTests(TempDir):
         self.assertEqual(db.find_by_mail(conn, "<abc@mail>"), task_id)
         self.assertIsNone(db.find_by_mail(conn, "<other@mail>"))
         self.assertIsNone(db.find_by_mail(conn, ""))
+        db.add_task(conn, "обычная")
+        self.assertEqual(db.mail_task_ids(conn), {task_id})
 
     def test_sender_kept_and_moved(self):
         conn, other = db.connect(self.dir / "a.db"), db.connect(self.dir / "b.db")

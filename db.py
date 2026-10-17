@@ -605,6 +605,11 @@ def extras_counts(conn):
     return {task_id: tuple(pair) for task_id, pair in counts.items()}
 
 
+def mail_task_ids(conn):
+    """id задач, созданных из писем Outlook."""
+    return {row[0] for row in conn.execute("SELECT id FROM tasks WHERE mail_id IS NOT NULL")}
+
+
 def task_people(conn):
     """({id: автор}, {id: исполнитель}) — одним запросом, только где они известны."""
     authors, assignees = {}, {}

@@ -449,10 +449,15 @@ def short_time(stamp):
     return when.strftime("%d.%m %H:%M" if when.year == datetime.now().year else "%d.%m.%Y %H:%M")
 
 
-def extras_mark(counts):
-    """'   📎 2  💬 3' — сколько у задачи файлов и комментариев (или '', если нет)."""
+MAIL_MARK = "📧"  # значок задачи, созданной из письма Outlook
+
+
+def extras_mark(counts, from_mail=False):
+    """'   📧  📎 2  💬 3' — задача из письма Outlook, сколько у неё файлов и комментариев
+    (или '', если ничего нет)."""
     files, comments = counts or (0, 0)
-    parts = ([f"📎 {files}"] if files else []) + ([f"💬 {comments}"] if comments else [])
+    parts = ([MAIL_MARK] if from_mail else []) + ([f"📎 {files}"] if files else []) + (
+        [f"💬 {comments}"] if comments else [])
     return "   " + "  ".join(parts) if parts else ""
 
 
@@ -1757,6 +1762,8 @@ class TaskCard(tk.Frame):
         self.number.pack(side="left", padx=(0, 8))
         self.priority = tk.Label(top, bg=SURFACE, fg=MUTED, font=FONT_SMALL, compound="left")
         self.priority.pack(side="left")
+        # «📧 Из Outlook» — задача создана из письма (видна только у таких задач)
+        self.from_mail = tk.Label(top, text=MAIL_MARK + " Из Outlook", bg=SURFACE, fg=ACCENT, font=FONT_SMALL)
         close = tk.Label(top, text="✕", bg=SURFACE, fg=MUTED, font=FONT, cursor="hand2")
         close.pack(side="right")
         close.bind("<Button-1>", lambda e: on_close())
@@ -2017,14 +2024,19 @@ class TaskCard(tk.Frame):
 
     def show(self, number, title, body, status, status_color, overdue, done, priority_level_,
              priority_name, due, remind, created, author="", assignee="", updated="",
-             urgent=False, important=False):
+             urgent=False, important=False, from_mail=False):
         self.load_extras(number)
         shown = (number, title, body, status, status_color, overdue, done, priority_level_,
-                 priority_name, due, remind, created, author, assignee, updated, urgent, important)
+                 priority_name, due, remind, created, author, assignee, updated, urgent, important,
+                 from_mail)
         if shown == getattr(self, "shown", None):
             return  # ничего не изменилось — не трогаем, чтобы не сбросить прокрутку описания
         self.shown = shown
         self.number.configure(text=f"#{number}")
+        if from_mail:
+            self.from_mail.pack(side="left", padx=(12, 0), after=self.priority)
+        else:
+            self.from_mail.pack_forget()
         self.toggle_button.configure(text="↺  Вернуть в работу" if done else "✔  Выполнено")
         self.priority.configure(
             image=IMAGES.get(f"priority_{priority_level_}", ""),
@@ -3617,7 +3629,7 @@ class KanbanBoard(tk.Frame):
         # 📎 и 💬 — отдельной строкой: её можно обновить, не перерисовывая доску
         card.mark = tk.Label(content, bg=SURFACE, fg=MUTED, font=FONT_SMALL, anchor="w")
         self.cards[task_id] = card
-        self.set_mark(task_id, extras_mark(self.app.extra_counts.get(task_id)))
+        self.set_mark(task_id, self.app.task_mark(task_id))
 
         bind_tree(card, "<ButtonPress-1>", lambda e: self.on_press(e, task_id))
         bind_tree(card, "<B1-Motion>", self.on_motion)
@@ -3975,6 +3987,7 @@ class TodoApp:
         self.done_today = 0
         self.authors = {}    # id задачи -> кто создал (в общих списках)
         self.extra_counts = {}  # id задачи -> (файлов, комментариев)
+        self.mail_ids = set()   # задачи, созданные из писем Outlook (значок 📧)
         self.assignees = {}  # id задачи -> исполнитель (в общих списках)
         try:
             self.conn = self.list_conn(self.list_id)
@@ -4709,6 +4722,7 @@ class TodoApp:
             due=info["due"], remind=info["remind"], created=info["created"], author=info["author"],
             assignee=info["assignee"] or ("Не назначен" if info["shared"] else ""),
             updated=info["updated"], urgent=bool(info["urgent"]), important=bool(info["important"]),
+            from_mail=task_id in self.mail_ids,
         )
 
     def update_buddy(self):
@@ -5088,6 +5102,7 @@ class TodoApp:
         self.done_today = db.count_done_today(self.conn)
         self.authors, self.assignees = db.task_people(self.conn)
         self.extra_counts = db.extras_counts(self.conn)  # id задачи -> (файлов, комментариев)
+        self.mail_ids = db.mail_task_ids(self.conn)
         shared = bool(self.list_id and self.current_list()["shared"])
         # столбцы «Исполнитель» и «Автор» — только в общих списках (в личном всё ваше)
         columns = [c for c in self.tree["columns"] if shared or c not in ("assignee", "author")]
@@ -5125,7 +5140,7 @@ class TodoApp:
             self.row_status[iid] = name
             self.tree.insert(
                 "", "end", iid=iid, image=IMAGES.get(f"priority_{level}", ""),
-                values=(f"#{task_id}", status_label(name, done), title + extras_mark(self.extra_counts.get(task_id)),
+                values=(f"#{task_id}", status_label(name, done), self.list_title(task_id, title),
                         PRIORITY_NAMES[level],
                         format_due(due_at), remind, self.assignees.get(task_id, ""),
                         self.authors.get(task_id, ""), created),
@@ -5504,16 +5519,26 @@ class TodoApp:
             self.extra_counts = db.extras_counts(self.conn)
         except sqlite3.Error:
             return
-        mark = extras_mark(self.extra_counts.get(task_id))
+        mark = self.task_mark(task_id)
         iid = str(task_id)
         if self.tree.exists(iid):
             title = next((r[1] for r in self.all_rows if r[0] == task_id), None)
             if title is not None:
-                self.tree.set(iid, "title", title + mark)
+                self.tree.set(iid, "title", self.list_title(task_id, title))
         if self.cards_view():
             self.cards_view().set_mark(task_id, mark)
         if self.side.mode == "task" and self.side.card.task_id == task_id:
             self.side.card.load_extras(task_id)
+
+    def task_mark(self, task_id):
+        """Значки карточки на доске: 📧 (из письма Outlook), 📎 файлы, 💬 комментарии."""
+        return extras_mark(self.extra_counts.get(task_id), task_id in self.mail_ids)
+
+    def list_title(self, task_id, title):
+        """Заголовок в списке: 📧 — впереди (столбец узкий, конец строки может не поместиться),
+        📎 и 💬 — после заголовка."""
+        prefix = MAIL_MARK + " " if task_id in self.mail_ids else ""
+        return prefix + title + extras_mark(self.extra_counts.get(task_id))
 
     def attachments(self, task_id):
         try:
@@ -6096,6 +6121,7 @@ class TodoApp:
                               created_by=self.created_by())
         self.apply_edit(task_id, result, refresh=False)
         db.set_mail_id(self.conn, task_id, mail["mail_id"], mail["mail_from"])
+        self.mail_ids.add(task_id)
         if mail["files"]:
             self.attach(task_id, mail["files"])
         outlook.mark_added(mail["entry_id"], mail["store_id"])  # категория «В ToDoro» в Outlook
