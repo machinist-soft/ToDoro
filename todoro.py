@@ -4265,12 +4265,13 @@ class TodoApp:
         # Заголовок, счётчики-«таблетки», меню и справка
         header = ttk.Frame(page)
         header.pack(fill="x", pady=(4, 0))
-        # Логотип: значок программы и название, «Doro» — фирменным бирюзовым цветом значка
+        # Логотип: значок программы и название. Игра слов ToDo + Totoro: «ToDo» — обычным цветом,
+        # «ro» — фирменным бирюзовым цветом значка
         brand = tk.Frame(header, bg=BG)
         brand.pack(side="left")
         if "logo" in IMAGES:
             tk.Label(brand, image=IMAGES["logo"], bg=BG, bd=0).pack(side="left", padx=(0, 10))
-        for part, color in (("To", TEXT), ("Doro", BRAND)):
+        for part, color in (("ToDo", TEXT), ("ro", BRAND)):
             tk.Label(brand, text=part, bg=BG, fg=color, font=("Segoe UI Semibold", 20), bd=0,
                      padx=0, pady=0).pack(side="left")
         # Переключатель списков: «Личный ▾», «Команда ▾» …
