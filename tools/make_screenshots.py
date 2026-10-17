@@ -230,6 +230,27 @@ def run():
     root.after(300, shoot_mail)
     app.from_outlook()
     root.attributes("-topmost", True)
+    # 4г. Новая задача со снимка экрана: «снимок» — кусок списка задач этого же окна
+    for _ in range(4):  # окно письма из прошлого шага должно успеть исчезнуть с экрана
+        root.update()
+        time.sleep(0.25)
+    x, y = app.main_widget().winfo_rootx(), app.main_widget().winfo_rooty()
+    picture = ImageGrab.grab((x, y, x + 760, y + 230))
+    T.snip.select_area = lambda master: picture
+
+    def shoot_snip():
+        dialog = next((w for w in root.winfo_children() if isinstance(w, T.TaskDialog)), None)
+        if dialog is None:
+            root.after(100, shoot_snip)
+            return
+        dialog.form.title_entry.insert(0, "Проверить сроки задач команды")
+        dialog.attributes("-topmost", True)
+        grab("snip.png", window=dialog)
+        dialog.destroy()  # «Отмена»: задачу не создаём
+
+    root.after(300, shoot_snip)
+    app.from_screen()
+    root.attributes("-topmost", True)
     # 5. Доска
     app.view.set("board")
     app.switch_view()

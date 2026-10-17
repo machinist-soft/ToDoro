@@ -90,6 +90,13 @@ CSV export / import, e-mail a task, built-in help · one-click updates.*
 
 ![Новая задача из письма Outlook / New task from an Outlook e-mail](docs/screenshots/outlook.png)
 
+### Задача со снимка экрана / Task from a screen snapshot
+
+Нажмите Ctrl+Alt+S в любой программе и выделите мышью область экрана — откроется новая задача, а снимок приложится к ней.
+*Press Ctrl+Alt+S in any app and select an area of the screen — a new task opens with the snapshot attached.*
+
+![Новая задача со снимка экрана / New task from a screen snapshot](docs/screenshots/snip.png)
+
 ### Ознакомительный тур / Guided tour
 
 При запуске Тоторо обводит рамкой главные части окна и объясняет их; тур можно отключить и пройти снова: ☰ Меню → Ознакомительный тур.
