@@ -2421,11 +2421,19 @@ class PopupMenu:
 
     def popup(self, root, x, y, right_aligned=False):
         """right_aligned=True — x задаёт правый край меню (для кнопок у правого края окна)."""
+        opened = _MenuWindow.current
+        if opened is not None:
+            opened.close()
+            if opened.opened_at == (x, y):  # повторное нажатие на ту же кнопку закрывает меню
+                return
         _MenuWindow(root, self, x, y, right_aligned=right_aligned)
 
 
 class _MenuWindow(tk.Toplevel):
+    current = None  # открытое сейчас меню (верхнее окно)
+
     def __init__(self, master, menu, x, y, parent=None, right_aligned=False):
+        self.opened_at = (x, y)
         super().__init__(master)
         self.menu, self.parent, self.child = menu, parent, None
         self.top = parent.top if parent else self
@@ -2454,15 +2462,20 @@ class _MenuWindow(tk.Toplevel):
             y = max(sh - h - 4, 0)
         self.geometry(f"+{x}+{y}")
         self.deiconify()
+        # фокус ушёл из меню (и из подменю) в другое окно — закрываем
+        self.bind("<FocusOut>", lambda e: self.top.after(120, self.top.check_focus))
 
         if parent is None:
-            # Щелчок мимо меню закрывает его (пока меню открыто, все щелчки приходят сюда).
-            # Если меню открыто из окна-диалога, захват потом нужно вернуть этому окну.
+            # Меню из окна-диалога захватывает щелчки (иначе диалог, который модальный, не дал
+            # бы щёлкнуть по меню): щелчок мимо меню закрывает его, захват потом возвращаем
+            # диалогу. Меню главного окна не захватывает — иначе Windows не даёт свернуть или
+            # закрыть окно, пока меню открыто; оно закрывается, когда фокус уходит из меню.
             self.previous_grab = self.grab_current()
             self.previous_focus = self.focus_get()
-            self.grab_set()
-            self.bind("<ButtonPress>", self.click_outside)
-            self.bind("<FocusOut>", lambda e: self.after(120, self.check_focus))
+            if self.previous_grab is not None:
+                self.grab_set()
+                self.bind("<ButtonPress>", self.click_outside)
+            _MenuWindow.current = self
             for key, action in (("<Escape>", self.key_escape), ("<Up>", lambda: self.move(-1)),
                                 ("<Down>", lambda: self.move(1)), ("<Return>", self.key_enter),
                                 ("<Right>", self.key_right), ("<Left>", self.key_left)):
@@ -2534,6 +2547,8 @@ class _MenuWindow(tk.Toplevel):
         root.after(1, command)  # выполняем после закрытия меню
 
     def close(self):
+        if _MenuWindow.current is self:
+            _MenuWindow.current = None
         self.close_child()
         try:
             self.grab_release()
@@ -2566,8 +2581,13 @@ class _MenuWindow(tk.Toplevel):
             focus = self.focus_get()
         except (KeyError, tk.TclError):
             focus = None
-        if focus is None and self.winfo_exists():
-            self.close()
+        try:
+            if not self.winfo_exists():
+                return
+            if focus is None or focus.winfo_toplevel() not in self.windows():
+                self.close()
+        except tk.TclError:
+            pass
 
     # --- клавиатура (работает в самом глубоком открытом подменю) ---
 
