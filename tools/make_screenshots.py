@@ -27,6 +27,7 @@ DARK = "dark" in sys.argv[1:]  # python tools/make_screenshots.py dark — то�
 MATRIX = "matrix" in sys.argv[1:]  # python tools/make_screenshots.py matrix — только снимок матрицы
 WHATSNEW = "whatsnew" in sys.argv[1:]  # python tools/make_screenshots.py whatsnew — только «Что нового»
 REMINDERS = "reminders" in sys.argv[1:]  # python tools/make_screenshots.py reminders — только напоминания
+PHONE = "phone" in sys.argv[1:]  # python tools/make_screenshots.py phone — только «Подключить телефон»
 work = Path(tempfile.mkdtemp(prefix="todoro-shots-"))
 out = ROOT / "docs" / "screenshots"
 out.mkdir(parents=True, exist_ok=True)
@@ -200,6 +201,26 @@ def shoot_reminders():
         app.lists = lists
 
 
+def shoot_phone():
+    """☰ Меню → Подключить телефон, вкладка «1. Установить приложение». В кадре — QR-код со
+    ссылкой на GitHub, а не код подключения: в том — адрес и имя компьютера и ключ."""
+    T.phone.new_token(app.prefs)  # ключ во временной базе: окно показывает включённую связь
+    dialog = T.PhoneDialog(root, app.prefs)
+    dialog.show_qr("install")
+    T.center_on_screen(dialog)
+    dialog.attributes("-topmost", True)
+    grab("phone.png", window=dialog)
+    dialog.destroy()
+
+
+def run_phone():
+    for _ in range(4):
+        root.update()
+        time.sleep(0.2)
+    shoot_phone()
+    root.destroy()
+
+
 def run_reminders():
     for _ in range(4):
         root.update()
@@ -342,6 +363,7 @@ def run():
     dialog.destroy()
     shoot_whatsnew()
     shoot_reminders()
+    shoot_phone()
     # 7. Окно обновления: последний выпущенный раздел RELEASE_NOTES.md («Не выпущено» пропускаем),
     # «текущая» версия — предыдущий выпуск (подменяется только для снимка)
     notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
@@ -389,5 +411,5 @@ def make_gif(frames):
 
 
 root.after(1200, run_dark if DARK else run_matrix if MATRIX else run_whatsnew if WHATSNEW
-           else run_reminders if REMINDERS else run)
+           else run_reminders if REMINDERS else run_phone if PHONE else run)
 root.mainloop()

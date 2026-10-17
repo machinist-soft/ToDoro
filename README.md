@@ -1,7 +1,7 @@
 # ToDoro
 
-Список дел, канбан-доска и матрица Эйзенхауэра для Windows — для себя и для небольшой команды — с Тоторо-помощником.
-*A to-do list, kanban board and Eisenhower matrix for Windows — for yourself and a small team — with a Totoro helper.*
+Список дел, канбан-доска и матрица Эйзенхауэра для Windows и телефона на Android — для себя и для небольшой команды — с Тоторо-помощником.
+*A to-do list, kanban board and Eisenhower matrix for Windows and Android phones — for yourself and a small team — with a Totoro helper.*
 
 **[⬇ Скачать установщик / Download](https://github.com/machinist-soft/ToDoro/releases/latest)** ·
 [📱 Android (APK)](https://github.com/machinist-soft/ToDoro/releases/latest/download/ToDoro.apk) ·
@@ -40,6 +40,9 @@
   по любому столбцу.
 - **Несколько списков**: личные и **общие для команды** — в общей сетевой папке, в том числе
   через VPN.
+- **Задачи на телефоне Android**: личные и общие списки в приложении ToDoro — отметить, добавить,
+  изменить; работает и без связи, напоминает о сроках. Установка и подключение — по QR-коду
+  (☰ Меню → Подключить телефон); телефон берёт задачи у компьютера по домашней сети или VPN.
 - **Командная работа**: автор и исполнитель задачи, «Мои задачи», уведомление «Вам назначены
   задачи», «кто и когда изменил», защита от затирания чужих правок.
 - **Живой Тоторо-помощник** подсказывает, что просрочено и что важнее всего: моргает, радуется,
@@ -62,7 +65,8 @@ overdue task, one click opens a task · file attachments, pasted
 screenshots and comments in every task · list, kanban board with
 custom columns and Eisenhower matrix (drag a card to another quadrant to change its priority),
 filters, search and column sorting · several lists, personal and shared with a team via a network
-folder (VPN works) · author and assignee, “My tasks”, “assigned to you” notices, last editor,
+folder (VPN works) · an Android app: personal and shared lists on your phone, works offline,
+due-date reminders, installed and paired by QR code · author and assignee, “My tasks”, “assigned to you” notices, last editor,
 protection against overwriting others’ edits · a living Totoro helper and the Catbus · a guided
 tour on first launch · create a task from an Outlook e-mail (Ctrl+Alt+T): subject, text,
 attachments and the message itself, replies go to the sender; a tray icon started with Windows
@@ -101,6 +105,13 @@ CSV export / import, e-mail a task, built-in help · one-click updates and an in
 *Press Ctrl+Alt+S in any app and select an area of the screen — a new task opens with the snapshot attached.*
 
 ![Новая задача со снимка экрана / New task from a screen snapshot](docs/screenshots/snip.png)
+
+### Задачи на телефоне / Tasks on your phone
+
+☰ Меню → Подключить телефон: по первому QR-коду телефон скачивает приложение с GitHub, по второму — подключается к компьютеру.
+*Menu → Connect phone: the first QR code downloads the Android app from GitHub, the second pairs the phone with your PC.*
+
+![Подключить телефон / Connect a phone](docs/screenshots/phone.png)
 
 ### Ознакомительный тур / Guided tour
 
