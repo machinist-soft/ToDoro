@@ -675,6 +675,25 @@ def shared_reminders(conn, user, now=None):
     ]
 
 
+def pending_tasks(conn, user=None, now=None):
+    """Невыполненные задачи, у которых срок прошёл или уже пришло время напоминания:
+    [(id, title, due_at), ...], ранние сроки — сверху. user — для общего списка: только задачи,
+    где он исполнитель (или автор, если исполнителя нет)."""
+    now = now or datetime.now()
+    sql = """SELECT id, title, due_at, remind_before FROM tasks
+             WHERE done = 0 AND due_at IS NOT NULL"""
+    args = ()
+    if user is not None:
+        sql += " AND COALESCE(NULLIF(assignee, ''), created_by) = ?"
+        args = (user,)
+    rows = conn.execute(sql + " ORDER BY due_at, id", args).fetchall()
+    return [
+        (task_id, title, due_at)
+        for task_id, title, due_at, remind_before in rows
+        if datetime.fromisoformat(due_at) - timedelta(minutes=remind_before or 0) <= now
+    ]
+
+
 def mark_reminded(conn, task_id):
     with conn:
         conn.execute("UPDATE tasks SET reminded = 1 WHERE id = ?", (task_id,))

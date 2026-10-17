@@ -132,6 +132,25 @@ class DatabaseTests(TempDir):
         self.assertEqual(db.extras_counts(conn), {})
 
 
+    def test_pending_tasks(self):
+        conn = db.connect(self.dir / "p.db")
+        now = datetime(2026, 10, 17, 12, 0)
+
+        def task(title, due_hours, remind=None, by=None):
+            tid = db.add_task(conn, title, created_by=by)
+            due = (now + timedelta(hours=due_hours)).strftime("%Y-%m-%d %H:%M")
+            conn.execute("UPDATE tasks SET due_at = ?, remind_before = ? WHERE id = ?", (due, remind, tid))
+            return tid
+
+        late = task("просрочена", -2)
+        soon = task("напомнить пора", 1, remind=120, by="Анна")
+        task("рано", 1, remind=30)
+        done = task("выполнена", -1)
+        db.set_done(conn, done, True)
+        self.assertEqual([t[0] for t in db.pending_tasks(conn, now=now)], [late, soon])
+        self.assertEqual([t[0] for t in db.pending_tasks(conn, "Анна", now=now)], [soon])
+
+
 class TeamTests(TempDir):
     def test_shared_lists_members_and_backup(self):
         first = team.Team(self.dir)

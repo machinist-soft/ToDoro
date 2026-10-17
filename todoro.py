@@ -157,6 +157,7 @@ EMPTY_TEXT = {
     "Просроченные": "Просроченных задач нет — всё успеваете 🎉",
 }
 BUDDY_MAX_TASKS = 5  # сколько просроченных задач Тоторо называет в облачке
+REMINDERS_MAX = 12  # сколько задач помещается в окне напоминаний
 
 # Варианты напоминания: подпись -> за сколько минут до срока напомнить
 REMIND_OPTIONS = {
@@ -750,6 +751,10 @@ class AlertDialog(tk.Toplevel):
         tk.Label(text, text=message, bg=SURFACE, fg=TEXT, font=FONT_SMALL, justify="left",
                  anchor="w", wraplength=420).pack(anchor="w")
         for line, value in links:
+            if value is None:  # подзаголовок между ссылками
+                tk.Label(text, text=line, bg=SURFACE, fg=TEXT, font=FONT_SMALL, justify="left",
+                         anchor="w", wraplength=420).pack(anchor="w", pady=(12, 0))
+                continue
             link = tk.Label(text, text=line, bg=SURFACE, fg=ACCENT, font=FONT_SMALL, justify="left",
                             anchor="w", wraplength=420, cursor="hand2")
             link.pack(anchor="w", pady=(4, 0))
@@ -4751,6 +4756,8 @@ class TodoApp:
                  .command("Лицензия (MIT)…", self.show_license)
                  .command(f"О программе {APP_NAME}…", self.show_about))
         return (PopupMenu()
+                .command("Напоминания и просроченные…", self.show_reminders)
+                .separator()
                 .command("Задача из письма Outlook", self.from_outlook, accel=OUTLOOK_HOTKEY_NAME)
                 .command("Задача со снимка экрана", self.from_screen, accel=SNIP_HOTKEY_NAME)
                 .command("Добавить колонку на доску…", self.add_lane)
@@ -6148,13 +6155,63 @@ class TodoApp:
             # Показываем окно поверх всех остальных, даже если оно было свёрнуто.
             self.root.deiconify()
             self.root.lift()
-            self.root.attributes("-topmost", True)
             self.root.bell()
-            chosen = self.ask_open_task("Напоминание", "Напоминаю о задачах:", lines)
-            self.root.attributes("-topmost", False)
-            if chosen:
-                self.open_task(*chosen)
+            self.show_reminders(lines, topmost=True)
         self.root.after(CHECK_EVERY_MS, self.check_reminders)
+
+    def collect_pending(self, skip=()):
+        """Задачи из всех списков, у которых прошёл срок или пришло время напоминания:
+        [(текст, (id списка, id задачи))]. В общих списках — только мои задачи."""
+        lines = []
+        for item in self.lists:
+            where = "" if item["id"] == self.list_id else f"  (список «{item['name']}»)"
+            try:
+                tasks = db.pending_tasks(self.list_conn(item["id"]),
+                                         self.user_name() if item["shared"] else None)
+            except (sqlite3.Error, StopIteration):
+                continue  # общая папка сейчас недоступна
+            for task_id, title, due_at in tasks:
+                if (item["id"], task_id) not in skip:
+                    lines.append((f"• {title} — срок {format_due(due_at)}{where}",
+                                  (item["id"], task_id)))
+        return lines
+
+    def show_reminders(self, new=(), topmost=False):
+        """Окно напоминаний: новые напоминания (new) и все остальные задачи, которые ждут
+        внимания. Открывается само, когда пришло время, или из меню."""
+        rest = self.collect_pending(skip={value for _, value in new})
+        if not new and not rest:
+            ui.showinfo("Напоминания", "Сейчас напоминать не о чем: просроченных задач нет, "
+                        "и время напоминаний ещё не пришло.", parent=self.root)
+            return
+        links = []
+        if new:
+            links += [("Пришло время:", None)] + list(new)
+        if rest:
+            links += [("Ещё ждут — срок прошёл или скоро:", None)] if new else []
+            links += rest
+        tasks = [link for link in links if link[1] is not None]
+        if len(tasks) > REMINDERS_MAX:  # длинное окно не влезет на экран — показываем первые
+            hidden = {value for _, value in tasks[REMINDERS_MAX:]}
+            links = [link for link in links if link[1] not in hidden]
+            links.append((f"…и ещё {len(tasks) - REMINDERS_MAX}. Все просроченные — кнопка "
+                          "«Просроченные» вверху окна.", None))
+        if len(tasks) == 1:
+            buttons = [("Открыть задачу", tasks[0][1], "Accent.TButton"), ("Закрыть", None, "TButton")]
+            hint = ""
+        else:
+            buttons = [("Закрыть", None, "Accent.TButton")]
+            hint = "\n\nЩёлкните по задаче, чтобы открыть её."
+        message = ("Напоминаю о задачах:" if new else
+                   "Задачи, у которых прошёл срок или пришло время напоминания:") + hint
+        if topmost:
+            self.root.attributes("-topmost", True)
+        chosen = AlertDialog(self.root, "Напоминания", message, "info", buttons, buttons[0][1],
+                             None, links=links).show()
+        if topmost:
+            self.root.attributes("-topmost", False)
+        if chosen:
+            self.open_task(*chosen)
 
     def ask_open_task(self, title, message, lines):
         """Сообщение о задачах, где каждую можно открыть щелчком.
