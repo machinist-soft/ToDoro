@@ -5,6 +5,9 @@
 делает это тем же кодом, что и окно ToDoro (db.py, team.py), поэтому версии задач, авторы,
 исполнители и общие списки работают как обычно.
 
+Файлы задач телефону не передаются и с телефона не принимаются (так решил автор программы:
+это небезопасно) — телефон видит только, сколько их; смотреть файлы — на компьютере.
+
 Сервер включается, только когда в окне ToDoro выбрали «☰ → Подключить телефон»: тогда в
 настройках появляется секретный ключ (phone_token). Ключ передаётся телефону в QR-коде и
 нужен в каждом запросе (заголовок «Authorization: Bearer <ключ>»). «Отключить телефон»
@@ -17,18 +20,14 @@
     GET    /api/v1/sync                          — все списки сразу с задачами (копия для телефона)
     GET    /api/v1/lists/<список>                — колонки, задачи, участники
     POST   /api/v1/lists/<список>/tasks          — новая задача
-    GET    /api/v1/lists/<список>/tasks/<номер>  — задача с файлами и комментариями
+    GET    /api/v1/lists/<список>/tasks/<номер>  — задача с комментариями
     PATCH  /api/v1/lists/<список>/tasks/<номер>  — изменить (version — защита от затирания)
     DELETE /api/v1/lists/<список>/tasks/<номер>
     POST   .../tasks/<номер>/comments            — {"text": ...}
     DELETE .../tasks/<номер>/comments/<id>
-    POST   .../tasks/<номер>/attachments?name=<имя файла>   — тело запроса — сам файл
-    GET    .../tasks/<номер>/attachments/<id>    — скачать файл
-    DELETE .../tasks/<номер>/attachments/<id>
 """
 import hmac
 import json
-import mimetypes
 import os
 import re
 import secrets
@@ -38,7 +37,7 @@ import threading
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import quote, urlsplit
 
 import db
 import team
@@ -294,8 +293,6 @@ class Store:
 
     def full_task(self, conn, task_id):
         task = self.task(conn, task_id)
-        task["attachments"] = [dict(zip(("id", "name", "size", "added_by", "added_at"), r))
-                               for r in db.list_attachments(conn, task_id)]
         task["comments_list"] = [dict(zip(("id", "author", "text", "created_at"), r))
                                  for r in db.list_comments(conn, task_id)]
         return task
@@ -410,26 +407,6 @@ class Store:
         self.owned(conn, "comments", comment_id, task_id)
         db.delete_comment(conn, comment_id)
 
-    def add_attachment(self, item, task_id, name, data):
-        conn = self.conn(item)
-        self.task(conn, task_id)
-        name = os.path.basename((name or "").replace("\\", "/")).strip()
-        if not name:
-            raise ApiError(400, "Нужно имя файла (?name=...)")
-        db.add_attachment(conn, task_id, name, data, by=self.author(item))
-        return self.full_task(conn, task_id)
-
-    def attachment(self, item, task_id, attachment_id):
-        conn = self.conn(item)
-        self.owned(conn, "attachments", attachment_id, task_id)
-        name = conn.execute("SELECT name FROM attachments WHERE id = ?", (attachment_id,)).fetchone()[0]
-        return name, db.attachment_data(conn, attachment_id)
-
-    def delete_attachment(self, item, task_id, attachment_id):
-        conn = self.conn(item)
-        self.owned(conn, "attachments", attachment_id, task_id)
-        db.delete_attachment(conn, attachment_id)
-
 
 # ---------- HTTP ----------
 
@@ -441,7 +418,7 @@ HOME_PAGE = """<!doctype html><html lang="ru"><meta charset="utf-8">
 </body></html>"""
 
 ROUTE = re.compile(r"^/api/v1/lists/(?P<list>[A-Za-z0-9_-]+)"
-                   r"(?:/tasks(?:/(?P<task>\d+)(?:/(?P<kind>comments|attachments)(?:/(?P<sub>\d+))?)?)?)?$")
+                   r"(?:/tasks(?:/(?P<task>\d+)(?:/(?P<kind>comments)(?:/(?P<sub>\d+))?)?)?)?$")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -465,12 +442,10 @@ class Handler(BaseHTTPRequestHandler):
     def send_error_json(self, status, message, extra=None):
         self.send_json(status, {"error": message, **(extra or {})})
 
-    def send_bytes(self, data, content_type, filename=None):
+    def send_bytes(self, data, content_type):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
-        if filename:
-            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(filename)}")
         self.end_headers()
         self.wfile.write(data)
 
@@ -482,7 +457,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             raise ApiError(400, "Неверная длина запроса") from None
         if length > limit:
-            raise ApiError(413, f"Файл больше {limit // (1024 * 1024)} МБ")
+            raise ApiError(413, "Слишком большой запрос")
         return self.rfile.read(length) if length else b""
 
     def body_json(self):
@@ -532,14 +507,14 @@ class Handler(BaseHTTPRequestHandler):
         store, item = self.server.store, None
         try:
             with self.server.lock:
-                item = self.route(store, method, path, parse_qs(url.query))
+                item = self.route(store, method, path)
         except ApiError as error:
             self.send_error_json(error.status, error.message, error.extra)
         except (sqlite3.Error, OSError) as error:
             store.on_error(item)
             self.send_error_json(503, f"Не удалось прочитать или записать список: {error}")
 
-    def route(self, store, method, path, query):
+    def route(self, store, method, path):
         """Выполняет запрос и отвечает; возвращает список, с которым работали (или None)."""
         if path == API + "/hello" and method == "GET":
             self.send_json(200, {"app": "ToDoro", "version": APP_VERSION, "api": 1,
@@ -580,25 +555,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, {"deleted": task_id})
             else:
                 raise ApiError(405, "Так нельзя")
-        elif kind == "comments":
+        else:  # comments
             if method == "POST" and sub_id is None:
                 self.send_json(201, {"task": store.add_comment(item, task_id, self.body_json())})
             elif method == "DELETE" and sub_id is not None:
                 store.delete_comment(item, task_id, sub_id)
-                self.send_json(200, {"deleted": sub_id})
-            else:
-                raise ApiError(405, "Так нельзя")
-        else:  # attachments
-            if method == "POST" and sub_id is None:
-                data = self.body_bytes(db.MAX_ATTACHMENT)
-                name = (query.get("name") or [""])[0]
-                self.send_json(201, {"task": store.add_attachment(item, task_id, name, data)})
-            elif method == "GET" and sub_id is not None:
-                name, data = store.attachment(item, task_id, sub_id)
-                kind_ = mimetypes.guess_type(name)[0] or "application/octet-stream"
-                self.send_bytes(data, kind_, name)
-            elif method == "DELETE" and sub_id is not None:
-                store.delete_attachment(item, task_id, sub_id)
                 self.send_json(200, {"deleted": sub_id})
             else:
                 raise ApiError(405, "Так нельзя")

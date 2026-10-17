@@ -6,6 +6,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 enum class Filter(val label: String) { ALL("Все"), ACTIVE("Активные"), DONE("Выполненные"), OVERDUE("Просроченные") }
@@ -164,6 +166,76 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun card(): Task? = cardId?.let { id -> view?.tasks?.firstOrNull { it.id == id } }
+
+    // --- комментарии открытой карточки (нужна связь с компьютером) ---
+
+    var comments by mutableStateOf<TaskComments?>(null)
+        private set
+    var commentsProblem by mutableStateOf<String?>(null)
+        private set
+    var sending by mutableStateOf(false)
+        private set
+
+    /** Записать состояние после ответа компьютера одним «снимком» Compose — экран гарантированно
+     *  узнает об изменении (без этого в проверке снимков экрана карточка не перерисовывалась). */
+    private fun applied(block: () -> Unit) = androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot(block)
+
+    private fun problemText(e: Exception) = when (e) {
+        is OfflineException -> "Комментарии видны, когда телефон на связи с компьютером. " + e.message
+        is ApiException -> e.message ?: "Ошибка"
+        else -> "Не получилось: ${e.message}"
+    }
+
+    /** Карточка открылась (или поменялось число комментариев) — берём их с компьютера. */
+    fun loadComments(task: Task) {
+        val v = view ?: return
+        if (task.id < 0) {
+            comments = null
+            commentsProblem = "Задача ещё не дошла до компьютера — комментарии можно будет написать потом."
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val loaded = parseComments(v.list.id, Repo.details(v.list.id, task.id))
+                applied {
+                    comments = loaded
+                    commentsProblem = null
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                applied {
+                    if (comments?.taskId != task.id) comments = null
+                    commentsProblem = problemText(e)
+                }
+            }
+        }
+    }
+
+    private fun commentAction(done: String?, work: suspend (TaskComments) -> JSONObject?) {
+        val c = comments ?: return
+        sending = true
+        viewModelScope.launch {
+            try {
+                val task = work(c) ?: Repo.details(c.listId, c.taskId)
+                applied { comments = parseComments(c.listId, task) }
+                done?.let { Repo.message = it }
+                Repo.launch { Repo.sync() }  // счётчик 💬 в списке
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Repo.message = problemText(e)
+            } finally {
+                applied { sending = false }
+            }
+        }
+    }
+
+    fun addComment(text: String, onSent: () -> Unit) {
+        if (text.isBlank()) return
+        commentAction(null) { c -> Repo.addComment(c.listId, c.taskId, text.trim()).also { onSent() } }
+    }
+
+    fun deleteComment(comment: Comment) =
+        commentAction("Комментарий удалён") { c -> Repo.deleteComment(c.listId, c.taskId, comment.id); null }
 
     // --- изменения: сразу на экране, на компьютер — когда будет связь ---
 

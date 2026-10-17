@@ -22,6 +22,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,6 +44,8 @@ fun TaskCard(vm: AppViewModel, task: Task, view: ListView) {
     var askDelete by remember { mutableStateOf(false) }
     var tab by rememberSaveable { mutableStateOf("body") }
     BackHandler { vm.cardId = null }
+    // комментарии — с компьютера; заново, если их число поменялось (написали на компьютере)
+    LaunchedEffect(task.id, task.comments) { vm.loadComments(task) }
     val status = view.statuses.firstOrNull { it.id == task.statusId }
 
     Scaffold(containerColor = p.bg, snackbarHost = { SnackbarHost(snackbar) }) { padding ->
@@ -77,17 +80,17 @@ fun TaskCard(vm: AppViewModel, task: Task, view: ListView) {
                         if (task.overdue) Text("  · срок прошёл", color = p.danger, fontSize = 14.sp)
                     }
                     HorizontalDivider(Modifier.padding(vertical = 12.dp), color = p.headingLine)
-                    Segmented(
-                        listOf("body" to "Описание", "files" to "Файлы  ${task.files}",
-                            "comments" to "Комментарии  ${task.comments}"),
-                        tab,
-                    ) { tab = it }
+                    Segmented(listOf("body" to "Описание", "comments" to "Комментарии  ${task.comments}"), tab) { tab = it }
                     Spacer(Modifier.height(10.dp))
-                    when (tab) {
-                        "body" -> Text(task.body.ifBlank { "Описания нет." },
+                    val c = vm.comments?.takeIf { it.taskId == task.id && it.listId == view.list.id }
+                    when {
+                        tab == "body" -> Text(task.body.ifBlank { "Описания нет." },
                             color = if (task.body.isBlank()) p.done else p.text, fontSize = 15.sp)
-                        else -> Text("Файлы и комментарии на телефоне появятся в следующей версии. " +
-                            "Пока их можно посмотреть на компьютере.", color = p.muted, fontSize = 14.sp)
+                        c == null -> Text(vm.commentsProblem ?: "Загружаю…", color = p.muted, fontSize = 14.sp)
+                        else -> {
+                            CommentsTab(vm, c, view.user)
+                            vm.commentsProblem?.let { Text(it, Modifier.padding(top = 8.dp), color = p.warn, fontSize = 13.sp) }
+                        }
                     }
                     HorizontalDivider(Modifier.padding(vertical = 12.dp), color = p.headingLine)
                     Props(task, view)
@@ -126,6 +129,8 @@ fun Props(task: Task, view: ListView) {
         "Срочность" to if (task.urgent) "Срочно" else "Не срочно",
         "Срок" to (task.due?.let { showStamp(it.format(DUE_FORMAT) + ":00") } ?: "Без срока"),
         if (task.due != null) "Напомнить" to remindLabel(task.remindBefore) else null,
+        // файлы на телефон не передаются — только сколько их
+        if (task.files > 0) "Файлы" to "${task.files} — смотрите на компьютере" else null,
         task.createdAt?.let { "Создана" to showStamp(it) },
         task.author?.let { "Автор" to it },
         if (view.list.shared) "Исполнитель" to (task.assignee ?: "Не назначен") else null,

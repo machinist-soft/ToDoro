@@ -61,6 +61,12 @@ class ScreenshotTest {
         shot("2-card")
         compose.onNode(hasText("✎  Изменить")).performClick()
         shot("3-form")
+        compose.onNode(hasText("Отмена")).performClick()
+        compose.onNode(hasText("‹ Назад к списку")).performClick()
+        compose.onNode(hasText("Подготовить презентацию для клиента")).performClick()
+        compose.onNode(hasText("Комментарии", substring = true)).performClick()
+        compose.waitUntil(10_000) { Repo.data != null && compose.onAllNodes(hasText("Отправить")).fetchSemanticsNodes().isNotEmpty() }
+        shot("5-comments")
     }
 
     @Test

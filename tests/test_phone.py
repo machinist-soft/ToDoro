@@ -101,21 +101,32 @@ class PhoneServerTests(unittest.TestCase):
         self.assertEqual([t["title"] for t in answer["views"]["personal"]["tasks"]], ["Хлеб"])
         self.assertEqual(answer["user"], "Аня")
 
-    def test_comments_and_files(self):
+    def test_comments(self):
         task_id = self.call("POST", "/api/v1/lists/personal/tasks", {"title": "Отчёт"})[1]["task"]["id"]
         path = f"/api/v1/lists/personal/tasks/{task_id}"
         answer = self.call("POST", path + "/comments", {"text": "с телефона"})[1]
-        self.assertEqual([c["text"] for c in answer["task"]["comments_list"]], ["с телефона"])
-        answer = self.call("POST", path + "/attachments?name=%D1%84%D0%BE%D1%82%D0%BE.jpg",
-                           raw=b"\xff\xd8 jpeg")[1]
-        (attachment,) = answer["task"]["attachments"]
-        self.assertEqual((attachment["name"], attachment["size"]), ("фото.jpg", 7))
-        status, data = self.call("GET", f"{path}/attachments/{attachment['id']}")
-        self.assertEqual((status, data), (200, b"\xff\xd8 jpeg"))
-        # чужой номер файла (из другой задачи) не отдаётся
+        (comment,) = answer["task"]["comments_list"]
+        self.assertEqual(comment["text"], "с телефона")
+        self.assertEqual(answer["task"]["comments"], 1)
+        # чужой номер комментария (из другой задачи) не удаляется
         other = self.call("POST", "/api/v1/lists/personal/tasks", {"title": "Другая"})[1]["task"]["id"]
-        self.assertEqual(self.call("GET", f"/api/v1/lists/personal/tasks/{other}/attachments/"
-                                          f"{attachment['id']}")[0], 404)
+        self.assertEqual(self.call("DELETE", f"/api/v1/lists/personal/tasks/{other}/comments/"
+                                             f"{comment['id']}")[0], 404)
+        self.assertEqual(self.call("DELETE", f"{path}/comments/{comment['id']}")[0], 200)
+
+    def test_files_are_not_served(self):
+        """Файлы задач телефону не передаются: ни список, ни содержимое, ни загрузка."""
+        prefs = db.connect(self.prefs_path)
+        task_id = db.add_task(prefs, "С файлом")
+        attachment_id = db.add_attachment(prefs, task_id, "секрет.txt", b"data")
+        prefs.close()
+        path = f"/api/v1/lists/personal/tasks/{task_id}"
+        task = self.call("GET", path)[1]["task"]
+        self.assertEqual(task["files"], 1)  # сколько файлов — видно
+        self.assertNotIn("attachments", task)
+        self.assertEqual(self.call("GET", f"{path}/attachments/{attachment_id}")[0], 404)
+        self.assertEqual(self.call("POST", f"{path}/attachments?name=a.txt", raw=b"x")[0], 404)
+        self.assertEqual(self.call("DELETE", f"{path}/attachments/{attachment_id}")[0], 404)
 
     def test_bad_input(self):
         self.assertEqual(self.call("POST", "/api/v1/lists/personal/tasks", {"title": "  "})[0], 400)

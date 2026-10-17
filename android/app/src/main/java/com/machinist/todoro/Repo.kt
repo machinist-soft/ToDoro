@@ -275,6 +275,23 @@ object Repo {
 
     fun launch(block: suspend () -> Unit) = scope.launch { block() }
 
+    // --- комментарии: только при связи с компьютером (в копии на телефоне их нет) ---
+
+    private fun taskPath(list: String, id: Long) = Api.listPath(list) + "/tasks/$id"
+
+    private fun online(): Api = api ?: throw OfflineException("Телефон не подключён к компьютеру")
+
+    /** Задача с комментариями (файлы телефону не передаются — только их число). */
+    suspend fun details(list: String, id: Long): JSONObject =
+        online().get(taskPath(list, id)).getJSONObject("task")
+
+    suspend fun addComment(list: String, id: Long, text: String): JSONObject =
+        online().post(taskPath(list, id) + "/comments", JSONObject().put("text", text)).getJSONObject("task")
+
+    suspend fun deleteComment(list: String, id: Long, commentId: Long) {
+        online().delete(taskPath(list, id) + "/comments/$commentId")
+    }
+
     fun create(list: String, fields: JSONObject, title: String): Long {
         val id = -System.currentTimeMillis()
         enqueue(Op("create", list, id, fields, null, title))
