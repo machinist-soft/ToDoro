@@ -46,7 +46,9 @@ NEW_COLUMNS = [
     ("updated_by", "TEXT"),                         # кто изменил последним
     ("updated_at", "TEXT"),                         # когда изменили последний раз (местное время)
     ("version", "INTEGER NOT NULL DEFAULT 0"),      # растёт при каждом изменении — чтобы заметить,
-]                                                   # что задачу поменял кто-то другой
+                                                    # что задачу поменял кто-то другой
+    ("mail_id", "TEXT"),                            # письмо Outlook, из которого создана задача
+]
 
 # Статусы по умолчанию: (название, цвет, «задачи здесь выполнены»)
 DEFAULT_STATUSES = [
@@ -313,6 +315,19 @@ def add_task(conn, title, status_id=None, created_by=None):
             (title, status_id, status_id, created_by),
         )
     return cur.lastrowid
+
+
+def set_mail_id(conn, task_id, mail_id):
+    with conn:
+        conn.execute("UPDATE tasks SET mail_id = ? WHERE id = ?", (mail_id or None, task_id))
+
+
+def find_by_mail(conn, mail_id):
+    """id задачи, созданной из этого письма (или None)."""
+    if not mail_id:
+        return None
+    row = conn.execute("SELECT id FROM tasks WHERE mail_id = ? ORDER BY id LIMIT 1", (mail_id,)).fetchone()
+    return row[0] if row else None
 
 
 def update_task(conn, task_id, title, due_at, remind_before, urgent=False, important=False,

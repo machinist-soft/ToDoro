@@ -23,6 +23,7 @@ from pathlib import Path
 from tkinter import colorchooser, filedialog, ttk
 
 import db
+import outlook
 import team
 import updater
 from examples import make_examples
@@ -1098,16 +1099,20 @@ class TaskForm(ttk.Frame):
 class TaskDialog(tk.Toplevel):
     """Запасное окно с формой задачи — когда правая панель скрыта (узкое окно)."""
 
-    def __init__(self, parent, task, statuses, members=None):
+    def __init__(self, parent, task, statuses, members=None, title="Задача", note=""):
         super().__init__(parent)
         self.result = None
-        self.title("Задача")
+        self.title(title)
         self.configure(bg=BG)
         self.resizable(False, False)
         self.transient(parent)
         self.form = TaskForm(self, task, statuses, on_save=self.saved, on_cancel=self.destroy,
                              members=members)
         self.form.configure(padding=(20, 18, 20, 18))
+        if note:  # например, «Из письма Outlook; будут приложены: …»
+            ttk.Label(self, text=note, style="Muted.TLabel", wraplength=520, justify="left").pack(
+                fill="x", padx=20, pady=(16, 0))
+            self.form.configure(padding=(20, 10, 20, 18))
         self.form.pack(fill="both")
         center_on_screen(self)
         self.form.focus_title()
@@ -4025,6 +4030,9 @@ class TodoApp:
         self.entry.bind("<FocusOut>", lambda e: self.show_placeholder())
         ttk.Button(add_row, text="＋  Добавить", style="Accent.TButton",
                    command=self.add).pack(side="left", padx=(10, 0), ipady=2)
+        self.mail_button = ttk.Button(add_row, text="✉  Из письма", style="TButton",
+                                      command=self.from_outlook)
+        self.mail_button.pack(side="left", padx=(8, 0), ipady=2)
 
         # Вид (список, доска или матрица), фильтр и сортировка
         toolbar = ttk.Frame(page)
@@ -4207,6 +4215,7 @@ class TodoApp:
         self.show_placeholder()
         self.entry.focus()
         root.after(1000, self.check_reminders)
+        self.mail_hotkey = start_hotkey(root, self.from_outlook)  # Ctrl+Alt+T — из любой программы
         root.after(WATCH_EVERY_MS, self.watch_changes)  # изменения других участников в общих списках
         root.after(4000, self.auto_check_update)  # раз в день — нет ли новой версии
         self.tour = None
@@ -4378,6 +4387,7 @@ class TodoApp:
                  .command("Лицензия (MIT)…", self.show_license)
                  .command(f"О программе {APP_NAME}…", self.show_about))
         return (PopupMenu()
+                .command("Задача из письма Outlook", self.from_outlook, accel=OUTLOOK_HOTKEY_NAME)
                 .command("Добавить колонку на доску…", self.add_lane)
                 .submenu("Экспорт и импорт", data)
                 .submenu("Примеры задач", examples)
@@ -6017,6 +6027,84 @@ class TodoApp:
             return
         self.close()
 
+    # --- задача из письма Outlook ---
+
+    def mail_task(self, mail):
+        """Значения формы новой задачи по письму: исполнитель — тот, кто создаёт задачу."""
+        members = self.members()
+        return dict(title=mail["title"], body=mail["body"], due_at=mail["due_at"], remind_before=None,
+                    urgent=False, important=mail["important"],
+                    status_id=db.list_statuses(self.conn)[0][0],
+                    assignee=self.user_name() if members is not None else None, version=None)
+
+    def from_outlook(self):
+        """Ctrl+Alt+T в Outlook или кнопка «Из письма»: задача из выделенного письма."""
+        self.bring_to_front()
+        if self.root.grab_current() is not None:
+            return  # открыто другое окно (настройки, форма) — сначала его нужно закрыть
+        self.finish_editing()
+        self.root.configure(cursor="watch")
+        self.root.update_idletasks()
+        try:
+            mails = outlook.read_selected()
+        except outlook.OutlookError as error:
+            ui.showinfo("Задача из письма", str(error), parent=self.root)
+            return
+        finally:
+            self.root.configure(cursor="")
+        list_name = self.current_list()["name"]
+        if len(mails) > 1:
+            if not ui.askyesno("Задачи из писем", f"В Outlook выделено писем: {len(mails)}.\n\n"
+                               f"Создать по задаче из каждого в списке «{list_name}»?",
+                               parent=self.root):
+                return
+            created, skipped = [], 0
+            for mail in mails:
+                if db.find_by_mail(self.conn, mail["mail_id"]):
+                    skipped += 1
+                else:
+                    created.append(self.create_from_mail(mail, self.mail_task(mail)))
+            self.show_new_tasks(created)
+            if skipped:
+                ui.showinfo("Задачи из писем", f"Создано задач: {len(created)}.\n"
+                            f"Пропущено писем: {skipped} — по ним задачи уже есть.", parent=self.root)
+            return
+        mail = mails[0]
+        existing = db.find_by_mail(self.conn, mail["mail_id"])
+        if existing and ui.askyesno("Задача из письма", "По этому письму уже есть задача "
+                                    f"№{existing} в списке «{list_name}». Открыть её?\n\n"
+                                    "«Нет» — создать ещё одну.", parent=self.root):
+            self.show_new_tasks([existing])
+            return
+        note = f"Из письма Outlook, в список «{list_name}»."
+        if mail["files"]:
+            note += " Будут приложены: " + ", ".join(name for name, _ in mail["files"])
+        dialog = TaskDialog(self.root, self.mail_task(mail), db.list_statuses(self.conn),
+                            members=self.members(), title="Новая задача из письма", note=note)
+        self.root.wait_window(dialog)
+        if dialog.result:
+            self.show_new_tasks([self.create_from_mail(mail, dialog.result)])
+
+    def create_from_mail(self, mail, result):
+        task_id = db.add_task(self.conn, result["title"], status_id=result["status_id"],
+                              created_by=self.created_by())
+        self.apply_edit(task_id, result, refresh=False)
+        db.set_mail_id(self.conn, task_id, mail["mail_id"])
+        if mail["files"]:
+            self.attach(task_id, mail["files"])
+        outlook.mark_added(mail["entry_id"], mail["store_id"])  # категория «В ToDoro» в Outlook
+        return task_id
+
+    def show_new_tasks(self, task_ids):
+        if not task_ids:
+            return
+        if FILTERS[self.filter.get()] not in (None, False):
+            self.filter.set("Все")  # иначе новую задачу может быть не видно
+        if self.search_query:
+            self.clear_search(refresh=False)
+        self.only_mine.set(False)
+        self.refresh(select_id=task_ids[-1])
+
     def watch_show_requests(self, event):
         """Кто-то запустил ToDoro ещё раз — показываем это окно (см. single_instance)."""
         try:
@@ -6024,6 +6112,12 @@ class TodoApp:
                 self.bring_to_front()
         except (AttributeError, OSError):
             return
+        if OUTLOOK_FLAG_FILE.exists():  # запустили «ToDoro.exe --outlook» — задача из письма
+            try:
+                OUTLOOK_FLAG_FILE.unlink()
+            except OSError:
+                pass
+            self.root.after_idle(self.from_outlook)
         self.root.after(400, lambda: self.watch_show_requests(event))
 
     def bring_to_front(self):
@@ -6048,6 +6142,47 @@ class TodoApp:
 INSTANCE_MUTEX = "Local\\ToDoro-single-instance"
 SHOW_EVENT = "Local\\ToDoro-show-window"
 RESTART_FLAG = "--restart"  # перезапуск самой программой: подождать, пока закроется старая копия
+# «ToDoro.exe --outlook» — задача из письма, выделенного в Outlook (например, из макроса Outlook).
+# Уже открытой копии об этом сообщает файл-флажок: она проверяет его вместе с просьбой показать окно.
+OUTLOOK_FLAG = "--outlook"
+OUTLOOK_FLAG_FILE = db.DATA_DIR / "from-outlook.flag"
+
+# Сочетание клавиш «задача из письма» работает во всей Windows, пока ToDoro открыт
+OUTLOOK_HOTKEY = (0x0002 | 0x0001 | 0x4000, ord("T"))  # MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, T
+OUTLOOK_HOTKEY_NAME = "Ctrl+Alt+T"
+
+
+def start_hotkey(root, action):
+    """Регистрирует Ctrl+Alt+T для всей Windows. Нажатие ловит отдельный поток (у него своя
+    очередь сообщений Windows), а действие выполняется в главном потоке окна.
+    Возвращает False, если сочетание уже занято другой программой."""
+    pressed, registered, ready = threading.Event(), threading.Event(), threading.Event()
+
+    def listen():
+        try:
+            user32 = ctypes.windll.user32
+            if user32.RegisterHotKey(None, 1, *OUTLOOK_HOTKEY):
+                registered.set()
+            ready.set()
+            msg = wintypes.MSG()
+            while registered.is_set() and user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                if msg.message == 0x0312:  # WM_HOTKEY
+                    pressed.set()
+        except (AttributeError, OSError):
+            ready.set()
+
+    threading.Thread(target=listen, daemon=True).start()
+    ready.wait(2)
+
+    def poll():
+        if pressed.is_set():
+            pressed.clear()
+            action()
+        root.after(150, poll)
+
+    if registered.is_set():
+        poll()
+    return registered.is_set()
 
 
 def single_instance(wait_ms=0):
@@ -6076,6 +6211,12 @@ def single_instance(wait_ms=0):
 
 
 if __name__ == "__main__":
+    if OUTLOOK_FLAG in sys.argv:
+        try:
+            OUTLOOK_FLAG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            OUTLOOK_FLAG_FILE.touch()
+        except OSError:
+            pass
     show_event = single_instance(15000 if RESTART_FLAG in sys.argv else 0)
     if show_event is None:
         sys.exit(0)  # ToDoro уже открыт — его окно само выйдет вперёд

@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import db  # noqa: E402
+import outlook  # noqa: E402
 import team  # noqa: E402
 import updater  # noqa: E402
 
@@ -198,6 +199,33 @@ class AppHelpersTests(TempDir):
         tasks, notes = self.T.prepare_import(conn, self.T.read_csv(path))
         self.assertEqual((tasks[0]["title"], tasks[0]["due_at"], tasks[0]["remind_before"]),
                          ("Позвонить", "2027-01-05 07:05", 60))
+
+
+class OutlookTests(TempDir):
+    """Разбор письма Outlook (без самого Outlook) и поиск задачи по письму."""
+
+    def test_subject_prefixes_removed(self):
+        self.assertEqual(outlook.clean_subject("RE: Fw: Отв: Пересл: Отчёт за май"), "Отчёт за май")
+        self.assertEqual(outlook.clean_subject("RE[2]: счёт"), "счёт")
+        self.assertEqual(outlook.clean_subject("Ремонт: смета"), "Ремонт: смета")
+
+    def test_quoted_history_cut(self):
+        body = ("Сделайте, пожалуйста, до пятницы.\r\n\r\n\r\n\r\nСпасибо\r\n\r\n"
+                "От: Иванов Иван\r\nОтправлено: 16 октября 2026 г. 10:00\r\nТема: отчёт\r\n\r\nстарое")
+        self.assertEqual(outlook.clean_body(body), "Сделайте, пожалуйста, до пятницы.\n\nСпасибо")
+        self.assertIn("старое", outlook.clean_body("От: Иванов\nОтправлено: вчера\n\nстарое"))
+
+    def test_link_addresses_removed(self):
+        self.assertEqual(outlook.clean_body("Смотрите сайт <https://example.com/?a=1> и [cid:image001.png@01]"),
+                         "Смотрите сайт и")
+
+    def test_find_task_by_mail(self):
+        conn = db.connect(self.dir / "a.db")
+        task_id = db.add_task(conn, "из письма")
+        db.set_mail_id(conn, task_id, "<abc@mail>")
+        self.assertEqual(db.find_by_mail(conn, "<abc@mail>"), task_id)
+        self.assertIsNone(db.find_by_mail(conn, "<other@mail>"))
+        self.assertIsNone(db.find_by_mail(conn, ""))
 
 
 if __name__ == "__main__":
