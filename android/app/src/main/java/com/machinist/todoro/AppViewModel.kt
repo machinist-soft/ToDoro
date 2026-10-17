@@ -46,7 +46,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var draft by mutableStateOf<Draft?>(null)
     /** Открытая карточка задачи (номер задачи в открытом списке). */
     var cardId by mutableStateOf<Long?>(null)
-    var buddyOn by mutableStateOf(prefs.getBoolean("buddy", true))
+    var buddyOn by mutableStateOf(prefs.getBoolean("buddy", false))
         private set
     var remindersOn by mutableStateOf(Reminders.enabled(app))
         private set

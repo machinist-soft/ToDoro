@@ -199,7 +199,7 @@ fun Logo() {
     }
 }
 
-/** «Личный ▾» и счётчики «Активных / Выполнено / Сделано сегодня». */
+/** «Личный ▾» — выбор списка. */
 @Composable
 fun ListRow(vm: AppViewModel, view: ListView?) {
     val p = P
@@ -228,30 +228,23 @@ fun ListRow(vm: AppViewModel, view: ListView?) {
                 }
             }
         }
-        if (view != null) {
-            val active = view.tasks.count { !it.done }
-            Chip("Активных  $active")
-            Chip("Выполнено  ${view.tasks.size - active}")
-            Chip("✔ Сделано сегодня  ${view.tasks.count { it.doneToday }}", good = true)
-        }
     }
     Spacer(Modifier.height(8.dp))
 }
 
-/** «Заголовок новой задачи…» + «＋ Добавить» — как строка вверху окна. */
+/** «Заголовок новой задачи…» + «＋ Добавить» — как строка вверху окна.
+ *  С пустой строкой «Добавить» открывает полную форму: срок, описание, приоритет. */
 @Composable
 fun QuickAdd(vm: AppViewModel) {
     var text by rememberSaveable { mutableStateOf("") }
     fun add() {
-        if (vm.quickAdd(text)) text = ""
+        if (text.isBlank()) vm.openTask(null)
+        else if (vm.quickAdd(text)) text = ""
     }
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Field(text, { text = it }, Modifier.weight(1f), placeholder = "Заголовок новой задачи…", onDone = ::add)
         Spacer(Modifier.width(8.dp))
         FlatButton("＋ Добавить", ::add, look = Look.ACCENT)
-    }
-    Row(Modifier.padding(top = 2.dp, bottom = 6.dp)) {
-        LinkText("Подробнее: срок, описание, приоритет…") { vm.openTask(null) }
     }
 }
 

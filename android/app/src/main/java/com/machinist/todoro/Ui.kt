@@ -104,15 +104,6 @@ fun <T> Segmented(items: List<Pair<T, String>>, selected: T?, onSelect: (T) -> U
     }
 }
 
-/** Счётчик в шапке: «Активных 9», «✔ Сделано сегодня 0». */
-@Composable
-fun Chip(text: String, good: Boolean = false) {
-    val p = P
-    Text(text, Modifier.clip(Corner).background(if (good) p.chipGoodBg else p.chipBg)
-        .padding(horizontal = 10.dp, vertical = 5.dp),
-        color = if (good) p.goodText else p.muted, fontSize = 13.sp, maxLines = 1)
-}
-
 /** Точка приоритета слева у задачи; у обычной задачи — пустое место того же размера. */
 @Composable
 fun PriorityDot(level: Int, size: Dp = 9.dp) {
