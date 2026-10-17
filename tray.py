@@ -3,7 +3,7 @@
 Он не открывает окно ToDoro и почти не занимает памяти, но держит сочетания клавиш:
 Ctrl+Alt+T в Outlook — задача из выделенного письма, Ctrl+Alt+S — задача со снимка области
 экрана. Помощник запускает ToDoro (или будит уже открытый), и тот делает задачу.
-Щелчок по значку открывает ToDoro.
+Щелчок по значку открывает ToDoro. Ещё он отвечает телефону, если его подключили (phone.py).
 
 Запускается как «ToDoro.exe --tray» (из исходного кода: pythonw todoro.py --tray).
 Автозапуск — значение «ToDoro» в разделе реестра HKCU\\...\\Run (только для текущего пользователя).
@@ -107,10 +107,11 @@ def stop(wait_s=3.0):
 
 # --- сам помощник ---
 
-def run(icon_path, tip, open_app, actions):
+def run(icon_path, tip, open_app, actions, on_start=None):
     """Значок в трее и сочетания клавиш. Работает, пока не выберут «Закрыть значок» или не выйдут
     из Windows. open_app() — показать окно ToDoro; actions — [(сочетание, его название, пункт меню,
-    действие)]: задача из письма Outlook, задача со снимка экрана."""
+    действие)]: задача из письма Outlook, задача со снимка экрана; on_start() — вызывается, когда
+    стало ясно, что этот помощник единственный (запускает связь с телефоном)."""
     import win32api
     import win32con
     import win32gui
@@ -120,6 +121,8 @@ def run(icon_path, tip, open_app, actions):
     mutex = kernel32.CreateMutexW(None, False, MUTEX)
     if (mutex and ctypes.get_last_error() == 183) or is_running():  # ERROR_ALREADY_EXISTS
         return  # помощник уже работает
+    if on_start:
+        on_start()
     user32 = ctypes.windll.user32
     wm_tray = win32con.WM_USER + 20
     taskbar_created = win32gui.RegisterWindowMessage("TaskbarCreated")  # Проводник перезапустился

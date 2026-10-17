@@ -25,6 +25,7 @@ from tkinter import colorchooser, filedialog, font as tkfont, ttk
 
 import db
 import outlook
+import phone
 import snip
 import team
 import tray
@@ -3361,6 +3362,185 @@ def in_background(root, work, done):
     root.after(100, poll)
 
 
+class PhoneDialog(tk.Toplevel):
+    """«Подключить телефон»: QR-код с адресом компьютера и ключом для приложения на телефоне.
+    Сам отвечает телефону значок ToDoro в трее (phone.py) — окно только включает связь,
+    показывает код и проверяет, что значок отвечает."""
+    PING_EVERY_MS = 1500
+
+    def __init__(self, parent, prefs):
+        super().__init__(parent)
+        self.prefs = prefs
+        self.title("Подключить телефон")
+        self.configure(bg=SURFACE)
+        self.resizable(False, False)
+        self.transient(parent)
+        self.body = tk.Frame(self, bg=SURFACE, padx=28, pady=22)
+        self.body.pack(fill="both")
+        self.status = None
+        self.pinging = False
+        self.failed_pings = 0
+        self.build()
+        self.bind("<Escape>", lambda e: self.destroy())
+        center_on_screen(self)
+        self.focus_force()
+        self.after(200, self.check_server)
+
+    def build(self):
+        for child in self.body.winfo_children():
+            child.destroy()
+        self.status = None
+        token = phone.get_token(self.prefs)
+        tk.Label(self.body, text="Задачи на телефоне", bg=SURFACE, fg=TEXT,
+                 font=("Segoe UI Semibold", 14)).pack(anchor="w", pady=(0, 10))
+        if token:
+            self.build_on(token)
+        else:
+            self.build_off()
+
+    def text(self, parent, text, color=None, pady=(0, 8), width=440):
+        label = tk.Label(parent, text=text, bg=SURFACE, fg=color or TEXT, font=FONT_SMALL,
+                         justify="left", wraplength=width)
+        label.pack(anchor="w", pady=pady)
+        return label
+
+    def build_off(self):
+        self.text(self.body, "С телефона на Android можно смотреть и менять задачи — личные и "
+                  "общие. Телефон берёт их у этого компьютера, поэтому:")
+        self.text(self.body, "• компьютер должен быть включён, а в трее (возле часов) — значок ToDoro;\n"
+                  "• телефон должен быть в той же сети Wi-Fi или подключён к VPN.")
+        self.text(self.body, "Подключить телефон сможет только тот, кто увидит QR-код в этом окне: "
+                  "в нём секретный ключ.", MUTED)
+        buttons = tk.Frame(self.body, bg=SURFACE)
+        buttons.pack(fill="x", pady=(12, 0))
+        ttk.Button(buttons, text="Закрыть", style="Soft.TButton", command=self.destroy).pack(side="right")
+        ttk.Button(buttons, text="Включить связь с телефоном", style="Accent.TButton",
+                   command=self.enable).pack(side="right", padx=(0, 8))
+
+    def build_on(self, token):
+        hosts = phone.addresses()
+        row = tk.Frame(self.body, bg=SURFACE)
+        row.pack(fill="x")
+        self.draw_qr(row, phone.pairing_text(token, hosts)).pack(side="left", anchor="n", padx=(0, 20))
+        info = tk.Frame(row, bg=SURFACE)
+        info.pack(side="left", anchor="n", fill="y")
+        self.text(info, "1. Установите на телефон приложение ToDoro.", width=300)
+        self.text(info, "2. В приложении нажмите «Подключить» и наведите камеру на этот код.", width=300)
+        if hosts:
+            self.text(info, "Проверить, видит ли телефон компьютер: откройте в браузере телефона",
+                      MUTED, pady=(10, 2), width=300)
+            tk.Label(info, text=f"http://{hosts[0]}:{phone.PORT}", bg=SURFACE, fg=ACCENT,
+                     font=FONT_SMALL_BOLD).pack(anchor="w")
+            self.text(info, "— должно появиться «ToDoro работает». Через VPN — тоже.", MUTED,
+                      pady=(2, 8), width=300)
+        else:
+            self.text(info, "Компьютер сейчас не в сети — подключите его к Wi-Fi или кабелю.",
+                      DANGER, pady=(10, 8), width=300)
+        line = tk.Frame(self.body, bg=SURFACE)
+        line.pack(fill="x", pady=(14, 0))
+        self.dot = tk.Label(line, text="●", bg=SURFACE, fg=MUTED, font=FONT_SMALL)
+        self.dot.pack(side="left")
+        self.status = tk.Label(line, text="Проверяю, отвечает ли значок ToDoro в трее…", bg=SURFACE,
+                               fg=TEXT, font=FONT_SMALL, justify="left", wraplength=360)
+        self.status.pack(side="left", padx=(6, 0))
+        self.fix_button = ttk.Button(line, text="Запустить значок", style="Soft.TButton",
+                                     command=self.restart_tray)
+        self.text(self.body, "Если Windows спросит, разрешить ли ToDoro доступ к сети, — нажмите "
+                  "«Разрешить» (частные сети).", MUTED, pady=(10, 0))
+        buttons = tk.Frame(self.body, bg=SURFACE)
+        buttons.pack(fill="x", pady=(16, 0))
+        ttk.Button(buttons, text="Закрыть", style="Accent.TButton", command=self.destroy).pack(side="right")
+        ttk.Button(buttons, text="Отключить телефон", style="Soft.TButton",
+                   command=self.disable).pack(side="right", padx=(0, 8))
+        ttk.Button(buttons, text="Новый ключ", style="Soft.TButton",
+                   command=self.renew).pack(side="right", padx=(0, 8))
+
+    def draw_qr(self, parent, text):
+        """QR-код на холсте: всегда чёрный на белом (и в тёмной теме) — так его читают камеры."""
+        try:
+            import segno
+        except ImportError:
+            return tk.Label(parent, text=text, bg=SURFACE, fg=TEXT, font=FONT_SMALL, wraplength=240)
+        rows = list(segno.make(text, error="m").matrix_iter(scale=1, border=4))
+        cell = max(3, 260 // len(rows))
+        size = cell * len(rows)
+        canvas = tk.Canvas(parent, width=size, height=size, bg="#ffffff", highlightthickness=0)
+        for y, modules in enumerate(rows):
+            for x, dark in enumerate(modules):
+                if dark:
+                    canvas.create_rectangle(x * cell, y * cell, (x + 1) * cell, (y + 1) * cell,
+                                            fill="#000000", width=0)
+        return canvas
+
+    # --- действия ---
+
+    def enable(self):
+        phone.new_token(self.prefs)
+        tray.start()  # телефону отвечает значок в трее
+        self.failed_pings = 0
+        self.build()
+        center_on_screen(self)
+
+    def renew(self):
+        if ui.askyesno("Новый ключ", "Телефоны, подключённые раньше, перестанут видеть задачи — "
+                       "их нужно будет подключить заново по новому QR-коду.\n\nСделать новый ключ?",
+                       parent=self):
+            phone.new_token(self.prefs)
+            self.build()
+
+    def disable(self):
+        if ui.askyesno("Отключить телефон", "Телефон перестанет видеть задачи, а компьютер — "
+                       "отвечать по сети.\n\nОтключить?", parent=self):
+            phone.disable(self.prefs)
+            self.build()
+            center_on_screen(self)
+
+    def restart_tray(self):
+        self.fix_button.state(["disabled"])
+        self.failed_pings = 0
+
+        def work():
+            tray.stop()
+            tray.start()
+        in_background(self, work, lambda result, error: None)
+
+    # --- отвечает ли значок в трее ---
+
+    def check_server(self):
+        if not self.winfo_exists():
+            return
+        if self.status is not None and not self.pinging:
+            self.pinging = True
+            in_background(self, phone.ping, self.show_server)
+        self.after(self.PING_EVERY_MS, self.check_server)
+
+    def show_server(self, ok, error):
+        self.pinging = False
+        if self.status is None or not self.status.winfo_exists():
+            return
+        if ok:
+            self.failed_pings = 0
+            self.dot.configure(fg=OK_DOT)
+            self.status.configure(text="Компьютер готов отвечать телефону.")
+            self.fix_button.pack_forget()
+            return
+        self.failed_pings += 1
+        if self.failed_pings < 4:  # значок мог только что запуститься: связь включается за пару секунд
+            return
+        self.dot.configure(fg=DANGER)
+        if tray.is_running():
+            self.status.configure(text="Значок ToDoro в трее не отвечает — возможно, он запущен "
+                                       "из прошлой версии.")
+            self.fix_button.configure(text="Перезапустить значок")
+        else:
+            self.status.configure(text="Значок ToDoro в трее не запущен — без него телефон не "
+                                       "увидит задачи.")
+            self.fix_button.configure(text="Запустить значок")
+        self.fix_button.state(["!disabled"])
+        if not self.fix_button.winfo_ismapped():
+            self.fix_button.pack(side="right")
+
+
 class UpdateDialog(tk.Toplevel):
     """«Вышла новая версия»: что нового и кнопка «Обновить» (скачать и установить)."""
 
@@ -4327,6 +4507,8 @@ class TodoApp:
         # что видела фоновая проверка (team.Probe) в прошлый раз — чтобы заметить чужие изменения
         self.seen_seq, self.team_counter, self.list_counter = None, None, None
         self.own_credit, self.credit_until = 0, 0  # свои записи, ещё не замеченные проверкой
+        # список на этом компьютере мог изменить телефон (через значок в трее) — см. check_local_changes
+        self.local_version, self.local_check_at = None, 0
         self.reminders_due = False  # пора проверить напоминания в общих списках
         self.connect_team(wait=True)
         self.load_lists()
@@ -4861,6 +5043,7 @@ class TodoApp:
                 .command("Задача из письма Outlook", self.from_outlook, accel=OUTLOOK_HOTKEY_NAME)
                 .command("Задача со снимка экрана", self.from_screen, accel=SNIP_HOTKEY_NAME)
                 .command("Добавить колонку на доску…", self.add_lane)
+                .command("Подключить телефон…", self.show_phone)
                 .command("Развернуть правую панель" if self.side_collapsed else "Свернуть правую панель",
                          self.toggle_side_panel, accel="Ctrl+B", enabled=self.side_room)
                 .submenu("Экспорт и импорт", data)
@@ -5475,6 +5658,9 @@ class TodoApp:
             self.help_window.focus_force()
             return
         self.help_window = HelpWindow(self.root)
+
+    def show_phone(self):
+        PhoneDialog(self.root, self.prefs)
 
     def show_about(self):
         AboutWindow(self.root, on_license=self.show_license)
@@ -6729,7 +6915,26 @@ class TodoApp:
                 pass  # связь пропала — проверка это заметит
         if self.team and probe:
             probe.watch = self.team.path(self.current_list()) if self.current_list()["shared"] else None
+        self.check_local_changes()
         self.root.after(WATCH_EVERY_MS, self.watch_changes)
+
+    def check_local_changes(self):
+        """Раз в секунду: не изменил ли открытый список на этом компьютере кто-то другой —
+        телефон (через значок в трее). PRAGMA data_version меняется, только когда файл
+        записало другое соединение, — свои правки окна не в счёт."""
+        now = time_module.monotonic()
+        if now < self.local_check_at or self.list_id is None or self.current_list()["shared"]:
+            return
+        self.local_check_at = now + 1
+        if self.dragging():
+            return  # перерисуем после перетаскивания
+        try:
+            version = (self.list_id, self.conn.execute("PRAGMA data_version").fetchone()[0])
+        except sqlite3.Error:
+            return
+        seen, self.local_version = self.local_version, version
+        if seen and seen[0] == version[0] and seen[1] != version[1]:
+            self.refresh(select_id=self.current_id())
 
     def on_fresh_probe(self, probe):
         """Фоновая проверка только что дочиталась до папки: смотрим, не поменял ли кто-то
@@ -7132,7 +7337,8 @@ def run_tray():
                  (OUTLOOK_HOTKEY, OUTLOOK_HOTKEY_NAME, "Задача из письма Outlook",
                   lambda: wake_app(OUTLOOK_FLAG_FILE)),
                  (SNIP_HOTKEY, SNIP_HOTKEY_NAME, "Задача со снимка экрана",
-                  lambda: wake_app(SNIP_FLAG_FILE))])
+                  lambda: wake_app(SNIP_FLAG_FILE))],
+             on_start=lambda: phone.start_in_background(APP_VERSION))  # связь с телефоном
 
 
 def single_instance(wait_ms=0):

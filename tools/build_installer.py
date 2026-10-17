@@ -5,7 +5,7 @@
 2. Inno Setup (ISCC.exe) упаковывает эту папку в один установщик.
 
 Запуск из папки проекта:  python tools/build_installer.py
-Нужны: pip install pyinstaller pywin32  и  Inno Setup 6 (https://jrsoftware.org/isdl.php).
+Нужны: pip install pyinstaller pywin32 segno  и  Inno Setup 6 (https://jrsoftware.org/isdl.php).
 """
 import os
 import re

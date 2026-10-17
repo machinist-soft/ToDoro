@@ -209,9 +209,11 @@ python todoro.py
 ## Как устроена программа / Architecture
 
 Сервера нет: задачи лежат в файлах SQLite на вашем компьютере, общие списки — в сетевой папке.
-В интернет программа обращается только к GitHub — узнать, есть ли новая версия.
+В интернет программа обращается только к GitHub — узнать, есть ли новая версия. Если подключить
+телефон (☰ Меню → Подключить телефон), значок в трее отвечает ему по домашней сети или VPN.
 *No server: tasks live in SQLite files on your PC, shared lists in a network folder. The only
-internet request is the update check on GitHub.*
+internet request is the update check on GitHub. When a phone is connected, the tray icon answers
+it over the local network or VPN.*
 
 ```mermaid
 flowchart TB
@@ -222,6 +224,11 @@ flowchart TB
 
     shortcut --> app
     trayicon --> app
+    phonepy["phone.py<br/>связь с телефоном"]
+    mobile[/"Телефон<br/>Wi-Fi / VPN"/]
+    mobile --> phonepy
+    trayicon --> phonepy
+    phonepy --> dbpy & teampy
 
     dbpy["db.py<br/>задачи, статусы"]
     teampy["team.py<br/>общие списки"]
@@ -254,6 +261,7 @@ flowchart TB
 | `outlook.py` | задача из письма Outlook / task from an Outlook e-mail |
 | `snip.py` | снимок области экрана / screen-area snapshot |
 | `tray.py` | значок в трее и горячие клавиши / tray icon and hotkeys |
+| `phone.py` | связь с телефоном: сервер в значке в трее / phone link: a server in the tray icon |
 | `updater.py` | проверка и установка обновлений / update check and install |
 
 ## Лицензия / License
