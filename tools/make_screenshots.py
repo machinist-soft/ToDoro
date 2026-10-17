@@ -24,6 +24,7 @@ import db  # noqa: E402
 
 DARK = "dark" in sys.argv[1:]  # python tools/make_screenshots.py dark — только снимок тёмной темы
 MATRIX = "matrix" in sys.argv[1:]  # python tools/make_screenshots.py matrix — только снимок матрицы
+WHATSNEW = "whatsnew" in sys.argv[1:]  # python tools/make_screenshots.py whatsnew — только «Что нового»
 work = Path(tempfile.mkdtemp(prefix="todoro-shots-"))
 out = ROOT / "docs" / "screenshots"
 out.mkdir(parents=True, exist_ok=True)
@@ -165,6 +166,22 @@ def run_dark():
     root.destroy()
 
 
+def shoot_whatsnew():
+    """Окно «Что нового» (☰ Меню → О программе → Что нового)."""
+    dialog = T.WhatsNewWindow(root)
+    dialog.attributes("-topmost", True)
+    grab("whatsnew.png", window=dialog)
+    dialog.destroy()
+
+
+def run_whatsnew():
+    for _ in range(4):
+        root.update()
+        time.sleep(0.2)
+    shoot_whatsnew()
+    root.destroy()
+
+
 def run_matrix():
     """Только матрица Эйзенхауэра."""
     for _ in range(6):
@@ -289,6 +306,7 @@ def run():
     dialog.attributes("-topmost", True)
     grab("about.png", window=dialog)
     dialog.destroy()
+    shoot_whatsnew()
     # 7. Окно обновления: последний выпущенный раздел RELEASE_NOTES.md («Не выпущено» пропускаем),
     # «текущая» версия — предыдущий выпуск (подменяется только для снимка)
     notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
@@ -335,5 +353,5 @@ def make_gif(frames):
     print("saved catbus.gif", len(gif), "frames", (out / "catbus.gif").stat().st_size // 1024, "KB")
 
 
-root.after(1200, run_dark if DARK else run_matrix if MATRIX else run)
+root.after(1200, run_dark if DARK else run_matrix if MATRIX else run_whatsnew if WHATSNEW else run)
 root.mainloop()

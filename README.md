@@ -52,7 +52,7 @@
 - **Тёмная тема**, правая панель сворачивается в полоску (Ctrl+B), экспорт и импорт
   **CSV (Excel)**, письмо по задаче, подробная справка (F1).
 - **Обновления в один клик**: программа сама сообщает о новой версии и ставит её — задачи
-  сохраняются.
+  сохраняются; «Что нового» во всех версиях — прямо в программе.
 
 *Tasks with due dates, reminders and urgent / important priority · file attachments, pasted
 screenshots and comments in every task · list, kanban board with
@@ -64,7 +64,7 @@ tour on first launch · create a task from an Outlook e-mail (Ctrl+Alt+T): subje
 attachments and the message itself, replies go to the sender; a tray icon started with Windows
 keeps Ctrl+Alt+T working even when ToDoro is closed · create a task from a screen area
 snapshot (Ctrl+Alt+S) · dark theme, collapsible side panel (Ctrl+B),
-CSV export / import, e-mail a task, built-in help · one-click updates.*
+CSV export / import, e-mail a task, built-in help · one-click updates and an in-app “What’s new”.*
 
 ### Котобус увозит выполненную задачу / The Catbus carries away a finished task
 
@@ -132,6 +132,13 @@ Need more room? Collapse the panel to a thin strip with the » button or Ctrl+B.
 ![Файлы в задаче / Task files](docs/screenshots/files.png)
 
 ![Комментарии к задаче / Task comments](docs/screenshots/comments.png)
+
+### Что нового / What’s new
+
+**☰ Меню → О программе → Что нового…** — изменения всех версий прямо в программе, без интернета.
+*See the changes of every version right in the app, no internet needed.*
+
+![Окно «Что нового» / What’s new window](docs/screenshots/whatsnew.png)
 
 ## Совместная работа / Teamwork
 
