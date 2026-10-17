@@ -232,9 +232,12 @@ python todoro.py
 Сервера нет: задачи лежат в файлах SQLite на вашем компьютере, общие списки — в сетевой папке.
 В интернет программа обращается только к GitHub — узнать, есть ли новая версия. Если подключить
 телефон (☰ Меню → Подключить телефон), значок в трее отвечает ему по домашней сети или VPN.
+Телефон хранит копию задач у себя: без связи их можно смотреть и менять, а правки уйдут на
+компьютер, когда он снова будет доступен. Файлы задач на телефон не передаются — только их число.
 *No server: tasks live in SQLite files on your PC, shared lists in a network folder. The only
 internet request is the update check on GitHub. When a phone is connected, the tray icon answers
-it over the local network or VPN.*
+it over the local network or VPN. The phone keeps its own copy of the tasks, so it works offline
+and sends the changes once the PC is reachable again. Task files are never sent to the phone.*
 
 ```mermaid
 flowchart TB
@@ -245,13 +248,23 @@ flowchart TB
 
     shortcut --> app
     trayicon --> app
-    phonepy["phone.py<br/>связь с телефоном"]
-    mobile[/"Телефон<br/>Wi-Fi / VPN"/]
-    mobile --> phonepy
+
+    subgraph android["Телефон — android/ (Kotlin, Compose)"]
+        ui["Экраны<br/>список, карточка, комментарии"]
+        repo["Repo — копия задач<br/>и очередь правок"]
+        sync["SyncWorker<br/>обмен в фоне"]
+        remind["Reminders<br/>уведомления"]
+        ui --> repo
+        sync --> repo
+        repo --> remind
+    end
+
+    phonepy["phone.py<br/>HTTP + JSON, ключ из QR-кода"]
+    repo -- "Wi-Fi / VPN" --> phonepy
     trayicon --> phonepy
     phonepy --> dbpy & teampy
 
-    dbpy["db.py<br/>задачи, статусы"]
+    dbpy["db.py<br/>задачи, статусы, комментарии"]
     teampy["team.py<br/>общие списки"]
     snippy["snip.py<br/>скриншот"]
     outlookpy["outlook.py<br/>из письма"]
@@ -274,17 +287,40 @@ flowchart TB
     updaterpy --> github
 ```
 
+**Программа на компьютере / Desktop app**
+
 | Файл / File | Что делает / What it does |
 |---|---|
 | `todoro.py` | окно и всё, что в нём видно / the window and everything in it |
-| `db.py` | чтение и запись задач в SQLite / reading and writing tasks in SQLite |
+| `db.py` | чтение и запись задач, комментариев и файлов в SQLite / tasks, comments and files in SQLite |
 | `team.py` | общие списки, участники, резервные копии / shared lists, members, backups |
 | `outlook.py` | задача из письма Outlook / task from an Outlook e-mail |
 | `snip.py` | снимок области экрана / screen-area snapshot |
 | `tray.py` | значок в трее и горячие клавиши / tray icon and hotkeys |
 | `phone.py` | связь с телефоном: сервер в значке в трее / phone link: a server in the tray icon |
-| `android/` | приложение для Android (Kotlin, Jetpack Compose) / the Android app |
 | `updater.py` | проверка и установка обновлений / update check and install |
+| `help_text.py` | текст справки / the help text |
+| `examples.py` | примеры задач (☰ Меню → Примеры задач) / sample tasks |
+
+**Приложение для Android / Android app** — `android/app/src/main/java/com/machinist/todoro/`
+
+| Файл / File | Что делает / What it does |
+|---|---|
+| `Api.kt` | запросы к компьютеру, данные из QR-кода / requests to the PC, QR-code data |
+| `Repo.kt` | копия задач на телефоне, очередь правок без связи, конфликты / offline copy, change queue, conflicts |
+| `SyncWorker.kt` | обмен с компьютером в фоне / background sync with the PC |
+| `Reminders.kt` | напоминания-уведомления, в том числе после перезагрузки / reminder notifications, also after reboot |
+| `AppViewModel.kt` | состояние экранов и Тоторо-помощник / screen state and the Totoro buddy |
+| `MainScreen.kt`, `TaskCard.kt`, `TaskForm.kt`, `Comments.kt` | экраны: список, карточка, форма, комментарии / screens |
+| `Theme.kt`, `Ui.kt` | цвета и оформление как на компьютере / colours and styling matching the desktop |
+
+**Сборка и проверка / Build and tests**
+
+| Папка / Folder | Что внутри / What is inside |
+|---|---|
+| `tests/` | автотесты: `test_core.py` — задачи и списки, `test_phone.py` — связь с телефоном / tests |
+| `tools/` | сборка установщика и APK, рисование картинок и значков, скриншоты для README / build and asset scripts |
+| `installer/` | сценарий установщика Inno Setup / Inno Setup installer script |
 
 ## Лицензия / License
 
