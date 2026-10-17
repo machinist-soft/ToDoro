@@ -3783,7 +3783,7 @@ class TodoApp:
                             cursor="hand2").pack(side="left")
         filters = ttk.Frame(toolbar, style="Segments.TFrame", padding=3)
         filters.pack(side="left", padx=(12, 0))
-        self.filter = tk.StringVar(value="Все")
+        self.filter = tk.StringVar(value="Активные" if self.view.get() == "matrix" else "Все")
         for name in FILTERS:
             button = ttk.Radiobutton(filters, text=name, value=name, variable=self.filter,
                                      style="Segment.TRadiobutton", command=self.refresh,
@@ -4208,6 +4208,8 @@ class TodoApp:
 
     def switch_view(self):
         db.set_setting(self.prefs, "view", self.view.get())
+        if self.view.get() == "matrix":
+            self.filter.set("Активные")  # выполненным в матрице делать нечего
         task_id = self.current_id()
         self.show_main_widget()
         self.refresh(select_id=task_id)
