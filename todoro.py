@@ -3341,10 +3341,10 @@ class EisenhowerMatrix(KanbanBoard):
         self.drag = None
         self.lanes = []   # [(уровень приоритета, рамка четверти, цвет фона)]
         self.cards = {}
-        self.card_width = LANE_WIDTH
         self.show_priority = False  # приоритет и так виден по четверти
+        self.card_width = LANE_WIDTH  # переносы текста на карточке — как на доске
         self.shown = None           # что нарисовано — чтобы перерисовать при смене ширины
-        self.drawn_width = None
+        self.drawn_columns = None
         self.redraw_job = None
 
         self.columnconfigure(1, weight=1, uniform="q")
@@ -3371,17 +3371,23 @@ class EisenhowerMatrix(KanbanBoard):
         self.bind("<Button-1>", lambda e: self.app.clear_selection())
         self.bind("<Configure>", self.resized)
 
+    CARD = LANE_WIDTH - 20  # ширина карточки — как на доске
+    GAP = 8                 # промежуток между карточками
+
     def resized(self, event):
-        # текст карточек переносится по ширине четверти — при заметной смене ширины рисуем
-        # заново (не сразу: пока тянут край окна, событий много)
-        if self.shown and abs(self.quadrant_width() - self.drawn_width) > 20:
+        # карточки стоят сеткой: если в четверть теперь помещается другое число колонок,
+        # рисуем заново (не сразу: пока тянут край окна, событий много)
+        if self.shown and self.columns() != self.drawn_columns:
             if self.redraw_job:
                 self.after_cancel(self.redraw_job)
             self.redraw_job = self.after(150, lambda: self.render(*self.shown))
 
-    def quadrant_width(self):
+    def columns(self):
+        """Сколько карточек помещается в ряд в одной четверти."""
         width = self.winfo_width()
-        return (width - 36) // 2 if width > 100 else 420
+        quadrant = (width - 36) // 2 if width > 100 else 500
+        inside = quadrant - 22  # рамка, отступы и место под прокрутку
+        return max(1, (inside + self.GAP) // (self.CARD + self.GAP))
 
     def level(self, task_id, urgent, important):
         """Четверть задачи: просроченная считается срочной."""
@@ -3391,8 +3397,7 @@ class EisenhowerMatrix(KanbanBoard):
     def render(self, statuses, rows, overdue_ids):
         self.redraw_job = None
         self.shown = (statuses, rows, overdue_ids)
-        self.drawn_width = self.quadrant_width()
-        self.card_width = max(self.drawn_width - 26, 200)
+        self.drawn_columns = self.columns()
         colors = {sid: color for sid, _, color, _ in statuses}
         by_level = {}
         for row in rows:
@@ -3420,18 +3425,24 @@ class EisenhowerMatrix(KanbanBoard):
             side="left", padx=(8, 0))
         tk.Label(head, text=hint, bg=bg, fg=MUTED, font=FONT_SMALL).pack(side="right")
 
-        # карточки — в прокручиваемой области; цветная полоска карточки — цвет её статуса
+        # карточки — сеткой в прокручиваемой области; цветная полоска карточки — цвет её статуса
         area = tk.Canvas(box, bg=bg, highlightthickness=0)
         area.pack(fill="both", expand=True, padx=(10, 6), pady=(0, 10))
         cards = tk.Frame(area, bg=bg)
-        window = area.create_window(0, 0, window=cards, anchor="nw", width=self.card_width)
+        area.create_window(0, 0, window=cards, anchor="nw")
         cards.bind("<Configure>", lambda e: area.configure(scrollregion=area.bbox("all")))
-        area.bind("<Configure>", lambda e: area.itemconfigure(window, width=max(e.width - 4, 100)))
-        for row in rows:
-            self.make_card(cards, row, colors.get(row[9], color), row[0] in overdue_ids)
+        columns = self.drawn_columns
+        for column in range(columns):
+            cards.columnconfigure(column, minsize=self.CARD, uniform="card")
+        for index, row in enumerate(rows):
+            cell = tk.Frame(cards, bg=bg)
+            cell.grid(row=index // columns, column=index % columns, sticky="nsew",
+                      padx=(0, self.GAP if index % columns < columns - 1 else 0))
+            cell.bind("<Button-1>", lambda e: self.app.clear_selection())
+            self.make_card(cell, row, colors.get(row[9], color), row[0] in overdue_ids)
         if not rows:
             tk.Label(cards, text="Перетащите сюда задачу", bg=bg, fg=DONE,
-                     font=FONT_SMALL).pack(pady=24)
+                     font=FONT_SMALL).grid(row=0, column=0, columnspan=columns, pady=24)
         for widget in (box, head, area, cards):
             widget.bind("<Button-1>", lambda e: self.app.clear_selection())
         bind_tree(box, "<MouseWheel>",
