@@ -1613,7 +1613,6 @@ class SidePanel(tk.Frame):
         tk.Frame(footer, bg=BORDER, height=1).pack(fill="x")
         buttons = tk.Frame(footer, bg=SURFACE)
         buttons.pack(fill="x", padx=18, pady=10)
-        tk.Label(buttons, text="Ctrl+Enter", bg=SURFACE, fg=DONE, font=("Segoe UI", 9)).pack(side="left")
         area = ScrollArea(self.editor, SURFACE)
         area.pack(fill="both", expand=True)
         head = tk.Frame(area.inner, bg=SURFACE)
