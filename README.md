@@ -168,9 +168,11 @@ Menu → Reminders and overdue tasks.*
 3. Меню списков → **Новый список** → **Общий — видят и меняют все участники**.
 
 Изменения других участников появляются сами через несколько секунд. Каждый день программа
-сохраняет резервные копии общих списков (за 14 дней).
+сохраняет резервные копии общих списков (за 14 дней). Если сеть или VPN пропали, программа не
+зависает: откроет личный список, а когда связь вернётся — подключится сама.
 *Set the same network folder and your name in Settings → Teamwork, then create a shared list.
-Others’ changes show up within seconds; shared lists are backed up daily.*
+Others’ changes show up within seconds; shared lists are backed up daily. If the network or VPN
+drops, the app keeps working and reconnects by itself.*
 
 ![Настройки — совместная работа / Settings — teamwork](docs/screenshots/settings.png)
 
