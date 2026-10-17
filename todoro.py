@@ -418,6 +418,13 @@ def place_window(window, x, y, width=None, height=None, show=False):
         window.deiconify()
 
 
+def bring_to_front(window):
+    window.lift()
+    window.attributes("-topmost", True)  # иначе Windows может только мигнуть кнопкой на панели задач
+    window.after(200, lambda: window.winfo_exists() and window.attributes("-topmost", False))
+    window.focus_force()
+
+
 def center_on_screen(window, width=None, height=None):
     """Ставит окно по центру экрана."""
     hidden = hide_new_window(window)
@@ -710,6 +717,7 @@ class AlertDialog(tk.Toplevel):
         self.title(title)
         self.configure(bg=SURFACE)
         self.resizable(False, False)
+        self.standalone = parent is None  # отдельное окно, а не поверх окна ToDoro
         if parent is not None:
             self.transient(parent)
         body = tk.Frame(self, bg=SURFACE, padx=24, pady=20)
@@ -746,7 +754,7 @@ class AlertDialog(tk.Toplevel):
         self.destroy()
 
     def show(self):
-        parent = self.master if isinstance(self.master, (tk.Tk, tk.Toplevel)) else None
+        parent = None if self.standalone else self.master
         hidden = hide_new_window(self)
         self.update_idletasks()
         w, h = self.winfo_reqwidth(), self.winfo_reqheight()
@@ -757,6 +765,8 @@ class AlertDialog(tk.Toplevel):
             x = (self.winfo_screenwidth() - w) // 2
             y = (self.winfo_screenheight() - h) // 2
         place_window(self, x, y, show=hidden)
+        if self.standalone:  # отдельное сообщение (например, из значка в трее) — поверх других программ
+            bring_to_front(self)
         previous = self.grab_current()  # окно-диалог, из которого спросили, снова станет модальным
         self.grab_set()
         self.lift()
@@ -1109,13 +1119,17 @@ class TaskForm(ttk.Frame):
 class TaskDialog(tk.Toplevel):
     """Запасное окно с формой задачи — когда правая панель скрыта (узкое окно)."""
 
-    def __init__(self, parent, task, statuses, members=None, title="Задача", note=""):
+    def __init__(self, parent, task, statuses, members=None, title="Задача", note="",
+                 standalone=False):
+        """standalone — отдельное окно (своя кнопка на панели задач): главное окно ToDoro скрыто
+        или позади, а форма должна появиться поверх Outlook."""
         super().__init__(parent)
         self.result = None
         self.title(title)
         self.configure(bg=BG)
         self.resizable(False, False)
-        self.transient(parent)
+        if not standalone:
+            self.transient(parent)
         self.form = TaskForm(self, task, statuses, on_save=self.saved, on_cancel=self.destroy,
                              members=members)
         self.form.configure(padding=(20, 18, 20, 18))
@@ -1125,6 +1139,8 @@ class TaskDialog(tk.Toplevel):
             self.form.configure(padding=(20, 10, 20, 18))
         self.form.pack(fill="both")
         center_on_screen(self)
+        if standalone:
+            bring_to_front(self)
         self.form.focus_title()
         self.grab_set()
 
@@ -3978,8 +3994,10 @@ class EisenhowerMatrix(KanbanBoard):
 
 
 class TodoApp:
-    def __init__(self, root):
+    def __init__(self, root, hidden=False):
+        """hidden — не показывать главное окно: запустили только ради задачи из письма."""
         self.root = root
+        self.hidden = hidden
         # Окно прячем, пока всё не построено: иначе на секунду мелькает пустое чёрное окно
         root.withdraw()
         # self.prefs — основной файл: настройки и личный список; self.conn — текущий список задач
@@ -4227,6 +4245,18 @@ class TodoApp:
         self.show_main_widget()
         self.show_list_name()
         self.refresh()
+        self.tour = None
+        if not hidden:
+            self.show_window()
+        root.after(1000, self.check_reminders)
+        start_hotkey(root, lambda: self.from_outlook(quiet=True))  # Ctrl+Alt+T — из любой программы
+        self.start_tray()
+        root.after(WATCH_EVERY_MS, self.watch_changes)  # изменения других участников в общих списках
+
+    def show_window(self):
+        """Показывает главное окно — при запуске или позже, если программу запустили скрытой."""
+        root = self.root
+        self.hidden = False
         # Всё построено — показываем окно сразу готовым
         root.update_idletasks()
         dark_titlebar(root)  # тёмный заголовок — ещё до показа окна, иначе он остаётся белым
@@ -4238,12 +4268,7 @@ class TodoApp:
         root.after(600, self.reset_cursor)  # и обычный курсор — на случай, если ⟷ «залип» при запуске
         self.show_placeholder()
         self.entry.focus()
-        root.after(1000, self.check_reminders)
-        start_hotkey(root, self.from_outlook)  # Ctrl+Alt+T — из любой программы
-        self.start_tray()
-        root.after(WATCH_EVERY_MS, self.watch_changes)  # изменения других участников в общих списках
         root.after(4000, self.auto_check_update)  # раз в день — нет ли новой версии
-        self.tour = None
         if db.get_setting(self.prefs, "tour_show", "1") == "1":
             root.after(700, self.start_tour)  # первый запуск (или тур не отключили) — тур
 
@@ -6102,27 +6127,33 @@ class TodoApp:
                     status_id=db.list_statuses(self.conn)[0][0],
                     assignee=self.user_name() if members is not None else None, version=None)
 
-    def from_outlook(self):
-        """Ctrl+Alt+T в Outlook или кнопка «Из письма»: задача из выделенного письма."""
-        self.bring_to_front()
-        if self.root.grab_current() is not None:
-            return  # открыто другое окно (настройки, форма) — сначала его нужно закрыть
+    def from_outlook(self, quiet=False):
+        """Задача из письма, выделенного в Outlook. Кнопка «Из письма» — форма поверх окна ToDoro;
+        quiet (Ctrl+Alt+T, значок в трее) — только форма поверх Outlook, главное окно не выходит вперёд."""
+        grab = self.root.grab_current()
+        if grab is not None:  # открыто другое окно (настройки, форма) — сначала его нужно закрыть
+            if grab is not self.root:
+                bring_to_front(grab)
+            return
+        if not quiet:
+            self.bring_to_front()
+        parent = None if quiet else self.root  # без окна-родителя форма — отдельное окно по центру экрана
         self.finish_editing()
         self.root.configure(cursor="watch")
         self.root.update_idletasks()
         try:
             mails = outlook.read_selected()
         except outlook.OutlookError as error:
-            ui.showinfo("Задача из письма", str(error), parent=self.root)
-            return
+            ui.showinfo("Задача из письма", str(error), parent=parent)
+            return self.mail_done()
         finally:
             self.root.configure(cursor="")
         list_name = self.current_list()["name"]
         if len(mails) > 1:
             if not ui.askyesno("Задачи из писем", f"В Outlook выделено писем: {len(mails)}.\n\n"
                                f"Создать по задаче из каждого в списке «{list_name}»?",
-                               parent=self.root):
-                return
+                               parent=parent):
+                return self.mail_done()
             created, skipped = [], 0
             for mail in mails:
                 if db.find_by_mail(self.conn, mail["mail_id"]):
@@ -6130,25 +6161,34 @@ class TodoApp:
                 else:
                     created.append(self.create_from_mail(mail, self.mail_task(mail)))
             self.show_new_tasks(created)
-            if skipped:
-                ui.showinfo("Задачи из писем", f"Создано задач: {len(created)}.\n"
-                            f"Пропущено писем: {skipped} — по ним задачи уже есть.", parent=self.root)
-            return
+            if skipped or quiet:
+                ui.showinfo("Задачи из писем", f"Создано задач: {len(created)} в списке «{list_name}»."
+                            + (f"\nПропущено писем: {skipped} — по ним задачи уже есть." if skipped else ""),
+                            parent=parent)
+            return self.mail_done()
         mail = mails[0]
         existing = db.find_by_mail(self.conn, mail["mail_id"])
         if existing and ui.askyesno("Задача из письма", "По этому письму уже есть задача "
                                     f"№{existing} в списке «{list_name}». Открыть её?\n\n"
-                                    "«Нет» — создать ещё одну.", parent=self.root):
+                                    "«Нет» — создать ещё одну.", parent=parent):
             self.show_new_tasks([existing])
+            self.bring_to_front()  # открыть задачу — значит показать окно ToDoro
             return
         note = f"Из письма Outlook, в список «{list_name}»."
         if mail["files"]:
             note += " Будут приложены: " + ", ".join(name for name, _ in mail["files"])
         dialog = TaskDialog(self.root, self.mail_task(mail), db.list_statuses(self.conn),
-                            members=self.members(), title="Новая задача из письма", note=note)
+                            members=self.members(), title="Новая задача из письма", note=note,
+                            standalone=quiet)
         self.root.wait_window(dialog)
         if dialog.result:
             self.show_new_tasks([self.create_from_mail(mail, dialog.result)])
+        self.mail_done()
+
+    def mail_done(self):
+        """ToDoro запустили только ради задачи из письма (окно так и не показали) — закрываемся."""
+        if self.hidden:
+            self.close()
 
     def create_from_mail(self, mail, result):
         task_id = db.add_task(self.conn, result["title"], status_id=result["status_id"],
@@ -6174,26 +6214,25 @@ class TodoApp:
     def watch_show_requests(self, event):
         """Кто-то запустил ToDoro ещё раз — показываем это окно (см. single_instance)."""
         try:
-            if ctypes.windll.kernel32.WaitForSingleObject(event, 0) == 0:
-                self.bring_to_front()
+            asked = ctypes.windll.kernel32.WaitForSingleObject(event, 0) == 0
         except (AttributeError, OSError):
             return
-        if OUTLOOK_FLAG_FILE.exists():  # запустили «ToDoro.exe --outlook» — задача из письма
+        if OUTLOOK_FLAG_FILE.exists():  # «ToDoro.exe --outlook» или значок в трее — задача из письма
             try:
                 OUTLOOK_FLAG_FILE.unlink()
             except OSError:
                 pass
-            self.root.after_idle(self.from_outlook)
+            self.root.after_idle(lambda: self.from_outlook(quiet=True))
+        elif asked:
+            self.bring_to_front()
         self.root.after(400, lambda: self.watch_show_requests(event))
 
     def bring_to_front(self):
-        root = self.root
-        if root.state() in ("withdrawn", "iconic"):
-            root.deiconify()
-        root.lift()
-        root.attributes("-topmost", True)  # иначе Windows может только мигнуть кнопкой на панели задач
-        root.after(200, lambda: root.attributes("-topmost", False))
-        root.focus_force()
+        if self.hidden:  # запустили скрытой ради задачи из письма, а теперь просят окно
+            self.show_window()
+        elif self.root.state() in ("withdrawn", "iconic"):
+            self.root.deiconify()
+        bring_to_front(self.root)
 
     def close(self):
         self.finish_editing()  # есть несохранённая правка задачи — спросим, сохранить ли её
@@ -6322,7 +6361,7 @@ if __name__ == "__main__":
     except (AttributeError, OSError):
         pass
     root = tk.Tk()
-    app = TodoApp(root)
+    app = TodoApp(root, hidden=OUTLOOK_FLAG in sys.argv)  # только задача из письма — без главного окна
     if show_event:
         app.watch_show_requests(show_event)
     root.mainloop()
