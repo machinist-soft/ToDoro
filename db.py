@@ -97,6 +97,30 @@ def connect(path=None, timeout=5):
     # Задачам без статуса (из старых версий) назначаем: выполненным — первую «выполненную»
     # колонку, остальным — первую невыполненную, кроме самой первой («Новая»), если она есть:
     # раньше такие задачи показывались как «В работе».
+    # Вложения (файлы и картинки) и комментарии к задачам. Файл хранится прямо в базе списка:
+    # так он виден всем участникам общего списка и переносится вместе с задачей.
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS attachments (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id  INTEGER NOT NULL,
+            name     TEXT    NOT NULL,
+            size     INTEGER NOT NULL,
+            data     BLOB    NOT NULL,
+            added_by TEXT,
+            added_at TEXT    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS attachments_task ON attachments (task_id);
+        CREATE TABLE IF NOT EXISTS comments (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id    INTEGER NOT NULL,
+            author     TEXT,
+            text       TEXT    NOT NULL,
+            created_at TEXT    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS comments_task ON comments (task_id);
+        """
+    )
     if conn.execute("SELECT EXISTS (SELECT 1 FROM tasks WHERE status_id IS NULL)").fetchone()[0]:
         open_ids = [r[0] for r in conn.execute("SELECT id FROM statuses WHERE is_done = 0 ORDER BY position")]
         done_ids = [r[0] for r in conn.execute("SELECT id FROM statuses WHERE is_done = 1 ORDER BY position")]
@@ -362,6 +386,13 @@ def set_json_setting(conn, key, value):
 def delete_task(conn, task_id):
     with conn:
         conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        drop_orphans(conn)
+
+
+def drop_orphans(conn):
+    """Убирает вложения и комментарии задач, которых больше нет."""
+    for table in ("attachments", "comments"):
+        conn.execute(f"DELETE FROM {table} WHERE task_id NOT IN (SELECT id FROM tasks)")
 
 
 def count_examples(conn):
@@ -469,8 +500,78 @@ def move_task_to(src, task_id, dst):
             (title, body, is_done, created, due_at, remind_before, reminded, urgent, important,
              done_at if is_done else None, status_id, created_by, assignee),
         ).lastrowid
+        # вложения и комментарии переезжают вместе с задачей
+        dst.executemany(
+            "INSERT INTO attachments (task_id, name, size, data, added_by, added_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [(new_id,) + tuple(r) for r in src.execute(
+                "SELECT name, size, data, added_by, added_at FROM attachments WHERE task_id = ? ORDER BY id",
+                (task_id,))])
+        dst.executemany(
+            "INSERT INTO comments (task_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+            [(new_id,) + tuple(r) for r in src.execute(
+                "SELECT author, text, created_at FROM comments WHERE task_id = ? ORDER BY id", (task_id,))])
     delete_task(src, task_id)
     return new_id
+
+
+# ---------- вложения и комментарии ----------
+
+MAX_ATTACHMENT = 25 * 1024 * 1024  # больше — не принимаем: файл списка (и общая папка) раздуется
+
+
+def now_text():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def add_attachment(conn, task_id, name, data, by=None):
+    with conn:
+        return conn.execute(
+            "INSERT INTO attachments (task_id, name, size, data, added_by, added_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (task_id, name, len(data), sqlite3.Binary(data), by, now_text()),
+        ).lastrowid
+
+
+def list_attachments(conn, task_id):
+    """[(id, имя, размер, кто добавил, когда), ...] — без содержимого файлов."""
+    return conn.execute("SELECT id, name, size, added_by, added_at FROM attachments "
+                        "WHERE task_id = ? ORDER BY id", (task_id,)).fetchall()
+
+
+def attachment_data(conn, attachment_id):
+    row = conn.execute("SELECT data FROM attachments WHERE id = ?", (attachment_id,)).fetchone()
+    return bytes(row[0]) if row else None
+
+
+def delete_attachment(conn, attachment_id):
+    with conn:
+        conn.execute("DELETE FROM attachments WHERE id = ?", (attachment_id,))
+
+
+def add_comment(conn, task_id, text, by=None):
+    with conn:
+        return conn.execute("INSERT INTO comments (task_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+                            (task_id, by, text, now_text())).lastrowid
+
+
+def list_comments(conn, task_id):
+    """[(id, автор, текст, когда), ...] — по порядку написания."""
+    return conn.execute("SELECT id, author, text, created_at FROM comments WHERE task_id = ? ORDER BY id",
+                        (task_id,)).fetchall()
+
+
+def delete_comment(conn, comment_id):
+    with conn:
+        conn.execute("DELETE FROM comments WHERE id = ?", (comment_id,))
+
+
+def extras_counts(conn):
+    """{id задачи: (сколько файлов, сколько комментариев)} — только у задач, где они есть."""
+    counts = {}
+    for table, index in (("attachments", 0), ("comments", 1)):
+        for task_id, n in conn.execute(f"SELECT task_id, COUNT(*) FROM {table} GROUP BY task_id"):
+            pair = counts.setdefault(task_id, [0, 0])
+            pair[index] = n
+    return {task_id: tuple(pair) for task_id, pair in counts.items()}
 
 
 def task_people(conn):
@@ -493,7 +594,9 @@ def count_tasks(conn):
 def delete_examples(conn):
     """Удаляет только примеры; задачи пользователя не трогает. Возвращает число удалённых."""
     with conn:
-        return conn.execute("DELETE FROM tasks WHERE is_example = 1").rowcount
+        count = conn.execute("DELETE FROM tasks WHERE is_example = 1").rowcount
+        drop_orphans(conn)
+    return count
 
 
 def due_reminders(conn, now=None):

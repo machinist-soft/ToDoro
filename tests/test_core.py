@@ -89,6 +89,31 @@ class DatabaseTests(TempDir):
         self.assertEqual(len(db.shared_reminders(conn, "Борис")), 1)
 
 
+    def test_attachments_and_comments(self):
+        conn = db.connect(self.dir / "a.db")
+        task = db.add_task(conn, "с файлами")
+        other = db.add_task(conn, "без файлов")
+        file_id = db.add_attachment(conn, task, "отчёт.pdf", b"%PDF-1.4 data", by="Аня")
+        db.add_comment(conn, task, "первый", by="Аня")
+        db.add_comment(conn, task, "второй", by="Борис")
+        self.assertEqual(db.attachment_data(conn, file_id), b"%PDF-1.4 data")
+        self.assertEqual([a[1:4] for a in db.list_attachments(conn, task)], [("отчёт.pdf", 13, "Аня")])
+        self.assertEqual([c[2] for c in db.list_comments(conn, task)], ["первый", "второй"])
+        self.assertEqual(db.extras_counts(conn), {task: (1, 2)})
+        # при переносе в другой список файлы и комментарии едут вместе с задачей
+        dst = db.connect(self.dir / "b.db")
+        new_id = db.move_task_to(conn, task, dst)
+        self.assertEqual(db.extras_counts(dst), {new_id: (1, 2)})
+        self.assertEqual(db.attachment_data(dst, db.list_attachments(dst, new_id)[0][0]), b"%PDF-1.4 data")
+        self.assertEqual(db.extras_counts(conn), {})  # в старом списке ничего не осталось
+        # удаление задачи убирает и её файлы с комментариями
+        db.add_comment(dst, new_id, "третий")
+        db.delete_task(dst, new_id)
+        self.assertEqual(dst.execute("SELECT COUNT(*) FROM attachments").fetchone()[0], 0)
+        self.assertEqual(dst.execute("SELECT COUNT(*) FROM comments").fetchone()[0], 0)
+        self.assertEqual(db.list_tasks(conn)[0][0], other)
+
+
 class TeamTests(TempDir):
     def test_shared_lists_members_and_backup(self):
         first = team.Team(self.dir)

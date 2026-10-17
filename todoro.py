@@ -321,6 +321,13 @@ def setup_style(root):
               background=[("selected", SURFACE), ("active", SEGMENT_HOVER)],
               foreground=[("selected", ACCENT), ("active", TEXT)])
     style.configure("Segments.TFrame", background=SEGMENT_BG)
+    # Вкладки карточки задачи — те же сегменты, только поуже
+    style.layout("Tab.TRadiobutton", style.layout("Segment.TRadiobutton"))
+    style.configure("Tab.TRadiobutton", background=SEGMENT_BG, foreground=MUTED,
+                    padding=(4, 3), font=FONT_SMALL, anchor="center")
+    style.map("Tab.TRadiobutton",
+              background=[("selected", SURFACE), ("active", SEGMENT_HOVER)],
+              foreground=[("selected", ACCENT), ("active", TEXT)])
     style.layout("Segment.TCheckbutton", [
         ("Checkbutton.padding", {"sticky": "nswe", "children": [
             ("Checkbutton.label", {"sticky": "nswe"})]})])
@@ -422,6 +429,37 @@ def center_on_screen(window, width=None, height=None):
 def format_due(due_at):
     """'2026-10-16 09:00' -> '16.10.2026 09:00'."""
     return datetime.fromisoformat(due_at).strftime("%d.%m.%Y %H:%M") if due_at else ""
+
+
+IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+
+
+def format_size(size):
+    for unit in ("байт", "КБ", "МБ"):
+        if size < 1024 or unit == "МБ":
+            return f"{size} {unit}" if unit == "байт" else f"{size:.1f} {unit}".replace(".", ",")
+        size /= 1024
+
+
+def short_time(stamp):
+    """'2026-10-17 14:05:33' -> '17.10 14:05' (год — только если не нынешний)."""
+    when = datetime.fromisoformat(stamp)
+    return when.strftime("%d.%m %H:%M" if when.year == datetime.now().year else "%d.%m.%Y %H:%M")
+
+
+def extras_mark(counts):
+    """'   📎 2  💬 3' — сколько у задачи файлов и комментариев (или '', если нет)."""
+    files, comments = counts or (0, 0)
+    parts = ([f"📎 {files}"] if files else []) + ([f"💬 {comments}"] if comments else [])
+    return "   " + "  ".join(parts) if parts else ""
+
+
+def paint_tree(widget, bg):
+    """Меняет фон у виджета и всех вложенных (кроме превью-картинок и значков)."""
+    if not (isinstance(widget, tk.Label) and widget.cget("bg") == BG):
+        widget.configure(bg=bg)
+    for child in widget.winfo_children():
+        paint_tree(child, bg)
 
 
 def short_text(text, limit=60):
@@ -1690,7 +1728,7 @@ TotoroPanel.ZZZ_COLORS = [tint(MUTED, k / 6, SURFACE) for k in range(7)]
 class TaskCard(tk.Frame):
     """Карточка выбранной задачи: заголовок, описание и все поля."""
 
-    def __init__(self, parent, on_close, on_edit, on_email, on_toggle, on_delete):
+    def __init__(self, parent, on_close, on_edit, on_email, on_toggle, on_delete, extras):
         super().__init__(parent, bg=SURFACE, padx=18, pady=14)
         wrap = PANEL_WIDTH - 40
         # ширину панели можно менять — заголовок переносится по её ширине
@@ -1717,7 +1755,7 @@ class TaskCard(tk.Frame):
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x", pady=12)
 
         # Действия с задачей — внизу карточки, сроки и даты — над ними
-        actions = tk.Frame(self, bg=SURFACE)
+        actions = self.actions = tk.Frame(self, bg=SURFACE)
         actions.pack(side="bottom", fill="x", pady=(12, 0))
         actions.columnconfigure((0, 1), weight=1, uniform="actions")
         self.toggle_button = ttk.Button(actions, style="AccentSoft.TButton", command=on_toggle)
@@ -1741,12 +1779,27 @@ class TaskCard(tk.Frame):
             value = tk.Label(self.fields, bg=SURFACE, fg=TEXT, font=FONT_SMALL)
             value.grid(row=row, column=1, sticky="w", padx=(12, 0), pady=1)
             self.values[key], self.captions[key] = value, caption
-        tk.Frame(self, bg=BORDER, height=1).pack(side="bottom", fill="x", pady=12)
+        self.fields_line = tk.Frame(self, bg=BORDER, height=1)
+        self.fields_line.pack(side="bottom", fill="x", pady=12)
+
+        # Вкладки: описание, вложенные файлы, комментарии
+        self.extras = extras
+        self.task_id = None
+        self.tab = tk.StringVar(value="body")
+        tabs = ttk.Frame(self, style="Segments.TFrame", padding=2)
+        tabs.pack(fill="x", pady=(0, 8))
+        self.tab_buttons = {}
+        for column, (key, text) in enumerate((("body", "Описание"), ("files", "Файлы"),
+                                              ("comments", "Комментарии"))):
+            button = ttk.Radiobutton(tabs, text=text, value=key, variable=self.tab,
+                                     style="Tab.TRadiobutton", command=self.show_tab, cursor="hand2")
+            button.grid(row=0, column=column, sticky="we")
+            tabs.columnconfigure(column, weight=1)
+            self.tab_buttons[key] = button
+        self.pages = {}
 
         # Описание (только для чтения, с прокруткой колесом)
-        tk.Label(self, text="Описание", bg=SURFACE, fg=MUTED, font=FONT_SMALL).pack(anchor="w")
-        body_box = tk.Frame(self, bg=SURFACE)
-        body_box.pack(fill="both", expand=True)
+        body_box = self.pages["body"] = tk.Frame(self, bg=SURFACE)
         self.body_scroll = ttk.Scrollbar(body_box, orient="vertical")
         self.body = tk.Text(body_box, bg=SURFACE, fg=TEXT, font=FONT, wrap="word", relief="flat",
                             borderwidth=0, highlightthickness=0, height=4, width=1,
@@ -1755,6 +1808,186 @@ class TaskCard(tk.Frame):
         self.body_scroll.configure(command=self.body.yview)
         self.body.pack(side="left", fill="both", expand=True)
         self.body.tag_configure("empty", foreground=DONE, font=FONT_SMALL)
+
+        # Файлы: список с превью картинок, внизу — «Добавить» и «Вставить»
+        page = self.pages["files"] = tk.Frame(self, bg=SURFACE)
+        buttons = tk.Frame(page, bg=SURFACE)
+        buttons.pack(side="bottom", fill="x", pady=(8, 0))
+        buttons.columnconfigure((0, 1), weight=1, uniform="files")
+        ttk.Button(buttons, text="＋  Добавить", style="Soft.TButton", cursor="hand2",
+                   command=lambda: extras.add_files(self.task_id)).grid(
+            row=0, column=0, sticky="we", padx=(0, 3))
+        ttk.Button(buttons, text="Вставить", style="Soft.TButton", cursor="hand2",
+                   command=self.paste).grid(row=0, column=1, sticky="we", padx=(3, 0))
+        self.files_area = ScrollArea(page, SURFACE)
+        self.files_area.pack(fill="both", expand=True)
+        self.thumbs = {}  # id вложения -> картинка-превью (иначе Tk её «забудет»)
+        self.file_labels = []
+        self.files_area.inner.bind("<Configure>", lambda e: [
+            label.configure(wraplength=max(e.width - 80, 120)) for label in self.file_labels], add="+")
+
+        # Комментарии: лента сверху, поле для нового комментария снизу
+        page = self.pages["comments"] = tk.Frame(self, bg=SURFACE)
+        write = tk.Frame(page, bg=SURFACE)
+        write.pack(side="bottom", fill="x", pady=(8, 0))
+        box = tk.Frame(write, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER,
+                       highlightcolor=ACCENT)
+        box.pack(fill="x")
+        self.comment_entry = tk.Text(box, bg=SURFACE, fg=TEXT, insertbackground=TEXT, font=FONT_SMALL,
+                                     wrap="word", relief="flat", borderwidth=0, highlightthickness=0,
+                                     height=2, width=1, padx=8, pady=6, undo=True)
+        self.comment_entry.pack(fill="x")
+        for key in ("<Control-Return>", "<Control-KP_Enter>"):
+            self.comment_entry.bind(key, lambda e: (self.send_comment(), "break")[1])
+        send_row = tk.Frame(write, bg=SURFACE)
+        send_row.pack(fill="x", pady=(6, 0))
+        ttk.Button(send_row, text="Отправить", style="Accent.TButton", cursor="hand2",
+                   command=self.send_comment).pack(side="right")
+        tk.Label(send_row, text="Ctrl+Enter", bg=SURFACE, fg=DONE,
+                 font=FONT_SMALL).pack(side="left")
+        self.comments_area = ScrollArea(page, SURFACE)
+        self.comments_area.pack(fill="both", expand=True)
+        self.comments_area.inner.bind("<Configure>", self.wrap_comments, add="+")
+        self.comment_labels = []
+        self.extras_shown = None
+        self.show_tab()
+
+    # --- вкладки ---
+
+    def show_tab(self):
+        for key, page in self.pages.items():
+            if key == self.tab.get():
+                page.pack(fill="both", expand=True)
+            else:
+                page.pack_forget()
+        # поля задачи (важность, срок…) — только с описанием: файлам и комментариям нужно место
+        if self.tab.get() == "body":
+            self.fields.pack(side="bottom", fill="x", after=self.actions)
+            self.fields_line.pack(side="bottom", fill="x", pady=12, after=self.fields)
+        else:
+            self.fields.pack_forget()
+            self.fields_line.pack_forget()
+        if self.tab.get() == "comments":
+            self.scroll_comments_down()
+
+    def load_extras(self, task_id):
+        """Перечитывает файлы и комментарии задачи; перерисовывает, только если они изменились."""
+        files, comments = self.extras.attachments(task_id), self.extras.comments(task_id)
+        self.tab_buttons["files"].configure(text=f"Файлы  {len(files)}" if files else "Файлы")
+        self.tab_buttons["comments"].configure(
+            text=f"Комментарии  {len(comments)}" if comments else "Комментарии")
+        shown = (task_id, files, comments)
+        if shown == self.extras_shown:
+            return
+        new_task = task_id != self.task_id
+        self.task_id, self.extras_shown = task_id, shown
+        if new_task:
+            self.comment_entry.delete("1.0", "end")
+        self.draw_files(files)
+        self.draw_comments(comments)
+
+    def draw_files(self, files):
+        inner = self.files_area.inner
+        for child in inner.winfo_children():
+            child.destroy()
+        self.thumbs = {k: v for k, v in self.thumbs.items() if k in {f[0] for f in files}}
+        self.file_labels = []
+        if not files:
+            tk.Label(inner, text="Файлов нет.\nДобавьте документ или картинку — или вставьте\n"
+                                 "снимок экрана из буфера обмена (Ctrl+V).",
+                     bg=SURFACE, fg=DONE, font=FONT_SMALL, justify="left", anchor="w").pack(
+                fill="x", pady=4)
+        for attachment_id, name, size, added_by, added_at in files:
+            row = tk.Frame(inner, bg=SURFACE, cursor="hand2")
+            row.pack(fill="x", pady=(0, 6))
+            thumb = self.thumbnail(attachment_id, name)
+            if thumb:
+                preview = tk.Label(row, image=thumb, bg=SURFACE, width=56, height=56)
+            else:
+                ext = Path(name).suffix[1:].upper()[:4] or "FILE"
+                preview = tk.Label(row, text=ext, bg=BG, fg=MUTED, font=FONT_SMALL_BOLD,
+                                   width=5, height=2)
+            preview.pack(side="left", padx=(0, 10))
+            text = tk.Frame(row, bg=SURFACE)
+            text.pack(side="left", fill="x", expand=True)
+            label = tk.Label(text, text=name, bg=SURFACE, fg=TEXT, font=FONT_SMALL, anchor="w",
+                             justify="left", wraplength=max(inner.winfo_width() - 80, 120))
+            label.pack(fill="x")
+            self.file_labels.append(label)
+            info = [format_size(size), short_time(added_at)] + ([added_by] if added_by else [])
+            tk.Label(text, text=" · ".join(info), bg=SURFACE, fg=MUTED, font=FONT_SMALL,
+                     anchor="w").pack(fill="x")
+            bind_tree(row, "<Button-1>", lambda e, a=attachment_id: self.extras.open_file(a))
+            bind_tree(row, "<Button-3>",
+                      lambda e, a=attachment_id: self.extras.file_menu(a, e.x_root, e.y_root))
+            bind_tree(row, "<Enter>", lambda e, r=row: paint_tree(r, HOVER))
+            bind_tree(row, "<Leave>", lambda e, r=row: paint_tree(r, SURFACE))
+        self.files_area.bind_wheel()
+        self.files_area.canvas.yview_moveto(0)
+
+    def thumbnail(self, attachment_id, name):
+        """Маленькая копия картинки для списка файлов (или None — не картинка)."""
+        if attachment_id in self.thumbs:
+            return self.thumbs[attachment_id]
+        thumb = None
+        if Path(name).suffix.lower() in IMAGE_TYPES:
+            try:
+                from io import BytesIO
+                from PIL import Image, ImageTk
+                image = Image.open(BytesIO(self.extras.file_data(attachment_id)))
+                image.thumbnail((56, 56))
+                thumb = ImageTk.PhotoImage(image)
+            except Exception:  # noqa: BLE001 — нет Pillow или файл не картинка: покажем без превью
+                thumb = None
+        self.thumbs[attachment_id] = thumb
+        return thumb
+
+    def paste(self):
+        if self.task_id is not None:
+            self.extras.paste_files(self.task_id)
+
+    def draw_comments(self, comments):
+        inner = self.comments_area.inner
+        for child in inner.winfo_children():
+            child.destroy()
+        self.comment_labels = []
+        if not comments:
+            tk.Label(inner, text="Комментариев пока нет.", bg=SURFACE, fg=DONE,
+                     font=FONT_SMALL, anchor="w").pack(fill="x", pady=4)
+        for comment_id, author, text, created_at in comments:
+            item = tk.Frame(inner, bg=SURFACE)
+            item.pack(fill="x", pady=(0, 10))
+            head = tk.Frame(item, bg=SURFACE)
+            head.pack(fill="x")
+            if author:
+                tk.Label(head, text=author, bg=SURFACE, fg=TEXT, font=FONT_SMALL_BOLD).pack(
+                    side="left", padx=(0, 6))
+            tk.Label(head, text=short_time(created_at), bg=SURFACE, fg=MUTED,
+                     font=FONT_SMALL).pack(side="left")
+            label = tk.Label(item, text=text, bg=SURFACE, fg=TEXT, font=FONT_SMALL, anchor="w",
+                             justify="left", wraplength=max(inner.winfo_width() - 8, 150))
+            label.pack(fill="x")
+            self.comment_labels.append(label)
+            bind_tree(item, "<Button-3>", lambda e, c=comment_id, a=author, t=text:
+                      self.extras.comment_menu(c, a, t, e.x_root, e.y_root))
+        self.comments_area.bind_wheel()
+        self.scroll_comments_down()
+
+    def scroll_comments_down(self):
+        """К последнему комментарию (сначала пусть Tk узнает новую высоту ленты)."""
+        canvas = self.comments_area.canvas
+        canvas.update_idletasks()
+        canvas.configure(scrollregion=canvas.bbox("all"))
+        canvas.yview_moveto(1)
+
+    def wrap_comments(self, event):
+        for label in self.comment_labels:
+            label.configure(wraplength=max(event.width - 8, 150))
+
+    def send_comment(self):
+        text = self.comment_entry.get("1.0", "end").strip()
+        if text and self.task_id is not None and self.extras.add_comment(self.task_id, text):
+            self.comment_entry.delete("1.0", "end")
 
     def update_body_scroll(self, first, last):
         """Полоса прокрутки описания видна, только если текст не помещается."""
@@ -1768,6 +2001,7 @@ class TaskCard(tk.Frame):
     def show(self, number, title, body, status, status_color, overdue, done, priority_level_,
              priority_name, due, remind, created, author="", assignee="", updated="",
              urgent=False, important=False):
+        self.load_extras(number)
         shown = (number, title, body, status, status_color, overdue, done, priority_level_,
                  priority_name, due, remind, created, author, assignee, updated, urgent, important)
         if shown == getattr(self, "shown", None):
@@ -1851,12 +2085,12 @@ class SidePanel(tk.Frame):
     """Правая панель: Тоторо, пока задача не выбрана, иначе — карточка задачи
     или форма её изменения."""
 
-    def __init__(self, parent, on_task_click, on_close, on_edit, on_email, on_toggle, on_delete):
+    def __init__(self, parent, on_task_click, on_close, on_edit, on_email, on_toggle, on_delete, extras):
         super().__init__(parent, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER,
                          highlightcolor=BORDER, width=PANEL_WIDTH)
         self.pack_propagate(False)  # ширину задаёт разделитель, а не длина текста
         self.totoro = TotoroPanel(self, on_task_click)
-        self.card = TaskCard(self, on_close, on_edit, on_email, on_toggle, on_delete)
+        self.card = TaskCard(self, on_close, on_edit, on_email, on_toggle, on_delete, extras)
         self.editor = None  # форма задачи (с прокруткой и кнопками внизу), пока задача редактируется
         self.form = None
         self.mode = None
@@ -3360,6 +3594,9 @@ class KanbanBoard(tk.Frame):
             extra.insert(0, "исполнитель " + self.app.assignees[task_id])
         if "author" in fields and self.app.authors.get(task_id):
             extra.append("автор " + self.app.authors[task_id])
+        mark = extras_mark(self.app.extra_counts.get(task_id)).strip()
+        if mark:
+            extra.append(mark)
         if extra:
             tk.Label(content, text=" · ".join(extra), bg=SURFACE, fg=MUTED, font=FONT_SMALL,
                      anchor="w", justify="left", wraplength=self.card_width - 60).pack(fill="x", pady=(2, 0))
@@ -3710,6 +3947,7 @@ class TodoApp:
         self.all_rows = []   # все задачи открытого списка (читаются в refresh)
         self.done_today = 0
         self.authors = {}    # id задачи -> кто создал (в общих списках)
+        self.extra_counts = {}  # id задачи -> (файлов, комментариев)
         self.assignees = {}  # id задачи -> исполнитель (в общих списках)
         try:
             self.conn = self.list_conn(self.list_id)
@@ -3845,7 +4083,7 @@ class TodoApp:
         content.bind("<Leave>", lambda e: self.reset_cursor(), add="+")
         self.side = SidePanel(content, on_task_click=self.reveal_task,
                               on_close=self.clear_selection, on_edit=self.edit, on_email=self.email,
-                              on_toggle=self.toggle, on_delete=self.delete)
+                              on_toggle=self.toggle, on_delete=self.delete, extras=self)
         self.panel_width = int(db.get_setting(self.prefs, "panel_width", PANEL_WIDTH))
         self.side.totoro.animate = db.get_setting(self.prefs, "totoro_animate", "1") == "1"
         # В узком окне панель прячется, чтобы не теснить таблицу
@@ -3927,6 +4165,7 @@ class TodoApp:
                                  ("<Control-E>", self.email), ("<Escape>", self.clear_selection)):
             root.bind(sequence, lambda e, a=action: self.key_action(e, a))
         root.bind("<F1>", lambda e: self.show_help())
+        root.bind("<Control-KeyPress>", self.paste_key, add="+")
         for key in ("<Control-f>", "<Control-F>"):
             root.bind(key, lambda e: (self.search.focus_set(), "break")[1])
         for key in ("<Control-n>", "<Control-N>"):
@@ -4814,6 +5053,7 @@ class TodoApp:
         rows = self.all_rows = db.list_tasks(self.conn)
         self.done_today = db.count_done_today(self.conn)
         self.authors, self.assignees = db.task_people(self.conn)
+        self.extra_counts = db.extras_counts(self.conn)  # id задачи -> (файлов, комментариев)
         shared = bool(self.list_id and self.current_list()["shared"])
         # столбцы «Исполнитель» и «Автор» — только в общих списках (в личном всё ваше)
         columns = [c for c in self.tree["columns"] if shared or c not in ("assignee", "author")]
@@ -4851,7 +5091,8 @@ class TodoApp:
             self.row_status[iid] = name
             self.tree.insert(
                 "", "end", iid=iid, image=IMAGES.get(f"priority_{level}", ""),
-                values=(f"#{task_id}", status_label(name, done), title, PRIORITY_NAMES[level],
+                values=(f"#{task_id}", status_label(name, done), title + extras_mark(self.extra_counts.get(task_id)),
+                        PRIORITY_NAMES[level],
                         format_due(due_at), remind, self.assignees.get(task_id, ""),
                         self.authors.get(task_id, ""), created),
                 tags=("done",) if done else ("normal",),
@@ -5217,6 +5458,168 @@ class TodoApp:
             )
 
     # --- напоминания ---
+
+    # --- файлы и комментарии задачи (вкладки карточки справа) ---
+
+    def attachments(self, task_id):
+        try:
+            return db.list_attachments(self.conn, task_id)
+        except sqlite3.Error:
+            return []
+
+    def comments(self, task_id):
+        try:
+            return db.list_comments(self.conn, task_id)
+        except sqlite3.Error:
+            return []
+
+    def file_data(self, attachment_id):
+        return db.attachment_data(self.conn, attachment_id)
+
+    def attach(self, task_id, items):
+        """items — [(имя, содержимое в байтах)]. Слишком большие файлы не добавляются."""
+        big = [name for name, data in items if len(data) > db.MAX_ATTACHMENT]
+        if big:
+            ui.showwarning(APP_NAME, "Слишком большой файл (можно до "
+                           f"{db.MAX_ATTACHMENT // (1024 * 1024)} МБ):\n" + "\n".join(big),
+                           parent=self.root)
+        try:
+            for name, data in items:
+                if len(data) <= db.MAX_ATTACHMENT:
+                    db.add_attachment(self.conn, task_id, name, data, by=self.created_by())
+        except sqlite3.Error as error:
+            ui.showerror(APP_NAME, f"Не удалось добавить файл:\n{error}", parent=self.root)
+        self.refresh(select_id=task_id)
+
+    def read_files(self, paths):
+        items = []
+        for path in paths:
+            try:
+                items.append((Path(path).name, Path(path).read_bytes()))
+            except OSError as error:
+                ui.showerror(APP_NAME, f"Не удалось прочитать файл:\n{path}\n\n{error}", parent=self.root)
+        return items
+
+    def add_files(self, task_id):
+        if task_id is None:
+            return
+        paths = filedialog.askopenfilenames(parent=self.root, title="Добавить файлы к задаче")
+        items = self.read_files(paths)
+        if items:
+            self.attach(task_id, items)
+
+    def paste_files(self, task_id):
+        """Снимок экрана или скопированные в Проводнике файлы из буфера обмена."""
+        try:
+            from PIL import ImageGrab
+            content = ImageGrab.grabclipboard()
+        except Exception:  # noqa: BLE001 — буфер занят другой программой или нет Pillow
+            content = None
+        if isinstance(content, list):  # файлы, скопированные в Проводнике
+            items = self.read_files([path for path in content if os.path.isfile(path)])
+            if items:
+                self.attach(task_id, items)
+                return
+        elif content is not None:  # картинка (например, снимок экрана)
+            from io import BytesIO
+            buffer = BytesIO()
+            content.save(buffer, "PNG")
+            name = datetime.now().strftime("Снимок %d.%m.%Y %H-%M-%S.png")
+            self.attach(task_id, [(name, buffer.getvalue())])
+            return
+        ui.showinfo(APP_NAME, "В буфере обмена нет картинки или файлов.\n\n"
+                    "Сделайте снимок экрана (Win+Shift+S) или скопируйте файл в Проводнике, "
+                    "а потом нажмите «Вставить».", parent=self.root)
+
+    def paste_key(self, event):
+        """Ctrl+V при открытой вкладке «Файлы» (в любой раскладке) вставляет из буфера."""
+        card = self.side.card
+        if (event.keycode != 86 or self.side.mode != "task" or card.tab.get() != "files"
+                or isinstance(event.widget, (tk.Entry, ttk.Entry, tk.Text, ttk.Combobox))):
+            return None
+        card.paste()
+        return "break"
+
+    def attachment_name(self, attachment_id):
+        row = self.conn.execute("SELECT name FROM attachments WHERE id = ?", (attachment_id,)).fetchone()
+        return row[0] if row else None
+
+    def open_file(self, attachment_id):
+        """Открывает вложение в программе Windows для этого типа файлов (через временную копию)."""
+        try:
+            name, data = self.attachment_name(attachment_id), self.file_data(attachment_id)
+        except sqlite3.Error as error:
+            ui.showerror(APP_NAME, f"Не удалось прочитать файл:\n{error}", parent=self.root)
+            return
+        if data is None:
+            return
+        safe = re.sub(r'[\\/:*?"<>|]', "_", name).strip() or "файл"
+        folder = Path(tempfile.gettempdir()) / "ToDoro" / f"{self.list_id}-{attachment_id}"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / safe
+            path.write_bytes(data)
+            os.startfile(path)
+        except OSError as error:
+            ui.showerror(APP_NAME, f"Не удалось открыть файл:\n{error}", parent=self.root)
+
+    def save_attachment(self, attachment_id):
+        name = self.attachment_name(attachment_id)
+        path = filedialog.asksaveasfilename(parent=self.root, title="Сохранить файл", initialfile=name,
+                                            defaultextension=Path(name).suffix)
+        if path:
+            try:
+                Path(path).write_bytes(self.file_data(attachment_id))
+            except (OSError, sqlite3.Error) as error:
+                ui.showerror(APP_NAME, f"Не удалось сохранить файл:\n{error}", parent=self.root)
+
+    def delete_attachment(self, attachment_id):
+        name = self.attachment_name(attachment_id)
+        if not ui.askyesno(APP_NAME, f"Удалить файл «{name}» из задачи?", parent=self.root,
+                           icon="warning", default="no"):
+            return
+        try:
+            db.delete_attachment(self.conn, attachment_id)
+        except sqlite3.Error as error:
+            ui.showerror(APP_NAME, f"Не удалось удалить файл:\n{error}", parent=self.root)
+        self.refresh(select_id=self.current_id())
+
+    def file_menu(self, attachment_id, x, y):
+        (PopupMenu()
+         .command("Открыть", lambda: self.open_file(attachment_id))
+         .command("Сохранить как…", lambda: self.save_attachment(attachment_id))
+         .separator()
+         .command("Удалить файл", lambda: self.delete_attachment(attachment_id), danger=True)
+         ).popup(self.root, x, y)
+
+    def add_comment(self, task_id, text):
+        try:
+            db.add_comment(self.conn, task_id, text, by=self.created_by())
+        except sqlite3.Error as error:
+            ui.showerror(APP_NAME, f"Не удалось сохранить комментарий:\n{error}", parent=self.root)
+            return False
+        self.refresh(select_id=task_id)
+        return True
+
+    def comment_menu(self, comment_id, author, text, x, y):
+        # в общем списке удалить можно только свой комментарий
+        mine = not author or author == self.user_name()
+        (PopupMenu()
+         .command("Копировать текст", lambda: self.copy_text(text))
+         .separator()
+         .command("Удалить комментарий", lambda: self.delete_comment(comment_id), danger=True,
+                  enabled=mine)
+         ).popup(self.root, x, y)
+
+    def delete_comment(self, comment_id):
+        if not ui.askyesno(APP_NAME, "Удалить этот комментарий?", parent=self.root,
+                           icon="warning", default="no"):
+            return
+        try:
+            db.delete_comment(self.conn, comment_id)
+        except sqlite3.Error as error:
+            ui.showerror(APP_NAME, f"Не удалось удалить комментарий:\n{error}", parent=self.root)
+        self.refresh(select_id=self.current_id())
 
     def check_reminders(self):
         """Раз в 30 секунд проверяет, не пора ли о чём-то напомнить."""
