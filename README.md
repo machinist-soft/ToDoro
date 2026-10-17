@@ -49,7 +49,8 @@
   с Windows, поэтому Ctrl+Alt+T работает, даже если ToDoro не открыт (значок можно выключить).
 - **Задача со снимка экрана**: **Ctrl+Alt+S** в любой программе — выделите мышью область экрана,
   и снимок приложится к новой задаче.
-- **Тёмная тема**, экспорт и импорт **CSV (Excel)**, письмо по задаче, подробная справка (F1).
+- **Тёмная тема**, правая панель сворачивается в полоску (Ctrl+B), экспорт и импорт
+  **CSV (Excel)**, письмо по задаче, подробная справка (F1).
 - **Обновления в один клик**: программа сама сообщает о новой версии и ставит её — задачи
   сохраняются.
 
@@ -62,7 +63,7 @@ protection against overwriting others’ edits · a living Totoro helper and the
 tour on first launch · create a task from an Outlook e-mail (Ctrl+Alt+T): subject, text,
 attachments and the message itself, replies go to the sender; a tray icon started with Windows
 keeps Ctrl+Alt+T working even when ToDoro is closed · create a task from a screen area
-snapshot (Ctrl+Alt+S) · dark theme,
+snapshot (Ctrl+Alt+S) · dark theme, collapsible side panel (Ctrl+B),
 CSV export / import, e-mail a task, built-in help · one-click updates.*
 
 ### Котобус увозит выполненную задачу / The Catbus carries away a finished task
@@ -115,7 +116,9 @@ CSV export / import, e-mail a task, built-in help · one-click updates.*
 
 В правой панели — всё о задаче: описание, важность и срочность, срок, напоминание, автор, исполнитель, кто изменил.
 Изменяется задача тут же — с выбором исполнителя из участников.
-*The side panel shows everything about a task; edit it right there and pick an assignee.*
+Нужно больше места для задач — сверните панель в узкую полоску кнопкой «»» или **Ctrl+B**.
+*The side panel shows everything about a task; edit it right there and pick an assignee.
+Need more room? Collapse the panel to a thin strip with the » button or Ctrl+B.*
 
 ![Карточка задачи / Task card](docs/screenshots/card.png)
 
