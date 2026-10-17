@@ -1081,10 +1081,13 @@ class TaskDialog(tk.Toplevel):
         self.destroy()
 
 
+FOLDER_HINT = r"%APPDATA%\ToDoro"  # папка с задачами, как её пишут в Windows
+
+
 class HelpWindow(tk.Toplevel):
     """Справка: слева — поиск и темы по разделам, справа — выбранная тема (текст из help_text.py)."""
 
-    MARKUP = re.compile(r"(\*\*.+?\*\*|\[[^\]]+\]|\{p[123]\}|\{github\})")
+    MARKUP = re.compile(r"(\*\*.+?\*\*|\[[^\]]+\]|\{p[123]\}|\{github\}|\{folder\})")
     ICON_FONT = ("Segoe MDL2 Assets", 11)
     SEARCH_HINT = "Поиск по справке"
 
@@ -1157,7 +1160,10 @@ class HelpWindow(tk.Toplevel):
         text.tag_configure("link", foreground=ACCENT, underline=True)
         text.tag_configure("found", background=FOUND)
         text.tag_bind("link", "<Button-1>", lambda e: webbrowser.open(PROJECT_URL))
-        for tag in ("link", "goto"):
+        # папка с задачами: щелчок открывает её в Проводнике
+        text.tag_configure("folder", foreground=ACCENT, underline=True)
+        text.tag_bind("folder", "<Button-1>", lambda e: os.startfile(db.DATA_DIR))
+        for tag in ("link", "goto", "folder"):
             text.tag_bind(tag, "<Enter>", lambda e: text.configure(cursor="hand2"))
             text.tag_bind(tag, "<Leave>", lambda e: text.configure(cursor="arrow"))
         text.tag_configure("goto", foreground=ACCENT, font=FONT_SMALL)
@@ -1188,7 +1194,8 @@ class HelpWindow(tk.Toplevel):
     @staticmethod
     def plain(line):
         """Текст без разметки — для поиска."""
-        return re.sub(r"\*\*|\[|\]|\{p[123]\}", "", line).replace("{github}", "github")
+        return re.sub(r"\*\*|\[|\]|\{p[123]\}", "", line).replace("{github}", "github") \
+            .replace("{folder}", FOLDER_HINT)
 
     def stems(self):
         return search_stems(self.query)
@@ -1316,9 +1323,8 @@ class HelpWindow(tk.Toplevel):
             text.image_create("end", image=IMAGES["totoro_small"], padx=0)
             text.insert("end", "  ", "h1")
         text.insert("end", topic["title"] + "\n", "h1")
-        folder, step = str(db.DATA_DIR), 0
+        step = 0
         for kind, line in topic["rows"]:
-            line = line.replace("{folder}", folder)
             if kind == "step":
                 step += 1
                 text.insert("end", f"{step}.  ", ("step", "num"))
@@ -1389,6 +1395,9 @@ class HelpWindow(tk.Toplevel):
                     text.image_create("end", image=image, align="center")
             elif part == "{github}":
                 text.insert("end", PROJECT_URL.removeprefix("https://"), (kind, "link"))
+            elif part == "{folder}":
+                # без полного пути: в нём имя пользователя Windows, а снимки справки публикуются
+                text.insert("end", FOLDER_HINT, (kind, "folder"))
             else:
                 text.insert("end", part, kind)
 
