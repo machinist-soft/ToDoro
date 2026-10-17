@@ -184,6 +184,18 @@ def run():
     app.view.set("list")
     app.switch_view()
     app.clear_selection()
+    # 5в. Ознакомительный тур: шаг «Список, доска и матрица»
+    app.start_tour()
+    tour = app.tour
+    for window in (tour.tip, tour.frame):
+        if window:
+            window.attributes("-topmost", True)  # главное окно на время съёмки — поверх всех
+    tour.hide_next.set(False)  # на снимке — как при первом запуске: галочка не стоит
+    tour.index = next(i for i, step in enumerate(tour.steps) if step[1] == "Список, доска и матрица")
+    tour.show_step()
+    grab("tour.png")
+    tour.hide_next.set(True)  # не меняем настройку: в базе для снимков тур и так выключен
+    tour.close()
     # 6. Настройки — раздел «Совместная работа»
     dialog = T.SettingsDialog(root, "window", app.card_fields, True, r"\\server\Общая\ToDoro", ME,
                               ("ok", "Подключено. Участники: " + ", ".join([ME] + TEAM)), "sharing",

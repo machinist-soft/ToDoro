@@ -39,6 +39,8 @@
   задачи», «кто и когда изменил», защита от затирания чужих правок.
 - **Живой Тоторо-помощник** подсказывает, что просрочено и что важнее всего: моргает, радуется,
   волнуется и засыпает, когда всё сделано; **Котобус** увозит выполненные задачи.
+- **Ознакомительный тур** при запуске: Тоторо по шагам показывает главные части окна (можно
+  отключить и пройти снова из меню).
 - **Тёмная тема**, экспорт и импорт **CSV (Excel)**, письмо по задаче, подробная справка (F1).
 - **Обновления в один клик**: программа сама сообщает о новой версии и ставит её — задачи
   сохраняются.
@@ -47,7 +49,8 @@
 custom columns and Eisenhower matrix (drag a card to another quadrant to change its priority),
 filters, search and column sorting · several lists, personal and shared with a team via a network
 folder (VPN works) · author and assignee, “My tasks”, “assigned to you” notices, last editor,
-protection against overwriting others’ edits · a living Totoro helper and the Catbus · dark theme,
+protection against overwriting others’ edits · a living Totoro helper and the Catbus · a guided
+tour on first launch · dark theme,
 CSV export / import, e-mail a task, built-in help · one-click updates.*
 
 ### Котобус увозит выполненную задачу / The Catbus carries away a finished task
@@ -68,6 +71,13 @@ CSV export / import, e-mail a task, built-in help · one-click updates.*
 
 ![Матрица Эйзенхауэра / Eisenhower matrix](docs/screenshots/matrix.png)
 
+### Ознакомительный тур / Guided tour
+
+При запуске Тоторо обводит рамкой главные части окна и объясняет их; тур можно отключить и пройти снова: ☰ Меню → Ознакомительный тур.
+*On launch Totoro highlights the main parts of the window step by step; turn it off or replay it from the Menu.*
+
+![Ознакомительный тур / Guided tour](docs/screenshots/tour.png)
+
 ### Тёмная тема / Dark theme
 
 Светлая, тёмная или «как в Windows» — ☰ Меню → Настройки → Общие.
@@ -77,7 +87,7 @@ CSV export / import, e-mail a task, built-in help · one-click updates.*
 
 ### Карточка и изменение задачи / Task card and editing
 
-В правой панели — всё о задаче: описание, срок, напоминание, автор, исполнитель, кто изменил.
+В правой панели — всё о задаче: описание, важность и срочность, срок, напоминание, автор, исполнитель, кто изменил.
 Изменяется задача тут же — с выбором исполнителя из участников.
 *The side panel shows everything about a task; edit it right there and pick an assignee.*
 
