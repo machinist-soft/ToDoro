@@ -390,6 +390,8 @@ object Repo {
             val status = view.statuses.firstOrNull { it.done == f.getBoolean("done") }
             if (status != null) t = t.copy(statusId = status.id, done = status.done)
         }
+        // время выполнения — как на компьютере: ставится, когда задача стала выполненной
+        if (t.done != task.done) t = t.copy(doneAt = if (t.done) nowStamp() else null)
         return t
     }
 

@@ -29,10 +29,20 @@ data class Task(
     val version: Int,
     val files: Int,
     val comments: Int,
+    val doneAt: String? = null,  // когда выполнили: «ГГГГ-ММ-ДД ЧЧ:ММ:СС»
 ) {
     val due: LocalDateTime? get() = parseDue(dueAt)
     val overdue: Boolean get() = !done && due?.isBefore(LocalDateTime.now()) == true
+    /** Матрица Эйзенхауэра: 1 — срочно и важно, 2 — важно, 3 — срочно, 4 — обычная. */
+    val level: Int get() = if (urgent && important) 1 else if (important) 2 else if (urgent) 3 else 4
+    val doneToday: Boolean get() = done && doneAt?.startsWith(java.time.LocalDate.now().toString()) == true
 }
+
+val PRIORITY_NAMES = mapOf(1 to "Срочно и важно", 2 to "Важно", 3 to "Срочно", 4 to "")
+val PRIORITY_HINTS = mapOf(1 to "сделать в первую очередь", 2 to "запланировать",
+    3 to "сделать быстро или поручить", 4 to "можно отложить")
+
+fun nowStamp(): String = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
 
 data class ListView(
     val list: TaskList,
@@ -104,6 +114,7 @@ fun parseTask(o: JSONObject) = Task(
     version = o.optInt("version"),
     files = o.optInt("files"),
     comments = o.optInt("comments"),
+    doneAt = o.str("done_at"),
 )
 
 fun parseLists(o: JSONObject): List<TaskList> = o.getJSONArray("lists").let { a ->

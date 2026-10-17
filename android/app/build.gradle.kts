@@ -24,8 +24,8 @@ android {
         applicationId = "com.machinist.todoro"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2"
+        versionCode = 3
+        versionName = "0.3"
     }
 
     signingConfigs {
@@ -55,6 +55,15 @@ android {
     buildFeatures {
         compose = true
     }
+    // Снимки экранов без телефона и эмулятора: Robolectric + Roborazzi (gradlew screenshots)
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            it.systemProperty("roborazzi.test.record", "true")
+            it.systemProperty("todoro.server", System.getProperty("todoro.server") ?: "")
+            it.systemProperty("todoro.list", System.getProperty("todoro.list") ?: "")
+        }
+    }
 }
 
 dependencies {
@@ -71,4 +80,12 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.32.2")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.32.2")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.work:work-testing:2.10.0")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

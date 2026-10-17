@@ -8,7 +8,10 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import org.json.JSONObject
 
-enum class Filter(val label: String) { ACTIVE("Активные"), ALL("Все"), DONE("Выполненные") }
+enum class Filter(val label: String) { ALL("Все"), ACTIVE("Активные"), DONE("Выполненные"), OVERDUE("Просроченные") }
+
+/** Что говорит Тоторо (как update_buddy в todoro.py). mood: normal, alert, sleep. */
+data class Buddy(val lead: String, val tasks: List<Task>, val tail: String, val mood: String, val stats: String)
 
 /** Задача в форме правки. task == null — новая задача. */
 data class Draft(
@@ -36,9 +39,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     var listId by mutableStateOf(prefs.getString("list", "personal") ?: "personal")
         private set
-    var filter by mutableStateOf(Filter.ACTIVE)
+    var filter by mutableStateOf(Filter.ALL)
     var onlyMine by mutableStateOf(false)
     var draft by mutableStateOf<Draft?>(null)
+    /** Открытая карточка задачи (номер задачи в открытом списке). */
+    var cardId by mutableStateOf<Long?>(null)
+    var buddyOn by mutableStateOf(prefs.getBoolean("buddy", true))
+        private set
     var remindersOn by mutableStateOf(Reminders.enabled(app))
         private set
 
@@ -68,6 +75,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun selectList(id: String) {
+        if (id != listId) cardId = null
         listId = id
         prefs.edit().putString("list", id).apply()
         onlyMine = false
@@ -78,22 +86,84 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         Reminders.setEnabled(getApplication(), on)
     }
 
+    fun setBuddy(on: Boolean) {
+        buddyOn = on
+        prefs.edit().putBoolean("buddy", on).apply()
+    }
+
     fun visibleTasks(): List<Task> {
         val v = view ?: return emptyList()
         var tasks = when (filter) {
             Filter.ACTIVE -> v.tasks.filter { !it.done }
             Filter.DONE -> v.tasks.filter { it.done }
+            Filter.OVERDUE -> v.tasks.filter { it.overdue }
             Filter.ALL -> v.tasks
         }
         if (v.list.shared && onlyMine) tasks = tasks.filter { it.assignee == v.user }
-        // невыполненные сверху; среди них — по сроку (без срока — в конце), затем новые выше
+        // «По приоритету», как на компьютере: невыполненные сверху, затем срочно и важно → важно →
+        // срочно → обычные, внутри — по сроку (без срока — в конце), затем по номеру
         return tasks.sortedWith(
             compareBy<Task> { it.done }
+                .thenBy { it.level }
                 .thenBy { it.dueAt == null }
                 .thenBy { it.dueAt }
-                .thenByDescending { if (it.id < 0) Long.MAX_VALUE else it.id }
+                .thenBy { if (it.id < 0) Long.MAX_VALUE else it.id }
         )
     }
+
+    /** Что сказать Тоторо — как на компьютере: о просроченных, о сроке сегодня, о самом важном. */
+    fun buddy(): Buddy? {
+        val v = view ?: return null
+        val now = java.time.LocalDateTime.now()
+        val active = v.tasks.filter { !it.done }
+        val overdue = active.filter { it.overdue }.sortedWith(compareBy({ it.level }, { it.dueAt }, { it.id }))
+        val today = active.filter { t -> t.due?.let { !it.isBefore(now) && it.toLocalDate() == now.toLocalDate() } == true }
+        val doneToday = v.tasks.count { it.doneToday }
+        val stats = listOfNotNull(
+            if (overdue.isNotEmpty()) "Просрочено: ${overdue.size}" else null,
+            if (today.isNotEmpty()) "На сегодня: ${today.size}" else null,
+            if (doneToday > 0) "Сегодня выполнено: $doneToday" else null,
+        ).joinToString(" · ")
+        return when {
+            v.tasks.isEmpty() -> Buddy("Привет! Я Тоторо.", emptyList(),
+                "Добавь первую задачу — я присмотрю за ней.", "normal", stats)
+            overdue.isNotEmpty() -> {
+                val n = overdue.size
+                val word = if (n % 10 == 1 && n % 100 != 11) "задачи" else "задач"
+                val shown = overdue.take(3)
+                val tail = when {
+                    n == 1 -> "Давай сделаем её первой?"
+                    n > shown.size -> "И ещё ${n - shown.size}. Все — кнопка «Просроченные»."
+                    else -> "Давай начнём с первой?"
+                }
+                Buddy(if (n == 1) "Ой! Срок уже прошёл:" else "Ой! Срок прошёл у $n $word:", shown, tail, "alert", stats)
+            }
+            today.isNotEmpty() -> {
+                val task = today.minBy { it.dueAt.orEmpty() }
+                val more = if (today.size > 1) " Всего на сегодня: ${today.size}." else ""
+                Buddy("Сегодня срок:", listOf(task), "до ${task.due!!.toLocalTime()}.$more", "normal", stats)
+            }
+            active.isNotEmpty() -> {
+                val task = active.minWith(compareBy({ it.level }, { it.dueAt ?: "9" }, { it.id }))
+                Buddy("Начни с самого важного:", listOf(task),
+                    "Активных задач: ${active.size}. Ты справишься!", "normal", stats)
+            }
+            else -> Buddy("Все задачи выполнены!", emptyList(),
+                "Можно отдохнуть под камфорным деревом.", "sleep", stats)
+        }
+    }
+
+    /** Строка «Заголовок новой задачи…» + «Добавить»: задача в первую колонку, без срока. */
+    fun quickAdd(title: String): Boolean {
+        val v = view ?: return false
+        if (title.isBlank()) return false
+        val fields = org.json.JSONObject().put("title", title.trim())
+        Repo.create(v.list.id, fields, title.trim())
+        if (filter == Filter.DONE || filter == Filter.OVERDUE) filter = Filter.ALL
+        return true
+    }
+
+    fun card(): Task? = cardId?.let { id -> view?.tasks?.firstOrNull { it.id == id } }
 
     // --- изменения: сразу на экране, на компьютер — когда будет связь ---
 
@@ -103,15 +173,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (!task.done) Repo.message = "Выполнено: ${task.title}"
     }
 
+    /** Форма: новая задача (task == null) или «Изменить» в карточке. */
     fun openTask(task: Task?) {
         draft = Draft(task, statusId = task?.statusId ?: view?.statuses?.firstOrNull { !it.done }?.id)
     }
 
+    /** Нажали на напоминание — открываем карточку задачи. */
     fun openTask(list: String, taskId: Long) {
         val data = Repo.data ?: return
-        val task = data.views[list]?.tasks?.firstOrNull { it.id == taskId } ?: return
+        if (data.views[list]?.tasks?.any { it.id == taskId } != true) return
         selectList(list)
-        openTask(task)
+        draft = null
+        cardId = taskId
     }
 
     fun save(d: Draft) {
@@ -143,6 +216,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val v = view ?: return
         Repo.delete(v.list.id, task)
         draft = null
+        cardId = null
         Repo.message = "Задача удалена"
     }
 }
