@@ -726,9 +726,10 @@ class AlertDialog(tk.Toplevel):
     KINDS = {"info": ("", ACCENT), "warning": ("", WARN),
              "error": ("", DANGER), "question": ("", ACCENT)}
 
-    def __init__(self, parent, title, message, kind, buttons, default, cancel):
+    def __init__(self, parent, title, message, kind, buttons, default, cancel, links=()):
         """buttons — [(подпись, значение, стиль)], default — значение кнопки для Enter,
-        cancel — значение для Esc и закрытия окна."""
+        cancel — значение для Esc и закрытия окна, links — [(текст, значение)]: строки-ссылки
+        под сообщением, щелчок по строке закрывает окно с этим значением."""
         super().__init__(parent)
         self.result = cancel
         self.title(title)
@@ -748,8 +749,15 @@ class AlertDialog(tk.Toplevel):
                  justify="left", anchor="w").pack(anchor="w", pady=(0, 6))
         tk.Label(text, text=message, bg=SURFACE, fg=TEXT, font=FONT_SMALL, justify="left",
                  anchor="w", wraplength=420).pack(anchor="w")
+        for line, value in links:
+            link = tk.Label(text, text=line, bg=SURFACE, fg=ACCENT, font=FONT_SMALL, justify="left",
+                            anchor="w", wraplength=420, cursor="hand2")
+            link.pack(anchor="w", pady=(4, 0))
+            link.bind("<Button-1>", lambda e, v=value: self.finish(v))
+            link.bind("<Enter>", lambda e, w=link: w.configure(font=(*FONT_SMALL, "underline")))
+            link.bind("<Leave>", lambda e, w=link: w.configure(font=FONT_SMALL))
 
-        bar = tk.Frame(self, bg=BG, highlightthickness=1, highlightbackground=BORDER)
+        bar =tk.Frame(self, bg=BG, highlightthickness=1, highlightbackground=BORDER)
         bar.pack(fill="x", side="bottom")
         focus, made = None, []
         for label, value, style in reversed(buttons):  # pack справа налево — сначала крайняя
@@ -6121,14 +6129,16 @@ class TodoApp:
                 if not item["shared"]:
                     for task_id, title, due_at in db.due_reminders(conn):
                         db.mark_reminded(conn, task_id)
-                        lines.append(f"• {title} — срок {format_due(due_at)}{where}")
+                        lines.append((f"• {title} — срок {format_due(due_at)}{where}",
+                                      (item["id"], task_id)))
                     continue
                 # Общий список: напоминаем о задачах, которые создал этот участник;
                 # о чём уже напомнили — помним у себя (флаг в общем файле один на всех)
-                for key, _, title, due_at in db.shared_reminders(conn, self.user_name()):
+                for key, task_id, title, due_at in db.shared_reminders(conn, self.user_name()):
                     if f"{item['id']}|{key}" not in reminded:
                         reminded.add(f"{item['id']}|{key}")
-                        lines.append(f"• {title} — срок {format_due(due_at)}{where}")
+                        lines.append((f"• {title} — срок {format_due(due_at)}{where}",
+                                      (item["id"], task_id)))
             except (sqlite3.Error, StopIteration):
                 continue  # общая папка сейчас недоступна — напомним, когда появится связь
         if lines:
@@ -6140,9 +6150,31 @@ class TodoApp:
             self.root.lift()
             self.root.attributes("-topmost", True)
             self.root.bell()
-            ui.showinfo("Напоминание", "Напоминаю о задачах:\n\n" + "\n".join(lines), parent=self.root)
+            chosen = self.ask_open_task("Напоминание", "Напоминаю о задачах:", lines)
             self.root.attributes("-topmost", False)
+            if chosen:
+                self.open_task(*chosen)
         self.root.after(CHECK_EVERY_MS, self.check_reminders)
+
+    def ask_open_task(self, title, message, lines):
+        """Сообщение о задачах, где каждую можно открыть щелчком.
+        lines — [(текст, (id списка, id задачи))]. Возвращает выбранную пару или None."""
+        if len(lines) == 1:
+            buttons = [("Открыть задачу", lines[0][1], "Accent.TButton"), ("Закрыть", None, "TButton")]
+            hint = ""
+        else:
+            buttons = [("Закрыть", None, "Accent.TButton")]
+            hint = "\n\nЩёлкните по задаче, чтобы открыть её."
+        return AlertDialog(self.root, title, message + hint, "info", buttons, buttons[0][1], None,
+                           links=lines).show()
+
+    def open_task(self, list_id, task_id):
+        """Открывает задачу из напоминания: переключает список, показывает и выделяет её."""
+        if list_id != self.list_id:
+            self.switch_list(list_id)
+            if list_id != self.list_id:
+                return  # список не открылся — об этом уже сказали
+        self.reveal_task(task_id)
 
     # --- списки задач ---
     # Личные списки хранятся у себя (self.prefs + папка lists), общие — в сетевой папке (self.team).
@@ -6362,7 +6394,8 @@ class TodoApp:
                 key = f"{item['id']}|{task_id}"
                 now_known.add(key)
                 if key not in known and item["id"] in seen_lists and by and by != me:
-                    lines.append(f"• {title} — назначил(а) {by}  (список «{item['name']}»)")
+                    lines.append((f"• {title} — назначил(а) {by}  (список «{item['name']}»)",
+                                  (item["id"], task_id)))
             seen_lists.add(item["id"])
         if now_known != known:
             db.set_json_setting(self.prefs, "known_assigned", sorted(now_known))
@@ -6372,8 +6405,10 @@ class TodoApp:
             self.root.deiconify()
             self.root.lift()
             self.root.bell()
-            ui.showinfo("Вам назначены задачи", "\n".join(lines), parent=self.root)
-            if self.list_id and self.current_list()["shared"]:
+            chosen = self.ask_open_task("Вам назначены задачи", "Вам назначены задачи:", lines)
+            if chosen:
+                self.open_task(*chosen)
+            elif self.list_id and self.current_list()["shared"]:
                 self.refresh(select_id=self.current_id())
 
     def on_error(self, kind, error, trace):
