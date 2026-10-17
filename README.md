@@ -29,6 +29,8 @@
 
 - **Задачи**: заголовок и описание, срок с календарём, напоминания, приоритет «Срочно / Важно»
   (матрица Эйзенхауэра), номер у каждой задачи.
+- **Файлы, картинки и комментарии** в каждой задаче: приложите документ или снимок экрана
+  (Ctrl+V), обсудите задачу с командой прямо в её карточке.
 - **Список, канбан-доска и матрица Эйзенхауэра**: свои колонки-статусы с цветами, перетаскивание
   карточек и колонок; в матрице карточку переносят в другую четверть — меняется приоритет;
   фильтры «Все / Активные / Выполненные / Просроченные», **поиск** (Ctrl+F), сортировка
@@ -45,7 +47,8 @@
 - **Обновления в один клик**: программа сама сообщает о новой версии и ставит её — задачи
   сохраняются.
 
-*Tasks with due dates, reminders and urgent / important priority · list, kanban board with
+*Tasks with due dates, reminders and urgent / important priority · file attachments, pasted
+screenshots and comments in every task · list, kanban board with
 custom columns and Eisenhower matrix (drag a card to another quadrant to change its priority),
 filters, search and column sorting · several lists, personal and shared with a team via a network
 folder (VPN works) · author and assignee, “My tasks”, “assigned to you” notices, last editor,
@@ -94,6 +97,15 @@ CSV export / import, e-mail a task, built-in help · one-click updates.*
 ![Карточка задачи / Task card](docs/screenshots/card.png)
 
 ![Форма изменения задачи / Task edit form](docs/screenshots/form.png)
+
+### Файлы и комментарии / Files and comments
+
+В карточке задачи — вкладки «Файлы» (документы, фото, снимки экрана с превью) и «Комментарии» (переписка по задаче).
+*Attach documents, photos and screenshots to a task and discuss it in the comments tab.*
+
+![Файлы в задаче / Task files](docs/screenshots/files.png)
+
+![Комментарии к задаче / Task comments](docs/screenshots/comments.png)
 
 ## Совместная работа / Teamwork
 

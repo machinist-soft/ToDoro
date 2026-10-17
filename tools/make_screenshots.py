@@ -7,6 +7,7 @@
 Нужен Pillow:  pip install pillow
 """
 import ctypes
+import io
 import sys
 import tempfile
 import threading
@@ -75,6 +76,24 @@ with shared:
                        "WHERE title = ?", (author, assignee, author, title))
     shared.execute("UPDATE tasks SET reminded = 1")
 ids = {title: tid for tid, title, *_ in db.list_tasks(shared)}
+# файлы и комментарии у задачи «Подготовить презентацию для клиента»
+EXTRAS_TASK = "Подготовить презентацию для клиента"
+sketch = Image.new("RGB", (640, 400), "#eef3fb")
+for i, (height, color) in enumerate(((150, "#5b8def"), (240, "#7cc68d"), (190, "#f2b84b"), (300, "#e5735c"))):
+    sketch.paste(color, (80 + i * 130, 360 - height, 160 + i * 130, 360))
+board = Image.new("RGB", (640, 420), "#fdf6e3")
+for i, color in enumerate(("#f7d26a", "#9fd3f5", "#f5a3a3", "#b6e3a8", "#d7b8f3", "#f7d26a")):
+    board.paste(color, (60 + (i % 3) * 190, 50 + (i // 3) * 180, 210 + (i % 3) * 190, 190 + (i // 3) * 180))
+for name, picture in (("Макет слайдов.png", sketch), ("Доска со встречи.png", board)):
+    buffer = io.BytesIO()
+    picture.save(buffer, "PNG")
+    db.add_attachment(shared, ids[EXTRAS_TASK], name, buffer.getvalue(), "Олег")
+db.add_attachment(shared, ids[EXTRAS_TASK], "Презентация для клиента.pptx", b"0" * 2_400_000, "Мария")
+db.add_attachment(shared, ids[EXTRAS_TASK], "Смета.xlsx", b"0" * 48_000, ME)
+for author, text in (("Олег", "Набросал макет слайдов — посмотрите, пожалуйста, во вкладке «Файлы»."),
+                     ("Мария", "Хорошо! Добавлю цифры за квартал и пришлю к вечеру."),
+                     (ME, "Смету приложил. Клиент просил уложиться в 15 минут.")):
+    db.add_comment(shared, ids[EXTRAS_TASK], text, author)
 shared.close()
 share.close()
 
@@ -172,6 +191,15 @@ def run():
     app.edit()
     grab("form.png")
     app.cancel_edit()
+    # 4б. Вкладки «Файлы» и «Комментарии» в карточке задачи
+    select(EXTRAS_TASK)
+    card = app.side.card
+    for tab, name in (("files", "files.png"), ("comments", "comments.png")):
+        card.tab.set(tab)
+        card.show_tab()
+        grab(name)
+    card.tab.set("body")
+    card.show_tab()
     app.clear_selection()
     # 5. Доска
     app.view.set("board")
