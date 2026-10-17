@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT))
 import db  # noqa: E402
 
 DARK = "dark" in sys.argv[1:]  # python tools/make_screenshots.py dark — только снимок тёмной темы
+MATRIX = "matrix" in sys.argv[1:]  # python tools/make_screenshots.py matrix — только снимок матрицы
 work = Path(tempfile.mkdtemp(prefix="todoro-shots-"))
 out = ROOT / "docs" / "screenshots"
 out.mkdir(parents=True, exist_ok=True)
@@ -137,6 +138,17 @@ def run_dark():
     root.destroy()
 
 
+def run_matrix():
+    """Только матрица Эйзенхауэра."""
+    for _ in range(6):
+        root.update()
+        time.sleep(0.2)
+    app.view.set("matrix")
+    app.switch_view()
+    grab("matrix.png")
+    root.destroy()
+
+
 def run():
     # 1. Общий список команды с Тоторо: исполнители, авторы
     app.clear_selection()
@@ -165,6 +177,10 @@ def run():
     app.view.set("board")
     app.switch_view()
     grab("board.png")
+    # 5б. Матрица Эйзенхауэра
+    app.view.set("matrix")
+    app.switch_view()
+    grab("matrix.png")
     app.view.set("list")
     app.switch_view()
     app.clear_selection()
@@ -222,5 +238,5 @@ def make_gif(frames):
     print("saved catbus.gif", len(gif), "frames", (out / "catbus.gif").stat().st_size // 1024, "KB")
 
 
-root.after(1200, run_dark if DARK else run)
+root.after(1200, run_dark if DARK else run_matrix if MATRIX else run)
 root.mainloop()

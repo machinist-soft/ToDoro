@@ -29,7 +29,8 @@
 
 - **Задачи**: заголовок и описание, срок с календарём, напоминания, приоритет «Срочно / Важно»
   (матрица Эйзенхауэра), номер у каждой задачи.
-- **Список и канбан-доска**: свои колонки-статусы с цветами, перетаскивание карточек и колонок,
+- **Список, канбан-доска и матрица Эйзенхауэра**: свои колонки-статусы с цветами, перетаскивание
+  карточек и колонок; в матрице карточку переносят в другую четверть — меняется приоритет;
   фильтры «Все / Активные / Выполненные / Просроченные», **поиск** (Ctrl+F), сортировка
   по любому столбцу.
 - **Несколько списков**: личные и **общие для команды** — в общей сетевой папке, в том числе
@@ -42,7 +43,8 @@
 - **Обновления в один клик**: программа сама сообщает о новой версии и ставит её — задачи
   сохраняются.
 
-*Tasks with due dates, reminders and urgent / important priority · list and kanban board with
+*Tasks with due dates, reminders and urgent / important priority · list, kanban board and
+Eisenhower matrix with
 custom columns, filters and column sorting · several lists, personal and shared with a team via a
 network folder (VPN works) · author and assignee, “My tasks”, “assigned to you” notices, last
 editor, protection against overwriting others’ edits · Totoro hints and the Catbus · CSV export /
@@ -58,6 +60,13 @@ import, e-mail a task, built-in help · one-click updates.*
 *Colored status columns; cards show the due date, assignee and author.*
 
 ![Канбан-доска / Kanban board](docs/screenshots/board.png)
+
+### Матрица Эйзенхауэра / Eisenhower matrix
+
+Задачи разложены по «срочно» и «важно»; перетащите карточку в другую четверть — сменится приоритет.
+*Tasks sorted by urgent and important; drag a card to another quadrant to change its priority.*
+
+![Матрица Эйзенхауэра / Eisenhower matrix](docs/screenshots/matrix.png)
 
 ### Тёмная тема / Dark theme
 

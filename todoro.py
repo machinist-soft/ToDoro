@@ -2523,7 +2523,8 @@ class SettingsDialog(tk.Toplevel):
         return page
 
     def page_board(self):
-        page = self.new_page("Доска", "Что показывать на карточках задач. Заголовок виден всегда.")
+        page = self.new_page("Доска", "Что показывать на карточках задач (на доске и в матрице). "
+                                      "Заголовок виден всегда.")
         columns = tk.Frame(page, bg=BG)
         columns.pack(fill="both", expand=True)
         card = self.card(columns, side="left", anchor="n")
@@ -3004,6 +3005,8 @@ class KanbanBoard(tk.Frame):
         self.drag = None
         self.lanes = []   # [(status_id, рамка колонки, цвет фона колонки)]
         self.cards = {}   # id задачи -> рамка карточки
+        self.card_width = LANE_WIDTH
+        self.show_priority = True
 
         self.hbar = ttk.Scrollbar(self, orient="horizontal")
         self.canvas = tk.Canvas(self, bg=BG, highlightthickness=0, xscrollcommand=self.update_hbar)
@@ -3115,7 +3118,7 @@ class KanbanBoard(tk.Frame):
         top = tk.Frame(content, bg=SURFACE)
         top.pack(fill="x")
         level = priority_level(urgent, important)
-        if "priority" in fields and level < 4:
+        if "priority" in fields and level < 4 and self.show_priority:
             tk.Label(top, image=IMAGES.get(f"priority_{level}", ""), bg=SURFACE).pack(
                 side="left", anchor="n", pady=(4, 0), padx=(0, 6))
         if "number" in fields:
@@ -3123,10 +3126,10 @@ class KanbanBoard(tk.Frame):
                 side="right", anchor="n", padx=(6, 0))
         color = DANGER if overdue else DONE if done else TEXT
         tk.Label(top, text=title, bg=SURFACE, fg=color, font=FONT_BOLD, justify="left",
-                 anchor="w", wraplength=LANE_WIDTH - 95).pack(side="left", fill="x")
+                 anchor="w", wraplength=self.card_width - 95).pack(side="left", fill="x")
         if "body" in fields and body.strip():
             tk.Label(content, text=short_text(body, 90), bg=SURFACE, fg=MUTED, font=FONT_SMALL,
-                     justify="left", anchor="w", wraplength=LANE_WIDTH - 60).pack(fill="x", pady=(4, 0))
+                     justify="left", anchor="w", wraplength=self.card_width - 60).pack(fill="x", pady=(4, 0))
         if "due" in fields and due_at:
             due_text = datetime.fromisoformat(due_at).strftime("%d.%m %H:%M")
             tk.Label(content, text=("⚠ срок " if overdue else "срок ") + due_text, bg=SURFACE,
@@ -3143,7 +3146,7 @@ class KanbanBoard(tk.Frame):
             extra.append("автор " + self.app.authors[task_id])
         if extra:
             tk.Label(content, text=" · ".join(extra), bg=SURFACE, fg=MUTED, font=FONT_SMALL,
-                     anchor="w", justify="left", wraplength=LANE_WIDTH - 60).pack(fill="x", pady=(2, 0))
+                     anchor="w", justify="left", wraplength=self.card_width - 60).pack(fill="x", pady=(2, 0))
 
         bind_tree(card, "<ButtonPress-1>", lambda e: self.on_press(e, task_id))
         bind_tree(card, "<B1-Motion>", self.on_motion)
@@ -3318,6 +3321,136 @@ class KanbanBoard(tk.Frame):
         return None
 
 
+class EisenhowerMatrix(KanbanBoard):
+    """Матрица Эйзенхауэра: четыре четверти по «срочно» и «важно».
+    Карточку можно перетащить в другую четверть — у задачи поменяется приоритет."""
+
+    # уровень приоритета (priority_level), срочно, важно, название, подсказка, цвет
+    QUADRANTS = [
+        (1, True, True, "Сделать сейчас", "срочно и важно", "#ef4444"),
+        (2, False, True, "Запланировать", "важно, но не срочно", "#f59e0b"),
+        (3, True, False, "Поручить или сделать быстро", "срочно, но не важно", "#3b82f6"),
+        (4, False, False, "Отложить", "не срочно и не важно", "#9ca3af"),
+    ]
+
+    def __init__(self, parent, app):
+        tk.Frame.__init__(self, parent, bg=BG)
+        self.app = app
+        self.selected_id = None
+        self.drag = None
+        self.lanes = []   # [(уровень приоритета, рамка четверти, цвет фона)]
+        self.cards = {}
+        self.card_width = LANE_WIDTH
+        self.show_priority = False  # приоритет и так виден по четверти
+        self.shown = None           # что нарисовано — чтобы перерисовать при смене ширины
+        self.drawn_width = None
+        self.redraw_job = None
+
+        self.columnconfigure(1, weight=1, uniform="q")
+        self.columnconfigure(2, weight=1, uniform="q")
+        self.rowconfigure(1, weight=1, uniform="q")
+        self.rowconfigure(2, weight=1, uniform="q")
+        # подписи осей: сверху «Срочно / Не срочно», слева (повёрнуто) «Важно / Не важно»
+        for column, text in ((1, "Срочно"), (2, "Не срочно")):
+            tk.Label(self, text=text, bg=BG, fg=MUTED, font=FONT_SMALL).grid(
+                row=0, column=column, pady=(0, 4))
+        for row, text in ((1, "Важно"), (2, "Не важно")):
+            side = tk.Canvas(self, bg=BG, width=22, highlightthickness=0)
+            side.grid(row=row, column=0, sticky="ns", padx=(0, 4))
+            label = side.create_text(11, 0, text=text, angle=90, fill=MUTED, font=FONT_SMALL)
+            side.bind("<Configure>", lambda e, c=side, i=label: c.coords(i, 11, e.height / 2))
+        self.quadrants = {}
+        for index, quadrant in enumerate(self.QUADRANTS):
+            frame = tk.Frame(self, bg=BG)
+            frame.grid(row=1 + index // 2, column=1 + index % 2, sticky="nsew",
+                       padx=(0, 10) if index % 2 == 0 else 0,
+                       pady=(0, 10) if index < 2 else (0, 4))
+            frame.pack_propagate(False)
+            self.quadrants[quadrant[0]] = frame
+        self.bind("<Button-1>", lambda e: self.app.clear_selection())
+        self.bind("<Configure>", self.resized)
+
+    def resized(self, event):
+        # текст карточек переносится по ширине четверти — при заметной смене ширины рисуем
+        # заново (не сразу: пока тянут край окна, событий много)
+        if self.shown and abs(self.quadrant_width() - self.drawn_width) > 20:
+            if self.redraw_job:
+                self.after_cancel(self.redraw_job)
+            self.redraw_job = self.after(150, lambda: self.render(*self.shown))
+
+    def quadrant_width(self):
+        width = self.winfo_width()
+        return (width - 36) // 2 if width > 100 else 420
+
+    def render(self, statuses, rows, overdue_ids):
+        self.redraw_job = None
+        self.shown = (statuses, rows, overdue_ids)
+        self.drawn_width = self.quadrant_width()
+        self.card_width = max(self.drawn_width - 26, 200)
+        colors = {sid: color for sid, _, color, _ in statuses}
+        by_level = {}
+        for row in rows:
+            by_level.setdefault(priority_level(row[6], row[7]), []).append(row)
+        self.lanes, self.cards = [], {}
+        for level, _, _, name, hint, color in self.QUADRANTS:
+            self.make_quadrant(level, name, hint, color, by_level.get(level, []), colors, overdue_ids)
+        if self.selected_id not in self.cards:
+            self.selected_id = None
+        self.highlight_selected()
+
+    def make_quadrant(self, level, name, hint, color, rows, colors, overdue_ids):
+        holder = self.quadrants[level]
+        for child in holder.winfo_children():
+            child.destroy()
+        bg = tint(color, 0.9)
+        # толщина рамки всегда 2: при подсветке меняется только цвет
+        box = tk.Frame(holder, bg=bg, highlightthickness=2, highlightbackground=BORDER)
+        box.pack(fill="both", expand=True)
+        tk.Frame(box, bg=color, height=5).pack(fill="x")
+        head = tk.Frame(box, bg=bg)
+        head.pack(fill="x", padx=12, pady=(8, 6))
+        tk.Label(head, text=name, bg=bg, fg=TEXT, font=FONT_BOLD).pack(side="left")
+        tk.Label(head, text=f" {len(rows)} ", bg=SURFACE, fg=MUTED, font=FONT_SMALL).pack(
+            side="left", padx=(8, 0))
+        tk.Label(head, text=hint, bg=bg, fg=MUTED, font=FONT_SMALL).pack(side="right")
+
+        # карточки — в прокручиваемой области; цветная полоска карточки — цвет её статуса
+        area = tk.Canvas(box, bg=bg, highlightthickness=0)
+        area.pack(fill="both", expand=True, padx=(10, 6), pady=(0, 10))
+        cards = tk.Frame(area, bg=bg)
+        window = area.create_window(0, 0, window=cards, anchor="nw", width=self.card_width)
+        cards.bind("<Configure>", lambda e: area.configure(scrollregion=area.bbox("all")))
+        area.bind("<Configure>", lambda e: area.itemconfigure(window, width=max(e.width - 4, 100)))
+        for row in rows:
+            self.make_card(cards, row, colors.get(row[9], color), row[0] in overdue_ids)
+        if not rows:
+            tk.Label(cards, text="Перетащите сюда задачу", bg=bg, fg=DONE,
+                     font=FONT_SMALL).pack(pady=24)
+        for widget in (box, head, area, cards):
+            widget.bind("<Button-1>", lambda e: self.app.clear_selection())
+        bind_tree(box, "<MouseWheel>",
+                  lambda e: area.yview_scroll(-1 if e.delta > 0 else 1, "units")
+                  if area.bbox("all") and area.bbox("all")[3] > area.winfo_height() else None)
+        self.lanes.append((level, box, bg))
+
+    def on_release(self, event):
+        drag, self.drag = self.drag, None
+        if not drag or drag["ghost"] is None:
+            return
+        drag["ghost"].destroy()
+        self.configure(cursor="")
+        for _, box, _ in self.lanes:
+            box.configure(highlightbackground=BORDER)
+        target = self.lane_at(event.x_root, event.y_root)
+        info = self.app.task_info(drag["id"])
+        if target is not None and info and target != info["level"]:
+            _, urgent, important, *_ = next(q for q in self.QUADRANTS if q[0] == target)
+            # матрицу перестраиваем после выхода из обработчика события
+            self.after_idle(lambda: self.app.quick_priority(drag["id"], urgent, important))
+        else:
+            self.highlight_selected()
+
+
 class TodoApp:
     def __init__(self, root):
         self.root = root
@@ -3392,13 +3525,13 @@ class TodoApp:
         ttk.Button(add_row, text="＋  Добавить", style="Accent.TButton",
                    command=self.add).pack(side="left", padx=(10, 0), ipady=2)
 
-        # Вид (список или доска), фильтр и сортировка
+        # Вид (список, доска или матрица), фильтр и сортировка
         toolbar = ttk.Frame(page)
         toolbar.pack(fill="x", pady=(0, 12))
         self.view = tk.StringVar(value=db.get_setting(self.prefs, "view", "list"))
         views = ttk.Frame(toolbar, style="Segments.TFrame", padding=3)
         views.pack(side="left")
-        for value, text in (("list", "☰  Список"), ("board", "▦  Доска")):
+        for value, text in (("list", "☰  Список"), ("board", "▦  Доска"), ("matrix", "⊞  Матрица")):
             ttk.Radiobutton(views, text=text, value=value, variable=self.view,
                             style="Segment.TRadiobutton", command=self.switch_view,
                             cursor="hand2").pack(side="left")
@@ -3540,6 +3673,7 @@ class TodoApp:
         self.tree.bind("<Button-1>", self.click_empty_space, add="+")
 
         self.board = KanbanBoard(content, self)
+        self.matrix = EisenhowerMatrix(content, self)
 
         # Клавиши работают и в списке, и на доске (но не во время набора текста)
         for sequence, action in (("<F2>", self.edit), ("<space>", self.toggle),
@@ -3573,10 +3707,17 @@ class TodoApp:
         root.after(WATCH_EVERY_MS, self.watch_changes)  # изменения других участников в общих списках
         root.after(4000, self.auto_check_update)  # раз в день — нет ли новой версии
 
-    # --- список или доска ---
+    # --- список, доска или матрица ---
 
     def main_widget(self):
-        return self.board if self.view.get() == "board" else self.table_card
+        return {"board": self.board, "matrix": self.matrix}.get(self.view.get(), self.table_card)
+
+    def cards_view(self):
+        """Доска или матрица, если показана одна из них (там задачи — карточки), иначе None."""
+        return {"board": self.board, "matrix": self.matrix}.get(self.view.get())
+
+    def dragging(self):
+        return bool(self.board.drag or self.matrix.drag)
 
     def in_paned(self, widget):
         return str(widget) in (str(p) for p in self.paned.panes())
@@ -3615,11 +3756,11 @@ class TodoApp:
             db.set_json_setting(self.prefs, "list_columns_v2", widths)
 
     def show_main_widget(self):
-        """Слева в разделителе — таблица или доска, справа — панель."""
-        other = self.table_card if self.view.get() == "board" else self.board
-        if self.in_paned(other):
-            self.paned.forget(other)
+        """Слева в разделителе — таблица, доска или матрица, справа — панель."""
         main = self.main_widget()
+        for other in (self.table_card, self.board, self.matrix):
+            if other is not main and self.in_paned(other):
+                self.paned.forget(other)
         if not self.in_paned(main):
             if self.in_paned(self.side):
                 self.paned.add(main, before=self.side, stretch="always", minsize=420)
@@ -3779,8 +3920,8 @@ class TodoApp:
     # --- выбранная задача (одна и та же в списке и на доске) ---
 
     def current_id(self):
-        if self.view.get() == "board":
-            return self.board.selected_id
+        if self.cards_view():
+            return self.cards_view().selected_id
         sel = self.tree.selection()
         return int(sel[0]) if sel else None
 
@@ -3789,17 +3930,20 @@ class TodoApp:
             self.tree.selection_set(str(task_id))
             self.tree.see(str(task_id))
         self.board.select(task_id)
+        self.matrix.select(task_id)
         self.update_side()
 
     def on_tree_select(self):
         sel = self.tree.selection()
         if self.view.get() == "list":
             self.board.select(int(sel[0]) if sel else None)
+            self.matrix.select(int(sel[0]) if sel else None)
         self.update_side()
 
     def clear_selection(self):
         self.tree.selection_remove(*self.tree.selection())
         self.board.select(None)
+        self.matrix.select(None)
         self.update_side()
 
     def click_empty_space(self, event):
@@ -4420,8 +4564,8 @@ class TodoApp:
             self.empty.configure(text=text)
             self.empty.place(relx=0.5, rely=0.5, anchor="center")
 
-        if self.view.get() == "board":
-            self.board.render(statuses, rows, overdue_ids)
+        if self.cards_view():
+            self.cards_view().render(statuses, rows, overdue_ids)
 
         if select_id is not None:
             self.select_task(select_id)
@@ -4523,7 +4667,7 @@ class TodoApp:
         task_id = self.current_id()
         info = self.task_info(task_id) if task_id is not None else None
         if not info:
-            where = "на доске" if self.view.get() == "board" else "в списке"
+            where = {"board": "на доске", "matrix": "в матрице"}.get(self.view.get(), "в списке")
             ui.showinfo(APP_NAME, f"Сначала выберите задачу {where}.", parent=self.root)
             return None
         return task_id, info["done"]
@@ -4771,7 +4915,7 @@ class TodoApp:
         # Перерисовываем, только если какая-то задача стала просроченной или наступил новый день:
         # иначе доска и список «вздрагивали» бы каждые 30 секунд
         try:
-            if self.time_state() != self.shown_state and not self.board.drag:
+            if self.time_state() != self.shown_state and not self.dragging():
                 self.refresh(select_id=self.current_id())
         except sqlite3.Error:
             pass  # общая папка недоступна — проверим в следующий раз
@@ -5071,7 +5215,7 @@ class TodoApp:
                         self.show_list_name()
             if self.current_list()["shared"]:
                 stamp = self.conn.execute("PRAGMA data_version").fetchone()[0]
-                if self.watch is not None and stamp != self.watch and not self.board.drag:
+                if self.watch is not None and stamp != self.watch and not self.dragging():
                     self.refresh(select_id=self.current_id())
                 self.watch = stamp
         except sqlite3.Error:
