@@ -17,6 +17,7 @@ import webbrowser
 from email import policy as email_policy
 from email.message import EmailMessage
 from urllib.parse import quote
+from ctypes import wintypes
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from tkinter import colorchooser, filedialog, ttk
@@ -5281,9 +5282,9 @@ class TodoApp:
     def restart(self):
         """Перезапуск программы (например, чтобы включить другую тему)."""
         if getattr(sys, "frozen", False):  # установленный ToDoro.exe
-            command = [sys.executable]
+            command = [sys.executable, RESTART_FLAG]
         else:  # запуск из исходного кода: тот же Python (pythonw — без чёрного окна)
-            command = [sys.executable, str(Path(__file__).resolve())]
+            command = [sys.executable, str(Path(__file__).resolve()), RESTART_FLAG]
         try:
             subprocess.Popen(command, close_fds=True)
         except OSError as error:
@@ -5291,6 +5292,24 @@ class TodoApp:
                          "Закройте и откройте её сами.", parent=self.root)
             return
         self.close()
+
+    def watch_show_requests(self, event):
+        """Кто-то запустил ToDoro ещё раз — показываем это окно (см. single_instance)."""
+        try:
+            if ctypes.windll.kernel32.WaitForSingleObject(event, 0) == 0:
+                self.bring_to_front()
+        except (AttributeError, OSError):
+            return
+        self.root.after(400, lambda: self.watch_show_requests(event))
+
+    def bring_to_front(self):
+        root = self.root
+        if root.state() in ("withdrawn", "iconic"):
+            root.deiconify()
+        root.lift()
+        root.attributes("-topmost", True)  # иначе Windows может только мигнуть кнопкой на панели задач
+        root.after(200, lambda: root.attributes("-topmost", False))
+        root.focus_force()
 
     def close(self):
         self.finish_editing()  # есть несохранённая правка задачи — спросим, сохранить ли её
@@ -5301,12 +5320,48 @@ class TodoApp:
         self.root.destroy()
 
 
+# Программа работает в одном экземпляре: повторный запуск только показывает уже открытое окно
+INSTANCE_MUTEX = "Local\\ToDoro-single-instance"
+SHOW_EVENT = "Local\\ToDoro-show-window"
+RESTART_FLAG = "--restart"  # перезапуск самой программой: подождать, пока закроется старая копия
+
+
+def single_instance(wait_ms=0):
+    """Занимает метку «ToDoro уже запущен». Возвращает событие, по которому другие копии
+    просят показать окно, или None, если ToDoro уже работает (ей отправлена просьба)."""
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.restype = kernel32.CreateEventW.restype = wintypes.HANDLE
+        kernel32.OpenEventW.restype = wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.SetEvent.argtypes = kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        mutex = kernel32.CreateMutexW(None, False, INSTANCE_MUTEX)
+        if not mutex:
+            return 0  # не получилось проверить — просто запускаемся
+        # 0 — метка наша, 0x80 — прошлая копия завершилась аварийно; 0x102 — занято
+        if kernel32.WaitForSingleObject(mutex, wait_ms) in (0, 0x80):
+            return kernel32.CreateEventW(None, False, False, SHOW_EVENT) or 0
+        event = kernel32.OpenEventW(0x0002, False, SHOW_EVENT)  # EVENT_MODIFY_STATE
+        if event:
+            ctypes.windll.user32.AllowSetForegroundWindow(wintypes.DWORD(-1).value)  # ASFW_ANY
+            kernel32.SetEvent(event)
+            kernel32.CloseHandle(event)
+        return None
+    except (AttributeError, OSError):
+        return 0  # не Windows
+
+
 if __name__ == "__main__":
+    show_event = single_instance(15000 if RESTART_FLAG in sys.argv else 0)
+    if show_event is None:
+        sys.exit(0)  # ToDoro уже открыт — его окно само выйдет вперёд
     # Чтобы на панели задач была наша иконка, а не значок Python.
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ToDoro.App")
     except (AttributeError, OSError):
         pass
     root = tk.Tk()
-    TodoApp(root)
+    app = TodoApp(root)
+    if show_event:
+        app.watch_show_requests(show_event)
     root.mainloop()
