@@ -8,6 +8,7 @@ import os
 import re
 import tempfile
 from datetime import datetime
+from email.utils import formataddr
 from pathlib import Path
 
 CATEGORY = "В ToDoro"     # категория письма в Outlook: «по нему уже есть задача»
@@ -120,7 +121,8 @@ def get(item, name, default=None):
         return default
 
 
-def sender_text(item):
+def sender_parts(item):
+    """(имя, адрес) отправителя письма."""
     name = get(item, "SenderName") or ""
     address = get(item, "SenderEmailAddress") or ""
     if get(item, "SenderEmailType") == "EX":  # внутренний адрес Exchange — ищем обычный
@@ -128,6 +130,21 @@ def sender_text(item):
             address = item.Sender.GetExchangeUser().PrimarySmtpAddress or ""
         except Exception:  # noqa: BLE001
             address = ""
+    return name, address if "@" in address else ""
+
+
+def sender_address(item):
+    """Отправитель для поля «Кому» письма по задаче: «Иван Иванов <ivan@firma.ru>»."""
+    name, address = sender_parts(item)
+    if not address:
+        return ""
+    if not name or name.casefold() == address.casefold():
+        return address
+    return formataddr((name, address))
+
+
+def sender_text(item):
+    name, address = sender_parts(item)
     if address and address.casefold() != name.casefold():
         return f"{name} <{address}>" if name else address
     return name or address
@@ -214,7 +231,7 @@ def read_item(item, folder):
     return dict(
         title=title[:200], body=body, due_at=due.strftime("%Y-%m-%d %H:%M") if due else None,
         important=(get(item, "Importance") == 2 or get(task, "Importance") == 2),
-        mail_id=mail_id or entry_id, entry_id=entry_id,
+        mail_id=mail_id or entry_id, entry_id=entry_id, mail_from=sender_address(item),
         store_id=get(get(item, "Parent"), "StoreID") or "",
         files=([message] if message else []) + files,
     )

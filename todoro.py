@@ -16,6 +16,7 @@ import tkinter as tk
 import webbrowser
 from email import policy as email_policy
 from email.message import EmailMessage
+from email.utils import parseaddr
 from urllib.parse import quote
 from ctypes import wintypes
 from datetime import date, datetime, time, timedelta, timezone
@@ -495,10 +496,13 @@ def build_email(number, title, status, priority, due, remind, created, urgent, b
     return subject, "\r\n".join(lines)
 
 
-def write_draft(number, subject, body):
+def write_draft(number, subject, body, to=""):
     """Сохраняет черновик письма в файл .eml и возвращает путь к нему.
-    Заголовок X-Unsent: 1 говорит почтовой программе открыть его как новое письмо."""
+    Заголовок X-Unsent: 1 говорит почтовой программе открыть его как новое письмо.
+    to — адресат (у задачи из письма Outlook — отправитель того письма)."""
     message = EmailMessage(policy=email_policy.SMTP)
+    if to:
+        message["To"] = to
     message["Subject"] = subject
     message["X-Unsent"] = "1"
     message.set_content(body.replace("\r\n", "\n"))
@@ -5455,19 +5459,21 @@ class TodoApp:
         subject, body = build_email(task[0], info["title"], info["status_name"], info["priority"],
                                     info["due"], info["remind"], info["created"],
                                     info["urgent"], info["body"], info["author"], info["assignee"])
+        to = db.mail_from(self.conn, task[0])  # задача из письма — отвечаем его отправителю
         # Основной способ — черновик письма в файле .eml: Outlook открывает его как новое
         # письмо, и длина текста не ограничена (в отличие от ссылки mailto:).
         try:
-            os.startfile(write_draft(task[0], subject, body))
+            os.startfile(write_draft(task[0], subject, body, to))
             return
         except OSError:
             pass  # .eml открыть нечем — пробуем ссылку mailto:
-        url = f"mailto:?subject={quote(subject, safe='')}&body={quote(body, safe='')}"
+        address = quote(parseaddr(to)[1], safe="@")
+        url = f"mailto:{address}?subject={quote(subject, safe='')}&body={quote(body, safe='')}"
         too_long = len(url) > MAILTO_LIMIT
         if too_long:
             # Почтовые программы не принимают слишком длинные ссылки: откроем письмо
             # с темой, а текст положим в буфер обмена.
-            url = f"mailto:?subject={quote(subject, safe='')}"
+            url = f"mailto:{address}?subject={quote(subject, safe='')}"
             self.copy_text(body)
         try:
             os.startfile(url)  # откроет почтовую программу по умолчанию (например, Outlook)
@@ -6089,7 +6095,7 @@ class TodoApp:
         task_id = db.add_task(self.conn, result["title"], status_id=result["status_id"],
                               created_by=self.created_by())
         self.apply_edit(task_id, result, refresh=False)
-        db.set_mail_id(self.conn, task_id, mail["mail_id"])
+        db.set_mail_id(self.conn, task_id, mail["mail_id"], mail["mail_from"])
         if mail["files"]:
             self.attach(task_id, mail["files"])
         outlook.mark_added(mail["entry_id"], mail["store_id"])  # категория «В ToDoro» в Outlook

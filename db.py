@@ -48,6 +48,7 @@ NEW_COLUMNS = [
     ("version", "INTEGER NOT NULL DEFAULT 0"),      # растёт при каждом изменении — чтобы заметить,
                                                     # что задачу поменял кто-то другой
     ("mail_id", "TEXT"),                            # письмо Outlook, из которого создана задача
+    ("mail_from", "TEXT"),                          # его отправитель — адресат письма по задаче
 ]
 
 # Статусы по умолчанию: (название, цвет, «задачи здесь выполнены»)
@@ -317,9 +318,17 @@ def add_task(conn, title, status_id=None, created_by=None):
     return cur.lastrowid
 
 
-def set_mail_id(conn, task_id, mail_id):
+def set_mail_id(conn, task_id, mail_id, mail_from=None):
+    """Запоминает письмо, из которого создана задача, и адрес его отправителя."""
     with conn:
-        conn.execute("UPDATE tasks SET mail_id = ? WHERE id = ?", (mail_id or None, task_id))
+        conn.execute("UPDATE tasks SET mail_id = ?, mail_from = ? WHERE id = ?",
+                     (mail_id or None, mail_from or None, task_id))
+
+
+def mail_from(conn, task_id):
+    """Адрес отправителя письма, из которого создана задача («» — задача не из письма)."""
+    row = conn.execute("SELECT mail_from FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    return (row[0] or "") if row else ""
 
 
 def find_by_mail(conn, mail_id):
@@ -500,12 +509,13 @@ def move_task_to(src, task_id, dst):
     (выполненную задачу — в «выполненную» колонку). Возвращает id задачи в новом списке."""
     row = src.execute(
         """SELECT t.title, t.body, t.done, t.created_at, t.due_at, t.remind_before, t.reminded,
-                  t.urgent, t.important, t.done_at, s.name, t.created_by, t.assignee
+                  t.urgent, t.important, t.done_at, s.name, t.created_by, t.assignee,
+                  t.mail_id, t.mail_from
            FROM tasks t LEFT JOIN statuses s ON s.id = t.status_id WHERE t.id = ?""",
         (task_id,),
     ).fetchone()
     (title, body, done, created, due_at, remind_before, reminded, urgent, important, done_at, status,
-     created_by, assignee) = row
+     created_by, assignee, mail_id, mail_from_) = row
     same = [sid for sid, name, _, is_done in list_statuses(dst)
             if name.strip().lower() == (status or "").strip().lower() and is_done == done]
     status_id = same[0] if same else first_status(dst, done)
@@ -515,10 +525,11 @@ def move_task_to(src, task_id, dst):
     with dst:
         new_id = dst.execute(
             """INSERT INTO tasks (title, body, done, created_at, due_at, remind_before, reminded,
-                                  urgent, important, done_at, status_id, created_by, assignee)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  urgent, important, done_at, status_id, created_by, assignee,
+                                  mail_id, mail_from)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (title, body, is_done, created, due_at, remind_before, reminded, urgent, important,
-             done_at if is_done else None, status_id, created_by, assignee),
+             done_at if is_done else None, status_id, created_by, assignee, mail_id, mail_from_),
         ).lastrowid
         # вложения и комментарии переезжают вместе с задачей
         dst.executemany(
