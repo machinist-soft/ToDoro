@@ -25,6 +25,7 @@ from tkinter import colorchooser, filedialog, ttk
 
 import db
 import outlook
+import snip
 import team
 import tray
 import updater
@@ -1120,9 +1121,10 @@ class TaskDialog(tk.Toplevel):
     """Запасное окно с формой задачи — когда правая панель скрыта (узкое окно)."""
 
     def __init__(self, parent, task, statuses, members=None, title="Задача", note="",
-                 standalone=False):
+                 standalone=False, image=None):
         """standalone — отдельное окно (своя кнопка на панели задач): главное окно ToDoro скрыто
-        или позади, а форма должна появиться поверх Outlook."""
+        или позади, а форма должна появиться поверх Outlook.
+        image — картинка Pillow (снимок экрана), её уменьшенная копия показывается над формой."""
         super().__init__(parent)
         self.result = None
         self.title(title)
@@ -1137,6 +1139,13 @@ class TaskDialog(tk.Toplevel):
             ttk.Label(self, text=note, style="Muted.TLabel", wraplength=520, justify="left").pack(
                 fill="x", padx=20, pady=(16, 0))
             self.form.configure(padding=(20, 10, 20, 18))
+        if image is not None:
+            from PIL import ImageTk
+            preview = image.copy()
+            preview.thumbnail((520, 180))
+            self.preview = ImageTk.PhotoImage(preview, master=self)  # иначе Tk картинку «забудет»
+            tk.Label(self, image=self.preview, bg=BORDER, bd=0, padx=1, pady=1).pack(
+                anchor="w", padx=20, pady=(10, 0))
         self.form.pack(fill="both")
         center_on_screen(self)
         if standalone:
@@ -1850,16 +1859,19 @@ class TaskCard(tk.Frame):
         self.body.pack(side="left", fill="both", expand=True)
         self.body.tag_configure("empty", foreground=DONE, font=FONT_SMALL)
 
-        # Файлы: список с превью картинок, внизу — «Добавить» и «Вставить»
+        # Файлы: список с превью картинок, внизу — «Добавить», «Вставить» и «Снимок» (области экрана)
         page = self.pages["files"] = tk.Frame(self, bg=SURFACE)
         buttons = tk.Frame(page, bg=SURFACE)
         buttons.pack(side="bottom", fill="x", pady=(8, 0))
-        buttons.columnconfigure((0, 1), weight=1, uniform="files")
+        buttons.columnconfigure((0, 1, 2), weight=1, uniform="files")
         ttk.Button(buttons, text="＋  Добавить", style="Soft.TButton", cursor="hand2",
                    command=lambda: extras.add_files(self.task_id)).grid(
             row=0, column=0, sticky="we", padx=(0, 3))
         ttk.Button(buttons, text="Вставить", style="Soft.TButton", cursor="hand2",
-                   command=self.paste).grid(row=0, column=1, sticky="we", padx=(3, 0))
+                   command=self.paste).grid(row=0, column=1, sticky="we", padx=3)
+        ttk.Button(buttons, text="✂  Снимок", style="Soft.TButton", cursor="hand2",
+                   command=lambda: extras.snip_to_task(self.task_id)).grid(
+            row=0, column=2, sticky="we", padx=(3, 0))
         self.files_area = ScrollArea(page, SURFACE)
         self.files_area.pack(fill="both", expand=True)
         self.thumbs = {}  # id вложения -> картинка-превью (иначе Tk её «забудет»)
@@ -2832,7 +2844,7 @@ class SettingsDialog(tk.Toplevel):
         Toggle(control, self.tour).pack()
         control = self.row(card, "Значок в трее при входе в Windows",
                            f"Значок возле часов: {OUTLOOK_HOTKEY_NAME} в Outlook делает задачу из письма, "
-                           "даже если ToDoro не открыт.")
+                           f"{SNIP_HOTKEY_NAME} — задачу со снимка экрана, даже если ToDoro не открыт.")
         Toggle(control, self.tray_on).pack()
         return page
 
@@ -3995,7 +4007,7 @@ class EisenhowerMatrix(KanbanBoard):
 
 class TodoApp:
     def __init__(self, root, hidden=False):
-        """hidden — не показывать главное окно: запустили только ради задачи из письма."""
+        """hidden — не показывать главное окно: запустили только ради задачи из письма или снимка."""
         self.root = root
         self.hidden = hidden
         # Окно прячем, пока всё не построено: иначе на секунду мелькает пустое чёрное окно
@@ -4075,6 +4087,9 @@ class TodoApp:
         self.mail_button = ttk.Button(add_row, text="✉  Из письма", style="TButton",
                                       command=self.from_outlook)
         self.mail_button.pack(side="left", padx=(8, 0), ipady=2)
+        self.snip_button = ttk.Button(add_row, text="✂  Снимок", style="TButton",
+                                      command=self.from_screen)
+        self.snip_button.pack(side="left", padx=(8, 0), ipady=2)
 
         # Вид (список, доска или матрица), фильтр и сортировка
         toolbar = ttk.Frame(page)
@@ -4249,7 +4264,8 @@ class TodoApp:
         if not hidden:
             self.show_window()
         root.after(1000, self.check_reminders)
-        start_hotkey(root, lambda: self.from_outlook(quiet=True))  # Ctrl+Alt+T — из любой программы
+        start_hotkey(root, [(OUTLOOK_HOTKEY, lambda: self.from_outlook(quiet=True)),  # Ctrl+Alt+T
+                            (SNIP_HOTKEY, lambda: self.from_screen(quiet=True))])     # Ctrl+Alt+S
         self.start_tray()
         root.after(WATCH_EVERY_MS, self.watch_changes)  # изменения других участников в общих списках
 
@@ -4447,6 +4463,7 @@ class TodoApp:
                  .command(f"О программе {APP_NAME}…", self.show_about))
         return (PopupMenu()
                 .command("Задача из письма Outlook", self.from_outlook, accel=OUTLOOK_HOTKEY_NAME)
+                .command("Задача со снимка экрана", self.from_screen, accel=SNIP_HOTKEY_NAME)
                 .command("Добавить колонку на доску…", self.add_lane)
                 .submenu("Экспорт и импорт", data)
                 .submenu("Примеры задач", examples)
@@ -4472,7 +4489,8 @@ class TodoApp:
              "Впишите задачу и нажмите Enter или «Добавить». Срок, важность, срочность "
              "и описание можно задать потом — кнопкой «Изменить».\n\n"
              "Поручение пришло письмом? Выделите его в Outlook и нажмите Ctrl+Alt+T "
-             "(или «Из письма» здесь) — задача заполнится по письму."),
+             "(или «Из письма» здесь) — задача заполнится по письму. Ctrl+Alt+S (или «Снимок») — "
+             "задача со снимком выделенной области экрана."),
             (self.main_widget, "Ваши задачи",
              "Щелчок по задаче открывает её карточку справа, двойной щелчок или F2 — изменить, "
              "пробел — отметить выполненной. Правая кнопка мыши — быстрые действия: срок, "
@@ -6186,9 +6204,79 @@ class TodoApp:
         self.mail_done()
 
     def mail_done(self):
-        """ToDoro запустили только ради задачи из письма (окно так и не показали) — закрываемся."""
+        """ToDoro запустили только ради задачи из письма или снимка (окно так и не показали) —
+        закрываемся."""
         if self.hidden:
             self.close()
+
+    # --- задача со снимка области экрана ---
+
+    def take_snip(self, hide):
+        """Выделение области экрана мышью. hide — сначала убрать окно ToDoro, чтобы оно не
+        закрывало то, что снимают. Возвращает (картинка, [(имя файла, PNG)]) или None."""
+        shown = hide and not self.hidden and self.root.state() == "normal"
+        if shown:
+            self.root.withdraw()
+            self.root.update()
+            time_module.sleep(0.25)  # Windows убирает окно с экрана с небольшой анимацией
+        try:
+            image = snip.select_area(self.root)
+        except Exception as error:  # noqa: BLE001 — нет Pillow, не удалось снять экран
+            image = None
+            ui.showerror(APP_NAME, f"Не удалось сделать снимок экрана:\n{error}",
+                         parent=None if self.hidden else self.root)
+        finally:
+            if shown:
+                self.root.deiconify()
+                self.bring_to_front()
+        if image is None:
+            return None
+        from io import BytesIO
+        buffer = BytesIO()
+        image.save(buffer, "PNG")
+        name = datetime.now().strftime("Снимок %d.%m.%Y %H-%M-%S.png")
+        return image, [(name, buffer.getvalue())]
+
+    def from_screen(self, quiet=False):
+        """Новая задача со снимком выделенной области экрана. Кнопка «Снимок» — окно ToDoro
+        прячется на время выделения; quiet (Ctrl+Alt+S, значок в трее) — главное окно не выходит
+        вперёд, форма появляется отдельным окном поверх остальных программ."""
+        grab = self.root.grab_current()
+        if grab is not None:  # открыто другое окно (настройки, форма) — сначала его нужно закрыть
+            if grab is not self.root:
+                bring_to_front(grab)
+            return
+        self.finish_editing()
+        snap = self.take_snip(hide=not quiet)
+        if snap is None:
+            return self.mail_done()
+        image, files = snap
+        members = self.members()
+        statuses = db.list_statuses(self.conn)
+        task = dict(title="", body="", due_at=None, remind_before=None, urgent=False,
+                    important=False, status_id=statuses[0][0],
+                    assignee=self.user_name() if members is not None else None, version=None)
+        note = (f"Со снимка экрана, в список «{self.current_list()['name']}». "
+                f"Снимок {image.width} × {image.height} будет приложен к задаче.")
+        dialog = TaskDialog(self.root, task, statuses, members=members,
+                            title="Новая задача со снимка экрана", note=note,
+                            standalone=quiet or self.hidden, image=image)
+        self.root.wait_window(dialog)
+        if dialog.result:
+            task_id = db.add_task(self.conn, dialog.result["title"],
+                                  status_id=dialog.result["status_id"], created_by=self.created_by())
+            self.apply_edit(task_id, dialog.result, refresh=False)
+            self.attach(task_id, files)
+            self.show_new_tasks([task_id])
+        self.mail_done()
+
+    def snip_to_task(self, task_id):
+        """Кнопка «Снимок» на вкладке «Файлы»: приложить к задаче снимок области экрана."""
+        if task_id is None:
+            return
+        snap = self.take_snip(hide=True)
+        if snap is not None:
+            self.attach(task_id, snap[1])
 
     def create_from_mail(self, mail, result):
         task_id = db.add_task(self.conn, result["title"], status_id=result["status_id"],
@@ -6223,12 +6311,18 @@ class TodoApp:
             except OSError:
                 pass
             self.root.after_idle(lambda: self.from_outlook(quiet=True))
+        elif SNIP_FLAG_FILE.exists():  # «ToDoro.exe --snip» или значок в трее — задача со снимка
+            try:
+                SNIP_FLAG_FILE.unlink()
+            except OSError:
+                pass
+            self.root.after_idle(lambda: self.from_screen(quiet=True))
         elif asked:
             self.bring_to_front()
         self.root.after(400, lambda: self.watch_show_requests(event))
 
     def bring_to_front(self):
-        if self.hidden:  # запустили скрытой ради задачи из письма, а теперь просят окно
+        if self.hidden:  # запустили скрытой ради задачи из письма или снимка, а теперь просят окно
             self.show_window()
         elif self.root.state() in ("withdrawn", "iconic"):
             self.root.deiconify()
@@ -6251,49 +6345,67 @@ RESTART_FLAG = "--restart"  # перезапуск самой программо
 # Уже открытой копии об этом сообщает файл-флажок: она проверяет его вместе с просьбой показать окно.
 OUTLOOK_FLAG = "--outlook"
 OUTLOOK_FLAG_FILE = db.DATA_DIR / "from-outlook.flag"
+SNIP_FLAG = "--snip"  # «ToDoro.exe --snip» — задача со снимка области экрана
+SNIP_FLAG_FILE = db.DATA_DIR / "from-screen.flag"
 
 # Сочетание клавиш «задача из письма» работает во всей Windows, пока ToDoro открыт
 OUTLOOK_HOTKEY = (0x0002 | 0x0001 | 0x4000, ord("T"))  # MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, T
 OUTLOOK_HOTKEY_NAME = "Ctrl+Alt+T"
+SNIP_HOTKEY = (0x0002 | 0x0001 | 0x4000, ord("S"))  # задача со снимка области экрана
+SNIP_HOTKEY_NAME = "Ctrl+Alt+S"
 
 
-def start_hotkey(root, action):
-    """Регистрирует Ctrl+Alt+T для всей Windows. Нажатие ловит отдельный поток (у него своя
-    очередь сообщений Windows), а действие выполняется в главном потоке окна.
-    Сочетание занято (обычно значком ToDoro в трее — он сам разбудит это окно) — поток пробует
-    снова каждые 5 секунд: значок закроют — Ctrl+Alt+T продолжит работать."""
-    pressed = threading.Event()
+def start_hotkey(root, hotkeys):
+    """Регистрирует сочетания клавиш для всей Windows: hotkeys — [(сочетание, действие)].
+    Нажатия ловит отдельный поток (у него своя очередь сообщений Windows), а действие
+    выполняется в главном потоке окна. Сочетание занято (обычно значком ToDoro в трее — он сам
+    разбудит это окно) — поток пробует снова каждые 5 секунд: значок закроют — сочетания
+    продолжат работать."""
+    pressed = [threading.Event() for _ in hotkeys]
 
     def listen():
         try:
             user32 = ctypes.windll.user32
-            while not user32.RegisterHotKey(None, 1, *OUTLOOK_HOTKEY):
-                time_module.sleep(5)
+            waiting = set(range(len(hotkeys)))
+            timer = user32.SetTimer(None, 0, 5000, None)
+
+            def register():
+                for index in sorted(waiting):
+                    if user32.RegisterHotKey(None, index + 1, *hotkeys[index][0]):
+                        waiting.discard(index)
+                if not waiting:
+                    user32.KillTimer(None, timer)
+
+            register()
             msg = wintypes.MSG()
             while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-                if msg.message == 0x0312:  # WM_HOTKEY
-                    pressed.set()
+                if msg.message == 0x0312 and 1 <= msg.wParam <= len(hotkeys):  # WM_HOTKEY
+                    pressed[msg.wParam - 1].set()
+                elif msg.message == 0x0113 and waiting:  # WM_TIMER
+                    register()
         except (AttributeError, OSError):
             pass
 
     threading.Thread(target=listen, daemon=True).start()
 
     def poll():
-        if pressed.is_set():
-            pressed.clear()
-            action()
+        for event, (_, action) in zip(pressed, hotkeys):
+            if event.is_set():
+                event.clear()
+                action()
         root.after(150, poll)
 
     poll()
 
 
-def wake_app(mail=False):
-    """Для значка в трее: показать окно ToDoro (mail=True — и сделать задачу из письма Outlook).
-    ToDoro открыт — будим его (как при повторном запуске), не открыт — запускаем."""
-    if mail:
+def wake_app(flag_file=None):
+    """Для значка в трее: показать окно ToDoro; flag_file — ещё и сделать задачу (из письма
+    Outlook или со снимка экрана). ToDoro открыт — будим его (как при повторном запуске),
+    не открыт — запускаем."""
+    if flag_file:
         try:
-            OUTLOOK_FLAG_FILE.parent.mkdir(parents=True, exist_ok=True)
-            OUTLOOK_FLAG_FILE.touch()
+            flag_file.parent.mkdir(parents=True, exist_ok=True)
+            flag_file.touch()
         except OSError:
             pass
     kernel32 = ctypes.windll.kernel32
@@ -6306,12 +6418,18 @@ def wake_app(mail=False):
         kernel32.SetEvent(event)
         kernel32.CloseHandle(event)
     else:
-        tray.launch(*([OUTLOOK_FLAG] if mail else []))
+        flag = {OUTLOOK_FLAG_FILE: OUTLOOK_FLAG, SNIP_FLAG_FILE: SNIP_FLAG}.get(flag_file)
+        tray.launch(*([flag] if flag else []))
 
 
 def run_tray():
-    tray.run(ICON_PATH, f"{APP_NAME}\n{OUTLOOK_HOTKEY_NAME} — задача из письма Outlook",
-             OUTLOOK_HOTKEY, OUTLOOK_HOTKEY_NAME, open_app=wake_app, mail_task=lambda: wake_app(mail=True))
+    tray.run(ICON_PATH, f"{APP_NAME}\n{OUTLOOK_HOTKEY_NAME} — задача из письма Outlook\n"
+                        f"{SNIP_HOTKEY_NAME} — задача со снимка экрана",
+             open_app=wake_app, actions=[
+                 (OUTLOOK_HOTKEY, OUTLOOK_HOTKEY_NAME, "Задача из письма Outlook",
+                  lambda: wake_app(OUTLOOK_FLAG_FILE)),
+                 (SNIP_HOTKEY, SNIP_HOTKEY_NAME, "Задача со снимка экрана",
+                  lambda: wake_app(SNIP_FLAG_FILE))])
 
 
 def single_instance(wait_ms=0):
@@ -6346,10 +6464,12 @@ if __name__ == "__main__":
     if tray.TRAY_QUIT_FLAG in sys.argv:  # установщик просит закрыть значок
         tray.stop()
         sys.exit(0)
-    if OUTLOOK_FLAG in sys.argv:
+    quiet_task = next((flag for flag in (OUTLOOK_FLAG, SNIP_FLAG) if flag in sys.argv), None)
+    if quiet_task:  # только задача из письма или со снимка — открытой копии скажет файл-флажок
+        flag_file = OUTLOOK_FLAG_FILE if quiet_task == OUTLOOK_FLAG else SNIP_FLAG_FILE
         try:
-            OUTLOOK_FLAG_FILE.parent.mkdir(parents=True, exist_ok=True)
-            OUTLOOK_FLAG_FILE.touch()
+            flag_file.parent.mkdir(parents=True, exist_ok=True)
+            flag_file.touch()
         except OSError:
             pass
     show_event = single_instance(15000 if RESTART_FLAG in sys.argv else 0)
@@ -6361,7 +6481,7 @@ if __name__ == "__main__":
     except (AttributeError, OSError):
         pass
     root = tk.Tk()
-    app = TodoApp(root, hidden=OUTLOOK_FLAG in sys.argv)  # только задача из письма — без главного окна
+    app = TodoApp(root, hidden=bool(quiet_task))  # только задача из письма или снимка — без окна
     if show_event:
         app.watch_show_requests(show_event)
     root.mainloop()

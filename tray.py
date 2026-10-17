@@ -1,8 +1,9 @@
 """Значок ToDoro в трее (возле часов) — маленький помощник, который запускается вместе с Windows.
 
-Он не открывает окно ToDoro и почти не занимает памяти, но держит сочетание Ctrl+Alt+T:
-нажали его в Outlook — помощник запускает ToDoro (или будит уже открытый) и тот делает задачу
-из выделенного письма. Щелчок по значку открывает ToDoro.
+Он не открывает окно ToDoro и почти не занимает памяти, но держит сочетания клавиш:
+Ctrl+Alt+T в Outlook — задача из выделенного письма, Ctrl+Alt+S — задача со снимка области
+экрана. Помощник запускает ToDoro (или будит уже открытый), и тот делает задачу.
+Щелчок по значку открывает ToDoro.
 
 Запускается как «ToDoro.exe --tray» (из исходного кода: pythonw todoro.py --tray).
 Автозапуск — значение «ToDoro» в разделе реестра HKCU\\...\\Run (только для текущего пользователя).
@@ -20,10 +21,9 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_VALUE = "ToDoro"
 MUTEX = "Local\\ToDoro-tray"
 
-# Пункты меню значка
-MENU_OPEN, MENU_MAIL, MENU_EXIT = 1, 2, 3
-HOTKEY_ID = 1
-RETRY_TIMER, RETRY_MS = 1, 5000  # Ctrl+Alt+T занят (открытым ToDoro) — пробуем снова каждые 5 с
+# Пункты меню значка; пункты действий (письмо, снимок) — MENU_ACTIONS + номер действия
+MENU_OPEN, MENU_EXIT, MENU_ACTIONS = 1, 2, 10
+RETRY_TIMER, RETRY_MS = 1, 5000  # сочетание занято (открытым ToDoro) — пробуем снова каждые 5 с
 
 
 def app_command(*args):
@@ -107,9 +107,10 @@ def stop(wait_s=3.0):
 
 # --- сам помощник ---
 
-def run(icon_path, tip, hotkey, hotkey_name, open_app, mail_task):
-    """Значок в трее и Ctrl+Alt+T. Работает, пока не выберут «Закрыть значок» или не выйдут из Windows.
-    open_app() — показать окно ToDoro, mail_task() — задача из выделенного в Outlook письма."""
+def run(icon_path, tip, open_app, actions):
+    """Значок в трее и сочетания клавиш. Работает, пока не выберут «Закрыть значок» или не выйдут
+    из Windows. open_app() — показать окно ToDoro; actions — [(сочетание, его название, пункт меню,
+    действие)]: задача из письма Outlook, задача со снимка экрана."""
     import win32api
     import win32con
     import win32gui
@@ -122,11 +123,13 @@ def run(icon_path, tip, hotkey, hotkey_name, open_app, mail_task):
     user32 = ctypes.windll.user32
     wm_tray = win32con.WM_USER + 20
     taskbar_created = win32gui.RegisterWindowMessage("TaskbarCreated")  # Проводник перезапустился
-    state = {"hotkey": False}
+    registered = set()  # номера действий, чьи сочетания удалось занять
 
     def register_hotkey(hwnd):
-        state["hotkey"] = bool(user32.RegisterHotKey(hwnd, HOTKEY_ID, *hotkey))
-        if state["hotkey"]:
+        for index, (hotkey, *_) in enumerate(actions):
+            if index not in registered and user32.RegisterHotKey(hwnd, index + 1, *hotkey):
+                registered.add(index)
+        if len(registered) == len(actions):
             user32.KillTimer(hwnd, RETRY_TIMER)
         else:
             user32.SetTimer(hwnd, RETRY_TIMER, RETRY_MS, None)
@@ -151,8 +154,9 @@ def run(icon_path, tip, hotkey, hotkey_name, open_app, mail_task):
     def show_menu(hwnd):
         menu = win32gui.CreatePopupMenu()
         win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_OPEN, "Открыть ToDoro")
-        win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_MAIL,
-                            f"Задача из письма Outlook\t{hotkey_name}")
+        for index, (_, hotkey_name, label, _) in enumerate(actions):
+            win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_ACTIONS + index,
+                                f"{label}\t{hotkey_name}")
         win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
         win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_EXIT, "Закрыть значок")
         win32gui.SetMenuDefaultItem(menu, MENU_OPEN, False)
@@ -180,14 +184,15 @@ def run(icon_path, tip, hotkey, hotkey_name, open_app, mail_task):
         command = win32api.LOWORD(wparam)
         if command == MENU_OPEN:
             safely(open_app)
-        elif command == MENU_MAIL:
-            safely(mail_task)
+        elif MENU_ACTIONS <= command < MENU_ACTIONS + len(actions):
+            safely(actions[command - MENU_ACTIONS][3])
         elif command == MENU_EXIT:
             win32gui.DestroyWindow(hwnd)
         return 0
 
     def on_hotkey(hwnd, msg, wparam, lparam):
-        safely(mail_task)
+        if 1 <= wparam <= len(actions):
+            safely(actions[wparam - 1][3])
         return 0
 
     def on_timer(hwnd, msg, wparam, lparam):
@@ -208,8 +213,8 @@ def run(icon_path, tip, hotkey, hotkey_name, open_app, mail_task):
         return 0
 
     def on_destroy(hwnd, msg, wparam, lparam):
-        if state["hotkey"]:
-            user32.UnregisterHotKey(hwnd, HOTKEY_ID)
+        for index in registered:
+            user32.UnregisterHotKey(hwnd, index + 1)
         try:
             win32gui.Shell_NotifyIcon(win32gui.NIM_DELETE, (hwnd, 0))
         except win32gui.error:
