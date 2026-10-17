@@ -235,6 +235,11 @@ def run():
     dialog.attributes("-topmost", True)
     grab("settings.png", window=dialog)
     dialog.destroy()
+    # 6б. «О программе»: логотип Machinist Soft (снимаем до шага 7 — там подменяется APP_VERSION)
+    dialog = T.AboutWindow(root, lambda: None)
+    dialog.attributes("-topmost", True)
+    grab("about.png", window=dialog)
+    dialog.destroy()
     # 7. Окно обновления: последний выпущенный раздел RELEASE_NOTES.md («Не выпущено» пропускаем),
     # «текущая» версия — предыдущий выпуск (подменяется только для снимка)
     notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
