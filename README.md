@@ -206,6 +206,56 @@ python todoro.py
 *[Report a bug](https://github.com/machinist-soft/ToDoro/issues/new?template=bug_report.yml) or
 [suggest a feature](https://github.com/machinist-soft/ToDoro/issues/new?template=feature_request.yml).*
 
+## Как устроена программа / Architecture
+
+Сервера нет: задачи лежат в файлах SQLite на вашем компьютере, общие списки — в сетевой папке.
+В интернет программа обращается только к GitHub — узнать, есть ли новая версия.
+*No server: tasks live in SQLite files on your PC, shared lists in a network folder. The only
+internet request is the update check on GitHub.*
+
+```mermaid
+flowchart TB
+    shortcut["Ярлык на рабочем столе<br/>ToDoro.exe, одна копия"]
+    trayicon["Значок в трее — tray.py<br/>Ctrl+Alt+T и Ctrl+Alt+S"]
+
+    app["<b>Окно ToDoro — todoro.py (Tkinter)</b><br/>TodoApp · список, доска, матрица<br/>диалоги · Тоторо и полоса-баннер<br/>фоновый поток — сеть без зависаний"]
+
+    shortcut --> app
+    trayicon --> app
+
+    dbpy["db.py<br/>задачи, статусы"]
+    teampy["team.py<br/>общие списки"]
+    snippy["snip.py<br/>скриншот"]
+    outlookpy["outlook.py<br/>из письма"]
+    updaterpy["updater.py<br/>обновления"]
+    sqlite[("SQLite<br/>встроена, без сервера")]
+
+    app --> dbpy & teampy & snippy & outlookpy & updaterpy
+    teampy --> dbpy
+    dbpy --> sqlite
+
+    pc[/"Этот ПК<br/>%APPDATA%\ToDoro"/]
+    net[/"Сеть / VPN<br/>общая папка"/]
+    screen[/"Экран<br/>WinAPI"/]
+    outlook[/"Outlook<br/>через COM"/]
+    github[/"GitHub<br/>Releases"/]
+
+    sqlite --> pc & net
+    snippy --> screen
+    outlookpy --> outlook
+    updaterpy --> github
+```
+
+| Файл / File | Что делает / What it does |
+|---|---|
+| `todoro.py` | окно и всё, что в нём видно / the window and everything in it |
+| `db.py` | чтение и запись задач в SQLite / reading and writing tasks in SQLite |
+| `team.py` | общие списки, участники, резервные копии / shared lists, members, backups |
+| `outlook.py` | задача из письма Outlook / task from an Outlook e-mail |
+| `snip.py` | снимок области экрана / screen-area snapshot |
+| `tray.py` | значок в трее и горячие клавиши / tray icon and hotkeys |
+| `updater.py` | проверка и установка обновлений / update check and install |
+
 ## Лицензия / License
 
 Код — MIT, © 2026 Machinist. См. [LICENSE](LICENSE).
