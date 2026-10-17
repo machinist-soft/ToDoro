@@ -226,7 +226,7 @@ def load_images():
 
 DEFAULT_TIME = ("09", "00")  # время срока по умолчанию
 CHECK_EVERY_MS = 30_000      # как часто проверять напоминания (30 секунд)
-WATCH_EVERY_MS = 3_000       # как часто смотреть, не изменил ли кто-то общий список
+WATCH_EVERY_MS = 300         # как часто смотреть на результат фоновой проверки общей папки
 
 HOURS = [f"{h:02d}" for h in range(24)]
 MINUTES = [f"{m:02d}" for m in range(0, 60, 5)]
@@ -3278,6 +3278,15 @@ class NewListDialog(NameDialog):
             self.result = (self.result, self.shared.get())
 
 
+def close_quietly(conns):
+    """Закрывает соединения с базами (вызывается в фоновом потоке)."""
+    for conn in conns:
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+
+
 def in_background(root, work, done):
     """Выполняет work() в отдельном потоке (чтобы окно не «зависало»), а done(результат, ошибка)
     вызывает уже в основном потоке — Tk можно трогать только из него."""
@@ -4263,10 +4272,13 @@ class TodoApp:
         self.probe = None      # фоновая проверка связи с общей папкой (team.Probe)
         self.lost_list = None  # общий список, который был открыт, когда пропала связь
         self.reconnect_at = 0  # раньше этого времени (monotonic) не пытаемся переподключиться
+        # что видела фоновая проверка (team.Probe) в прошлый раз — чтобы заметить чужие изменения
+        self.seen_seq, self.team_counter, self.list_counter = None, None, None
+        self.own_credit, self.credit_until = 0, 0  # свои записи, ещё не замеченные проверкой
+        self.reminders_due = False  # пора проверить напоминания в общих списках
         self.connect_team(wait=True)
         self.load_lists()
         self.list_id = db.get_setting(self.prefs, "current_list", db.PERSONAL)
-        self.watch = None  # «отпечаток» открытого общего списка — чтобы заметить чужие изменения
         self.all_rows = []   # все задачи открытого списка (читаются в refresh)
         self.done_today = 0
         self.authors = {}    # id задачи -> кто создал (в общих списках)
@@ -6147,7 +6159,16 @@ class TodoApp:
         self.extras_changed(self.current_id())
 
     def check_reminders(self):
-        """Раз в 30 секунд проверяет, не пора ли о чём-то напомнить."""
+        """Раз в 30 секунд: не пора ли о чём-то напомнить. Если подключены общие списки,
+        проверяем сразу после удачной фоновой проверки связи (on_fresh_probe) — иначе
+        обрыв сети в этот момент «повесил» бы окно."""
+        if self.team:
+            self.reminders_due = True
+        else:
+            self.do_check_reminders()
+        self.root.after(CHECK_EVERY_MS, self.check_reminders)
+
+    def do_check_reminders(self):
         # Перерисовываем, только если какая-то задача стала просроченной или наступил новый день:
         # иначе доска и список «вздрагивали» бы каждые 30 секунд
         try:
@@ -6189,7 +6210,6 @@ class TodoApp:
             self.root.lift()
             self.root.bell()
             self.show_reminders(lines, topmost=True)
-        self.root.after(CHECK_EVERY_MS, self.check_reminders)
 
     def collect_pending(self, skip=()):
         """Задачи из всех списков, у которых прошёл срок или пришло время напоминания:
@@ -6295,7 +6315,7 @@ class TodoApp:
         try:
             self.team = team.Team(folder)
             self.team.touch_member(self.user_name())
-            self.team_version = self.team.version()
+            self.seen_seq, self.team_counter, self.list_counter = None, None, None
             in_background(self.root, self.team.backup_daily, lambda result, error: None)
         except (team.TeamError, sqlite3.Error, OSError) as error:
             self.team, self.team_error = None, str(error)
@@ -6315,19 +6335,20 @@ class TodoApp:
         открываем личный. Когда связь вернётся, watch_changes подключится снова.
         Возвращает название общего списка, который был открыт (или None)."""
         name = None
+        # Файлы в сетевой папке закрываем в фоне: без связи закрытие тоже может «повиснуть»
+        closing = [self.list_conns.pop(i["id"]) for i in self.lists
+                   if i["shared"] and i["id"] in self.list_conns]
+        if self.team:
+            closing.append(self.team.conn)
+        for conn in closing:
+            if isinstance(conn, db.SharedConnection):
+                conn.reading = False  # отложенный end_reading больше не трогает соединение
         if self.list_id and self.current_list()["shared"]:
             self.lost_list, name = self.list_id, self.current_list()["name"]
-            self.forget_list(self.list_id)
             self.list_id = None
             self.editing = None
             self.switch_list(db.PERSONAL)
-        for item in [i for i in self.lists if i["shared"]]:
-            self.forget_list(item["id"])
-        if self.team:
-            try:
-                self.team.close()
-            except sqlite3.Error:
-                pass
+        threading.Thread(target=close_quietly, args=(closing,), daemon=True).start()
         self.team = None
         self.team_error = self.offline_text(db.get_setting(self.prefs, "shared_folder", ""))
         self.load_lists()
@@ -6493,7 +6514,7 @@ class TodoApp:
             ui.showerror(APP_NAME, text, parent=self.root)
             return
         self.list_id, self.conn = list_id, conn
-        self.watch = None
+        self.list_counter = None
         db.set_setting(self.prefs, "current_list", list_id)
         self.show_list_name()
         self.refresh()
@@ -6620,37 +6641,74 @@ class TodoApp:
         общих списков. Перерисовываем, только если что-то изменилось.
         Заодно следит за связью с общей папкой: пропала — убираем общие списки,
         вернулась — подключаемся снова."""
+        probe = self.probe
         if self.team and not self.share_online():
             name = self.go_offline()
             if name:
                 self.side.totoro.show(f"Пропала связь с общим списком «{name}» — общая папка "
                                       "недоступна (сеть, VPN). Пока открыт личный список. Когда "
                                       "связь вернётся, общий список откроется сам.", mood="alert")
-        elif (self.team is None and self.probe and self.probe.online()
-              and time_module.monotonic() >= self.reconnect_at):
-            self.reconnect_team()
-        try:
-            if self.team:
-                version = self.team.version()
-                if version != self.team_version:
-                    self.team_version = version
-                    self.load_lists()
-                    if not any(i["id"] == self.list_id for i in self.lists):
-                        self.forget_list(self.list_id)
-                        self.list_id = None
-                        self.switch_list(db.PERSONAL)
-                        self.side.totoro.show("Общий список, который был открыт, удалил другой "
-                                              "участник.", mood="alert")
-                    else:
-                        self.show_list_name()
-            if self.current_list()["shared"]:
-                stamp = self.conn.execute("PRAGMA data_version").fetchone()[0]
-                if self.watch is not None and stamp != self.watch and not self.dragging():
-                    self.refresh(select_id=self.current_id())
-                self.watch = stamp
-        except sqlite3.Error:
-            pass  # связь пропала — попробуем в следующий раз
+        elif self.team is None:
+            if probe and probe.online() and time_module.monotonic() >= self.reconnect_at:
+                self.reconnect_team()
+        elif probe.seq != self.seen_seq:
+            # Только что была удачная проверка связи: сеть точно есть — можно читать.
+            # Само окно к сетевой папке ходит только в такие моменты (и когда вы что-то делаете).
+            self.seen_seq = probe.seq
+            try:
+                self.on_fresh_probe(probe)
+            except sqlite3.Error:
+                pass  # связь пропала — проверка это заметит
+        if self.team and probe:
+            probe.watch = self.team.path(self.current_list()) if self.current_list()["shared"] else None
         self.root.after(WATCH_EVERY_MS, self.watch_changes)
+
+    def on_fresh_probe(self, probe):
+        """Фоновая проверка только что дочиталась до папки: смотрим, не поменял ли кто-то
+        перечень общих списков или открытый список, и не пора ли о чём-то напомнить."""
+        if probe.team_counter != self.team_counter:
+            first = self.team_counter is None
+            self.team_counter = probe.team_counter
+            if not first:
+                self.load_lists()
+                if not any(i["id"] == self.list_id for i in self.lists):
+                    self.forget_list(self.list_id)
+                    self.list_id = None
+                    self.switch_list(db.PERSONAL)
+                    self.side.totoro.show("Общий список, который был открыт, удалил другой "
+                                          "участник.", mood="alert")
+                else:
+                    self.show_list_name()
+        self.check_list_changed(probe)
+        if self.reminders_due:
+            self.reminders_due = False
+            self.do_check_reminders()
+
+    def check_list_changed(self, probe):
+        """Перерисовывает открытый общий список, если его поменял кто-то другой."""
+        if not (self.current_list()["shared"] and probe.list_counter) or self.dragging():
+            return
+        path, counter = probe.list_counter
+        if path != self.team.path(self.current_list()):
+            return  # проверка ещё смотрела на прежний список
+        seen, self.list_counter = self.list_counter, (path, counter)
+        # Свои записи, которых проверка ещё могла не увидеть (она читает файл
+        # параллельно с окном), — «в зачёт»; через несколько секунд зачёт сгорает
+        if self.conn.own_writes:
+            self.own_credit += self.conn.own_writes
+            self.conn.own_writes = 0
+            self.credit_until = time_module.monotonic() + 5
+        elif time_module.monotonic() > self.credit_until:
+            self.own_credit = 0
+        if not (seen and seen[0] == path):  # первая проверка этого списка — точка отсчёта
+            self.own_credit = 0
+            return
+        grown = counter - seen[1]
+        if grown > self.own_credit:  # список менял кто-то ещё
+            self.own_credit = 0
+            self.refresh(select_id=self.current_id())
+        else:
+            self.own_credit -= grown
 
     # --- обновления ---
 

@@ -72,6 +72,24 @@ class SharedConnection(sqlite3.Connection):
     root = None      # окно Tk; пока не задано — соединение работает как обычное
     reading = False  # открыта наша транзакция чтения
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Сколько записей сохранили мы сами: счётчик изменений файла растёт и от них, а
+        # перечитывать список нужно, только если его поменял кто-то другой
+        self.own_writes = 0
+        self.dirty = False
+        self.set_trace_callback(self.trace)
+
+    def trace(self, sql):
+        word = sql.lstrip()[:8].upper()
+        if word.startswith(("INSERT", "UPDATE", "DELETE", "REPLACE")):
+            self.dirty = True
+        elif word.startswith("COMMIT"):
+            self.own_writes += self.dirty
+            self.dirty = False
+        elif word.startswith("ROLLBACK"):
+            self.dirty = False
+
     def execute(self, sql, *args):
         if self.root is not None:
             word = sql.lstrip()[:6].upper()
@@ -106,8 +124,11 @@ class SharedConnection(sqlite3.Connection):
 def connect(path=None, timeout=5, shared=False):
     """timeout — сколько секунд ждать, если файл сейчас пишет кто-то другой (общие списки).
     shared — файл в общей сетевой папке (см. SharedConnection)."""
+    # общий список при обрыве связи закрывается в фоне (иначе окно зависнет) — отсюда
+    # check_same_thread=False; пользуется соединением всё равно только окно
     conn = sqlite3.connect(path or default_path(), timeout=timeout,
-                           factory=SharedConnection if shared else sqlite3.Connection)
+                           factory=SharedConnection if shared else sqlite3.Connection,
+                           check_same_thread=not shared)
     # Таблица tasks — это как лист Excel: каждая строка — одна задача.
     conn.execute(
         """

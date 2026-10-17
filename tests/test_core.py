@@ -216,8 +216,14 @@ class TeamTests(TempDir):
         for func in root.idle:  # окно освободилось
             func()
         self.assertFalse(mine.in_transaction)
+        before = team.change_counter(path)
         db.add_task(other, "Вторая")  # другой участник может писать
+        self.assertEqual(team.change_counter(path), before + 1)  # счётчик видит чужую запись
         self.assertEqual(len(db.list_tasks(mine)), 2)
+        writes = mine.own_writes
+        db.add_task(mine, "Третья")
+        self.assertEqual(mine.own_writes, writes + 1)  # свои записи считаем
+        self.assertEqual(team.change_counter(path), before + 2)
         mine.close()
         root.idle[-1]()  # отложенное закрытие транзакции после close не падает
         other.close()

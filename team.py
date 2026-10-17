@@ -21,32 +21,52 @@ BACKUP_DAYS = 14
 TIMEOUT = 15  # секунд ждать, если файл сейчас пишет другой участник
 
 
+def change_counter(path):
+    """Счётчик изменений файла SQLite (байты 24–27 заголовка): растёт на 1 при каждой
+    сохранённой записи. Читается без блокировок — по нему видно, что файл кто-то поменял."""
+    with open(path, "rb") as file:  # открыть и прочитать — нужен ответ сервера
+        header = file.read(28)
+    if len(header) < 28:
+        raise OSError("файл слишком короткий")
+    return int.from_bytes(header[24:28], "big")
+
+
 class Probe:
-    """Фоновая проверка, на связи ли общая папка.
+    """Фоновая проверка связи с общей папкой — и заодно «сторож» изменений.
 
     Когда пропадает Wi-Fi или VPN, любое обращение к сетевой папке может «повиснуть» на
-    десятки секунд — и окно программы белеет. Поэтому окно само к папке не ходит, пока эта
-    проверка (в отдельном потоке) не скажет, что связь есть. Если проверка сама повисла
-    дольше HANG секунд — значит, связи нет."""
-    EVERY = 3  # секунд между проверками
-    HANG = 3   # секунд: дольше — считаем, что связи нет
+    десятки секунд — и окно программы белеет. Поэтому окно само к папке регулярно не ходит:
+    раз в секунду эта проверка (в отдельном потоке) читает счётчики изменений team.db и
+    открытого общего списка (watch), а окно только смотрит на результат. Если проверка
+    повисла дольше HANG секунд — значит, связи нет."""
+    EVERY = 1    # секунд между проверками
+    HANG = 2.5   # секунд: дольше — считаем, что связи нет (обычная проверка через VPN — доли секунды)
 
     def __init__(self, folder):
         self.folder = folder
         self.file = Path(str(folder).strip()) / "ToDoro" / "team.db"
+        self.watch = None     # файл открытого общего списка (задаёт окно)
         self.ok = None        # None — ещё ни разу не проверяли
         self.started = None   # когда началась идущая сейчас проверка
+        self.seq = 0          # номер последней удачной проверки
+        self.team_counter = None
+        self.list_counter = None  # (файл, счётчик)
         self.stopped = False
         threading.Thread(target=self.run, daemon=True).start()
 
     def run(self):
         while not self.stopped:
             self.started = time.monotonic()
+            watch = self.watch
             try:
-                with open(self.file, "rb") as file:  # открыть и прочитать — нужен ответ сервера
-                    ok = len(file.read(100)) == 100
+                team_counter = change_counter(self.file)
+                list_counter = (watch, change_counter(watch)) if watch else None
+                ok = True
             except OSError:
                 ok = False
+            if ok:
+                self.team_counter, self.list_counter = team_counter, list_counter
+                self.seq += 1
             self.ok, self.started = ok, None
             time.sleep(self.EVERY)
 
@@ -70,7 +90,9 @@ class Team:
         self.root = Path(self.folder) / "ToDoro"
         try:
             (self.root / "lists").mkdir(parents=True, exist_ok=True)
-            self.conn = sqlite3.connect(self.root / "team.db", timeout=TIMEOUT)
+            # check_same_thread=False — при обрыве связи соединение закрывается в фоне
+            self.conn = sqlite3.connect(self.root / "team.db", timeout=TIMEOUT,
+                                        check_same_thread=False)
             self.conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS lists (
@@ -132,11 +154,6 @@ class Team:
             self.path(item).unlink()
         except OSError:
             pass  # файл сейчас открыт у кого-то — список всё равно скрыт
-
-    def version(self):
-        """Меняется, когда кто-то добавил, переименовал или удалил общий список."""
-        return self.conn.execute("PRAGMA data_version").fetchone()[0], \
-            self.conn.execute("SELECT COUNT(*), MAX(created_at) FROM lists WHERE deleted = 0").fetchone()
 
     # --- участники ---
 
