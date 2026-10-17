@@ -3323,7 +3323,8 @@ class KanbanBoard(tk.Frame):
 
 class EisenhowerMatrix(KanbanBoard):
     """Матрица Эйзенхауэра: четыре четверти по «срочно» и «важно».
-    Карточку можно перетащить в другую четверть — у задачи поменяется приоритет."""
+    Карточку можно перетащить в другую четверть — у задачи поменяется приоритет.
+    Просроченная задача всегда срочная: она стоит в левой колонке, пока не перенесут срок."""
 
     # уровень приоритета (priority_level), срочно, важно, название, подсказка, цвет
     QUADRANTS = [
@@ -3382,6 +3383,11 @@ class EisenhowerMatrix(KanbanBoard):
         width = self.winfo_width()
         return (width - 36) // 2 if width > 100 else 420
 
+    def level(self, task_id, urgent, important):
+        """Четверть задачи: просроченная считается срочной."""
+        overdue = self.shown is not None and task_id in self.shown[2]
+        return priority_level(urgent or overdue, important)
+
     def render(self, statuses, rows, overdue_ids):
         self.redraw_job = None
         self.shown = (statuses, rows, overdue_ids)
@@ -3390,7 +3396,7 @@ class EisenhowerMatrix(KanbanBoard):
         colors = {sid: color for sid, _, color, _ in statuses}
         by_level = {}
         for row in rows:
-            by_level.setdefault(priority_level(row[6], row[7]), []).append(row)
+            by_level.setdefault(self.level(row[0], row[6], row[7]), []).append(row)
         self.lanes, self.cards = [], {}
         for level, _, _, name, hint, color in self.QUADRANTS:
             self.make_quadrant(level, name, hint, color, by_level.get(level, []), colors, overdue_ids)
@@ -3443,12 +3449,22 @@ class EisenhowerMatrix(KanbanBoard):
             box.configure(highlightbackground=BORDER)
         target = self.lane_at(event.x_root, event.y_root)
         info = self.app.task_info(drag["id"])
-        if target is not None and info and target != info["level"]:
-            _, urgent, important, *_ = next(q for q in self.QUADRANTS if q[0] == target)
-            # матрицу перестраиваем после выхода из обработчика события
-            self.after_idle(lambda: self.app.quick_priority(drag["id"], urgent, important))
-        else:
+        current = info and self.level(drag["id"], info["urgent"], info["level"] in (1, 2))
+        if target is None or not info or target == current:
             self.highlight_selected()
+            return
+        _, urgent, important, *_ = next(q for q in self.QUADRANTS if q[0] == target)
+        if info["overdue"] and not urgent:
+            self.highlight_selected()
+            ui.showinfo("Срок уже прошёл",
+                        f"«{short_text(info['title'])}» просрочена, поэтому она остаётся среди срочных.\n\n"
+                        "Чтобы задача перестала быть срочной, перенесите её срок или отметьте её "
+                        "выполненной.", parent=self.app.root)
+            return
+        if info["overdue"]:  # срочной её делает просрочка — свой флажок «срочно» не трогаем
+            urgent = bool(info["urgent"])
+        # матрицу перестраиваем после выхода из обработчика события
+        self.after_idle(lambda: self.app.quick_priority(drag["id"], urgent, important))
 
 
 class TodoApp:
