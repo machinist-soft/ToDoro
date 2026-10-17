@@ -3,7 +3,9 @@
 Поднимает сервер ToDoro для телефона (phone.py) на временных данных с примерами задач
 (общий список «Команда», как на скриншотах окна) и запускает в android/ тест ScreenshotTest:
 Robolectric выполняет приложение прямо в Java и снимает экраны.
-Снимки — в android/app/build/screens/. Данные пользователя не трогаются.
+Снимки — в android/app/build/screens/; для README уменьшенные копии главного экрана,
+карточки задачи и тёмной темы кладутся в docs/screenshots/android-*.png.
+Данные пользователя не трогаются.
 
 Запуск из папки проекта:  python tools/android_screenshots.py
 """
@@ -66,6 +68,21 @@ def prepare(work):
     return prefs_path, token, item["id"]
 
 
+# снимок экрана телефона -> картинка для README
+README_SHOTS = {"1-main": "android-list.png", "2-card": "android-card.png", "4-dark": "android-dark.png"}
+
+
+def copy_for_readme(screens):
+    from PIL import Image
+    out = ROOT / "docs" / "screenshots"
+    for source, name in README_SHOTS.items():
+        image = Image.open(screens / f"{source}.png").convert("RGB")
+        width = 420
+        image = image.resize((width, round(image.height * width / image.width)), Image.LANCZOS)
+        image.save(out / name, optimize=True)
+        print("saved", out / name)
+
+
 def main():
     work = Path(tempfile.mkdtemp(prefix="todoro-android-shots-"))
     try:
@@ -85,6 +102,8 @@ def main():
         server.shutdown()
         for shot in sorted(screens.glob("*.png")):
             print(shot)
+        if result.returncode == 0:
+            copy_for_readme(screens)
         sys.exit(result.returncode)
     finally:
         shutil.rmtree(work, ignore_errors=True)

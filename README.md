@@ -41,7 +41,7 @@
 - **Несколько списков**: личные и **общие для команды** — в общей сетевой папке, в том числе
   через VPN.
 - **Задачи на телефоне Android**: личные и общие списки в приложении ToDoro — отметить, добавить,
-  изменить; работает и без связи, напоминает о сроках. Установка и подключение — по QR-коду
+  изменить, обсудить в комментариях; работает и без связи, напоминает о сроках. Установка и подключение — по QR-коду
   (☰ Меню → Подключить телефон); телефон берёт задачи у компьютера по домашней сети или VPN.
 - **Командная работа**: автор и исполнитель задачи, «Мои задачи», уведомление «Вам назначены
   задачи», «кто и когда изменил», защита от затирания чужих правок.
@@ -65,7 +65,7 @@ overdue task, one click opens a task · file attachments, pasted
 screenshots and comments in every task · list, kanban board with
 custom columns and Eisenhower matrix (drag a card to another quadrant to change its priority),
 filters, search and column sorting · several lists, personal and shared with a team via a network
-folder (VPN works) · an Android app: personal and shared lists on your phone, works offline,
+folder (VPN works) · an Android app: personal and shared lists on your phone, comments, works offline,
 due-date reminders, installed and paired by QR code · author and assignee, “My tasks”, “assigned to you” notices, last editor,
 protection against overwriting others’ edits · a living Totoro helper and the Catbus · a guided
 tour on first launch · create a task from an Outlook e-mail (Ctrl+Alt+T): subject, text,
@@ -112,6 +112,15 @@ CSV export / import, e-mail a task, built-in help · one-click updates and an in
 *Menu → Connect phone: the first QR code downloads the Android app from GitHub, the second pairs the phone with your PC.*
 
 ![Подключить телефон / Connect a phone](docs/screenshots/phone.png)
+
+Приложение на телефоне выглядит как ToDoro на компьютере: список задач, карточка задачи с комментариями, тёмная тема. Файлы задач на телефон не передаются.
+*The phone app looks like ToDoro on the PC: the task list, a task card with comments, dark theme. Task files are never sent to the phone.*
+
+<p>
+<img src="docs/screenshots/android-list.png" width="260" alt="Список задач на телефоне / Task list on the phone">
+<img src="docs/screenshots/android-card.png" width="260" alt="Карточка задачи на телефоне / Task card on the phone">
+<img src="docs/screenshots/android-dark.png" width="260" alt="Тёмная тема на телефоне / Dark theme on the phone">
+</p>
 
 ### Ознакомительный тур / Guided tour
 
