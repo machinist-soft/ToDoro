@@ -76,7 +76,7 @@ fun TaskScreen(vm: AppViewModel, draft: Draft, view: ListView) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (task == null) "Новая задача" else "Задача №${task.id}") },
+                title = { Text(if (task == null) "Новая задача" else if (task.id < 0) "Задача" else "Задача №${task.id}") },
                 navigationIcon = {
                     IconButton(onClick = { back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
                 },
@@ -136,9 +136,9 @@ fun TaskScreen(vm: AppViewModel, draft: Draft, view: ListView) {
                 Text(lines.joinToString("\n"), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Button(
-                onClick = { vm.save(draft) }, enabled = !vm.saving,
+                onClick = { vm.save(draft) },
                 modifier = Modifier.fillMaxWidth().height(50.dp),
-            ) { Text(if (vm.saving) "Сохраняю…" else "Сохранить", fontSize = 16.sp) }
+            ) { Text("Сохранить", fontSize = 16.sp) }
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -161,21 +161,6 @@ fun TaskScreen(vm: AppViewModel, draft: Draft, view: ListView) {
                 TextButton(onClick = { askDelete = false; vm.delete(task) }) { Text("Удалить", color = Danger) }
             },
             dismissButton = { TextButton(onClick = { askDelete = false }) { Text("Отмена") } },
-        )
-    }
-    vm.conflict?.let { c ->
-        val who = c.current.updatedBy ?: "кто-то на компьютере"
-        val whenText = c.current.updatedAt?.let { " (${showStamp(it)})" }.orEmpty()
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text("Задачу уже изменили") },
-            text = {
-                Text("Пока вы правили задачу, её изменил $who$whenText.\n\n" +
-                    "«Сохранить мой вариант» — ваши правки запишутся поверх.\n" +
-                    "«Оставить их вариант» — ваши правки не сохранятся.")
-            },
-            confirmButton = { TextButton(onClick = { vm.save(c.draft, over = c.current) }) { Text("Сохранить мой вариант") } },
-            dismissButton = { TextButton(onClick = { vm.keepTheirs() }) { Text("Оставить их вариант") } },
         )
     }
 }

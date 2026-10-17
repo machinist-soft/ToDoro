@@ -94,6 +94,13 @@ class PhoneServerTests(unittest.TestCase):
         with urllib.request.urlopen(request, timeout=10) as response:
             self.assertEqual(json.loads(response.read())["task"]["title"], "Новое")
 
+    def test_sync_returns_every_list(self):
+        self.call("POST", "/api/v1/lists/personal/tasks", {"title": "Хлеб"})
+        answer = self.call("GET", "/api/v1/sync")[1]
+        self.assertEqual([i["id"] for i in answer["lists"]], ["personal"])
+        self.assertEqual([t["title"] for t in answer["views"]["personal"]["tasks"]], ["Хлеб"])
+        self.assertEqual(answer["user"], "Аня")
+
     def test_comments_and_files(self):
         task_id = self.call("POST", "/api/v1/lists/personal/tasks", {"title": "Отчёт"})[1]["task"]["id"]
         path = f"/api/v1/lists/personal/tasks/{task_id}"
@@ -132,6 +139,8 @@ class PhoneServerTests(unittest.TestCase):
         task = self.call("POST", f"/api/v1/lists/{item['id']}/tasks",
                          {"title": "Позвонить", "assignee": "Боря"})[1]["task"]
         self.assertEqual((task["author"], task["assignee"]), ("Аня", "Боря"))
+        synced = self.call("GET", "/api/v1/sync")[1]
+        self.assertEqual(synced["views"][item["id"]]["tasks"][0]["assignee"], "Боря")
         view = self.call("GET", f"/api/v1/lists/{item['id']}")[1]
         self.assertEqual(view["members"], ["Аня", "Боря"])
         # задача видна и программе на компьютере (тот же файл)

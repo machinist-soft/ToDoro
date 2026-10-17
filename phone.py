@@ -14,6 +14,7 @@
     GET    /                                     — страничка «ToDoro работает» (без ключа)
     GET    /api/v1/hello                         — версия, имя, компьютер
     GET    /api/v1/lists                         — все списки
+    GET    /api/v1/sync                          — все списки сразу с задачами (копия для телефона)
     GET    /api/v1/lists/<список>                — колонки, задачи, участники
     POST   /api/v1/lists/<список>/tasks          — новая задача
     GET    /api/v1/lists/<список>/tasks/<номер>  — задача с файлами и комментариями
@@ -311,6 +312,24 @@ class Store:
             "user": self.user(),
         }
 
+    def sync(self):
+        """Всё сразу: телефон хранит копию, чтобы работать без связи и напоминать о сроках.
+        Общий список, который не прочитался (пропала связь с папкой), не попадает в ответ —
+        shared_offline подскажет телефону оставить его прежнюю копию."""
+        items, offline = self.lists()
+        lists, views = [], {}
+        for item in items:
+            try:
+                views[item["id"]] = self.list_view(item)
+            except (sqlite3.Error, OSError):
+                if not item["shared"]:
+                    raise
+                self.on_error(item)
+                offline = True
+                continue
+            lists.append({"id": item["id"], "name": item["name"], "shared": item["shared"]})
+        return {"lists": lists, "views": views, "shared_offline": offline, "user": self.user()}
+
     def check_status(self, conn, status_id):
         if not any(s[0] == status_id for s in db.list_statuses(conn)):
             raise ApiError(400, "Такой колонки нет")
@@ -531,6 +550,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {"lists": [{"id": i["id"], "name": i["name"], "shared": i["shared"]}
                                            for i in items],
                                  "shared_offline": offline, "user": store.user()})
+            return None
+        if path == API + "/sync" and method == "GET":
+            self.send_json(200, store.sync())
             return None
         match = ROUTE.match(path)
         if not match:

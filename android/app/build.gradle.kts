@@ -24,8 +24,8 @@ android {
         applicationId = "com.machinist.todoro"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 2
+        versionName = "0.2"
     }
 
     signingConfigs {
@@ -70,4 +70,5 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
 }

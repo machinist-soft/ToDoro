@@ -1,7 +1,12 @@
 package com.machinist.todoro
 
 import android.content.Intent
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -90,25 +95,35 @@ class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels()
 
     private val scan = registerForActivityResult(ScanContract()) { result ->
-        result.contents?.let { text -> vm.pair(text)?.let { vm.message = it } }
+        result.contents?.let { text -> vm.pair(text)?.let { Repo.message = it } }
+    }
+
+    // Android 13+: разрешение показывать уведомления (напоминания о сроках)
+    private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        Repo.launch { Reminders.update(applicationContext, Repo.data) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Repo.init(this)  // копия задач и очередь правок — с диска, ещё до первого кадра
         enableEdgeToEdge()
         setContent {
             ToDoroTheme {
-                if (vm.pairing == null) PairScreen(vm, ::startScan) else MainScreen(vm, ::startScan)
+                if (Repo.pairing == null) PairScreen(vm, ::startScan) else MainScreen(vm, ::startScan)
             }
         }
-        if (savedInstanceState == null) pairFrom(intent)
+        if (savedInstanceState == null) handle(intent)
+        Reminders.createChannels(this)
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
+                this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
         // Пока приложение на экране — раз в 15 секунд смотрим, не изменилось ли что-то на компьютере
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                vm.refresh()
                 while (true) {
+                    Repo.sync()
                     delay(15_000)
-                    vm.refresh(quiet = true)
                 }
             }
         }
@@ -116,13 +131,20 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        handle(intent)
+    }
+
+    private fun handle(intent: Intent?) {
         pairFrom(intent)
+        // нажали на напоминание — открываем задачу
+        val list = intent?.getStringExtra("open_list") ?: return
+        vm.openTask(list, intent.getLongExtra("open_task", 0))
     }
 
     /** Открыли ссылку todoro://connect?... (QR-код отсканировали камерой телефона). */
     private fun pairFrom(intent: Intent?) {
         val link = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.dataString ?: return
-        vm.pair(link)?.let { vm.message = it }
+        vm.pair(link)?.let { Repo.message = it }
     }
 
     private fun startScan() {
@@ -181,9 +203,9 @@ fun PairScreen(vm: AppViewModel, onScan: () -> Unit) {
 
 @Composable
 fun MessageEffect(vm: AppViewModel, snackbar: SnackbarHostState) {
-    LaunchedEffect(vm.message) {
-        vm.message?.let {
-            vm.message = null
+    LaunchedEffect(Repo.message) {
+        Repo.message?.let {
+            Repo.message = null
             snackbar.showSnackbar(it)
         }
     }
@@ -214,6 +236,10 @@ fun MainScreen(vm: AppViewModel, onScan: () -> Unit) {
                     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Меню") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         DropdownMenuItem(
+                            text = { Text("Напоминания на телефоне") },
+                            trailingIcon = { Checkbox(checked = vm.remindersOn, onCheckedChange = null) },
+                            onClick = { vm.setReminders(!vm.remindersOn) })
+                        DropdownMenuItem(
                             text = { Text("Подключить заново (QR-код)") },
                             onClick = { menu = false; onScan() })
                         DropdownMenuItem(
@@ -231,7 +257,7 @@ fun MainScreen(vm: AppViewModel, onScan: () -> Unit) {
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         PullToRefreshBox(
-            isRefreshing = vm.loading,
+            isRefreshing = Repo.syncing && Repo.data == null,
             onRefresh = { vm.refresh() },
             modifier = Modifier.fillMaxSize().padding(padding),
         ) {
@@ -239,18 +265,23 @@ fun MainScreen(vm: AppViewModel, onScan: () -> Unit) {
                 Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 96.dp),
             ) {
-                if (vm.keyRejected) {
+                if (Repo.keyRejected) {
                     item {
                         Banner("Компьютер больше не принимает этот телефон: связь отключили или " +
                             "сделали новый ключ. Подключите телефон заново.", "Сканировать QR-код", onScan)
                     }
-                } else vm.problem?.let { text ->
-                    item { Banner(text, "Повторить", { vm.refresh() }) }
+                } else Repo.problem?.let { text ->
+                    item { Banner(offlineText(text), "Повторить", { vm.refresh() }, warn = Repo.data != null) }
+                }
+                if (Repo.pendingCount > 0 && Repo.problem == null && !Repo.keyRejected) {
+                    item { Text("Отправляю правки на компьютер…", Modifier.padding(6.dp), fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 if (view != null) {
-                    if (vm.sharedOffline) {
+                    if (Repo.data?.sharedOffline == true) {
                         item {
-                            Banner("Компьютер сейчас не видит общую папку — общие списки недоступны.",
+                            Banner("Компьютер сейчас не видит общую папку. Общие списки — " +
+                                "в том виде, как были при последней связи; правки в них уйдут позже.",
                                 null, null, warn = true)
                         }
                     }
@@ -270,7 +301,7 @@ fun MainScreen(vm: AppViewModel, onScan: () -> Unit) {
                         }
                     }
                     items(tasks, key = { it.id }) { task -> TaskRow(vm, view, task) }
-                } else if (vm.problem == null && !vm.keyRejected && !vm.loading) {
+                } else if (Repo.problem == null && !Repo.keyRejected) {
                     item {
                         Text("Загружаю задачи…", Modifier.padding(32.dp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -278,6 +309,22 @@ fun MainScreen(vm: AppViewModel, onScan: () -> Unit) {
                 }
             }
         }
+    }
+
+    Repo.conflict?.let { c ->
+        val who = c.current.updatedBy ?: "кто-то на компьютере"
+        val whenText = c.current.updatedAt?.let { " (${showStamp(it)})" }.orEmpty()
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Задачу уже изменили") },
+            text = {
+                Text("Пока вы правили «${c.op.title}» на телефоне, её изменил $who$whenText.\n\n" +
+                    "«Сохранить мой вариант» — ваши правки запишутся поверх.\n" +
+                    "«Оставить их вариант» — ваши правки не сохранятся.")
+            },
+            confirmButton = { TextButton(onClick = { Repo.resolve(c, mine = true) }) { Text("Сохранить мой вариант") } },
+            dismissButton = { TextButton(onClick = { Repo.resolve(c, mine = false) }) { Text("Оставить их вариант") } },
+        )
     }
 
     if (confirmUnpair) {
@@ -290,6 +337,23 @@ fun MainScreen(vm: AppViewModel, onScan: () -> Unit) {
             dismissButton = { TextButton(onClick = { confirmUnpair = false }) { Text("Отмена") } },
         )
     }
+}
+
+/** «Нет связи…» + когда последний раз видели компьютер и сколько правок ждёт отправки. */
+fun offlineText(problem: String): String {
+    val data = Repo.data ?: return problem
+    val parts = mutableListOf(problem)
+    if (data.syncedAt > 0) {
+        val time = java.time.Instant.ofEpochMilli(data.syncedAt).atZone(java.time.ZoneId.systemDefault())
+            .toLocalDateTime()
+        parts += "Задачи — как были на ${showDue(time)}."
+    }
+    if (Repo.pendingCount > 0) {
+        parts += "Правок ждут отправки: ${Repo.pendingCount} — уйдут, когда связь появится."
+    } else {
+        parts += "Можно работать: правки уйдут на компьютер, когда связь появится."
+    }
+    return parts.joinToString(" ")
 }
 
 @Composable
@@ -310,12 +374,13 @@ fun ListPicker(vm: AppViewModel) {
             Icon(Icons.Default.ArrowDropDown, "Выбрать список")
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            val sharedOffline = Repo.data?.sharedOffline == true
             val personal = vm.lists.filter { !it.shared }
             val shared = vm.lists.filter { it.shared }
             personal.forEach { item ->
                 DropdownMenuItem(text = { Text(item.name) }, onClick = { open = false; vm.selectList(item.id) })
             }
-            if (shared.isNotEmpty() || vm.sharedOffline) {
+            if (shared.isNotEmpty() || sharedOffline) {
                 HorizontalDivider()
                 Text("Общие списки", Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -323,7 +388,7 @@ fun ListPicker(vm: AppViewModel) {
             shared.forEach { item ->
                 DropdownMenuItem(text = { Text(item.name) }, onClick = { open = false; vm.selectList(item.id) })
             }
-            if (vm.sharedOffline) {
+            if (sharedOffline && shared.isEmpty()) {
                 DropdownMenuItem(text = { Text("недоступны — нет связи с общей папкой") },
                     onClick = {}, enabled = false)
             }
@@ -412,6 +477,9 @@ fun TaskRow(vm: AppViewModel, view: ListView, task: Task) {
                             if (task.comments > 0) "💬${task.comments}" else null,
                         ).joinToString(" "), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
+                }
+                if ((view.list.id to task.id) in Repo.pendingTasks) {
+                    parts += { Text("⏳ ждёт отправки", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 if (parts.isNotEmpty()) {
                     Row(Modifier.padding(top = 4.dp).horizontalScroll(rememberScrollState()),
