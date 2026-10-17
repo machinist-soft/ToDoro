@@ -2314,6 +2314,58 @@ class SideStrip(tk.Frame):
         self.bind("<Leave>", lambda e: button.configure(fg=MUTED))
 
 
+class Banner(tk.Frame):
+    """Полоса-уведомление под заголовком окна: «нет связи с общей папкой», «связь
+    восстановлена». Её видно всегда — в отличие от облачка Тоторо, которое прячется
+    вместе с правой панелью и сменяется другими подсказками."""
+    COLORS = {"alert": (ALERT_BG, ALERT_BORDER, DANGER), "good": (GOOD_BG, GOOD_BORDER, GOOD_TEXT)}
+
+    def __init__(self, parent, before):
+        super().__init__(parent, highlightthickness=1, bd=0)
+        self.before = before  # виджет, над которым показывается полоса
+        self.icon = tk.Label(self, font=FONT_SMALL_BOLD, bd=0)
+        self.icon.pack(side="left", padx=(12, 8), pady=8)
+        # крестик и кнопка раскладываются раньше текста — длинный текст переносится, а не
+        # выталкивает их за край окна
+        self.close_x = tk.Label(self, text="✕", font=FONT_SMALL, fg=MUTED, cursor="hand2", bd=0)
+        self.close_x.pack(side="right", padx=(8, 12))
+        self.text = tk.Label(self, font=FONT_SMALL, fg=TEXT, bd=0, anchor="w", justify="left")
+        self.text.pack(side="left", fill="x", expand=True, pady=8)
+        self.close_x.bind("<Button-1>", lambda e: self.hide())
+        self.action = tk.Label(self, font=FONT_SMALL_BOLD, fg=ACCENT, cursor="hand2", bd=0)
+        self.action.bind("<Button-1>", lambda e: self.command and self.command())
+        self.text.bind("<Configure>", lambda e: self.text.configure(wraplength=max(e.width, 200)))
+        self.command = None
+        self.hide_job = None
+
+    def show(self, kind, text, action=None, command=None, hide_after=None):
+        bg, border, accent = self.COLORS[kind]
+        self.configure(bg=bg, highlightbackground=border, highlightcolor=border)
+        self.icon.configure(text="⚠" if kind == "alert" else "✔", bg=bg, fg=accent)
+        self.text.configure(text=text, bg=bg)
+        self.close_x.configure(bg=bg)
+        self.action.configure(bg=bg)
+        self.command = command
+        if action:
+            self.action.configure(text=action)
+            self.action.pack(side="right", padx=(16, 4), before=self.text)
+        else:
+            self.action.pack_forget()
+        if not self.winfo_ismapped():
+            self.pack(fill="x", pady=(14, 0), before=self.before)
+        if self.hide_job:
+            self.after_cancel(self.hide_job)
+            self.hide_job = None
+        if hide_after:
+            self.hide_job = self.after(hide_after, self.hide)
+
+    def hide(self):
+        if self.hide_job:
+            self.after_cancel(self.hide_job)
+            self.hide_job = None
+        self.pack_forget()
+
+
 class SidePanel(tk.Frame):
     """Правая панель: Тоторо, пока задача не выбрана, иначе — карточка задачи
     или форма её изменения. Кнопкой «»» (или Ctrl+B) сворачивается в полоску."""
@@ -4290,6 +4342,8 @@ class TodoApp:
             db.list_statuses(self.conn)
         except (StopIteration, sqlite3.Error):  # списка больше нет или общая папка недоступна
             self.forget_list(self.list_id)
+            if self.team is None:  # общий список — предложим открыть, когда связь появится
+                self.lost_list = self.list_id
             self.list_id, self.conn = db.PERSONAL, self.prefs
         self.due = {}         # id строки таблицы -> срок (для подсветки просроченных)
         self.row_status = {}  # id строки таблицы -> название статуса
@@ -4341,6 +4395,8 @@ class TodoApp:
         add_row = ttk.Frame(page)
         add_row.pack(fill="x", pady=(16, 14))
         self.add_row = add_row
+        # Полоса-уведомление над полем ввода (связь с общей папкой); обычно скрыта
+        self.banner = Banner(page, before=add_row)
         self.entry = ttk.Entry(add_row, font=FONT)
         self.entry.pack(side="left", fill="x", expand=True, ipady=2)
         self.entry.bind("<Return>", lambda e: self.add())
@@ -4546,6 +4602,8 @@ class TodoApp:
                             (SNIP_HOTKEY, lambda: self.from_screen(quiet=True))])     # Ctrl+Alt+S
         self.start_tray()
         root.after(WATCH_EVERY_MS, self.watch_changes)  # изменения других участников в общих списках
+        if self.team is None and db.get_setting(self.prefs, "shared_folder", ""):
+            self.show_offline_banner()  # запустились без связи с общей папкой
 
     def show_window(self):
         """Показывает главное окно — при запуске или позже, если программу запустили скрытой."""
@@ -4742,8 +4800,10 @@ class TodoApp:
                 self.forget_list(self.list_id)
                 self.list_id = None
                 self.switch_list(db.PERSONAL)
+            self.banner.hide()
             if error:
                 ui.showerror(APP_NAME, error, parent=self.root)
+                self.show_offline_banner()  # подключимся сами, когда папка станет доступна
             elif self.team:
                 ui.showinfo(APP_NAME, "Общая папка подключена. Общие списки — в меню "
                                     "списков (кнопка с названием списка вверху).", parent=self.root)
@@ -6352,26 +6412,38 @@ class TodoApp:
         self.team = None
         self.team_error = self.offline_text(db.get_setting(self.prefs, "shared_folder", ""))
         self.load_lists()
+        self.show_offline_banner(name)
         return name
 
+    def show_offline_banner(self, lost_name=None, again=False):
+        """Полоса «нет связи» — висит, пока связь не вернётся."""
+        if again:
+            text = "Связи с общей папкой по-прежнему нет. Проверьте Wi-Fi или VPN."
+        else:
+            text = "Нет связи с общей папкой (сеть, VPN) — общие списки пока недоступны."
+        if lost_name:
+            text += f" Список «{lost_name}» закрыт, открыт личный."
+        text += " Когда связь появится, программа подключится сама."
+        self.banner.show("alert", text, "Подключиться снова", self.try_reconnect)
+
     def reconnect_team(self):
-        """Связь с общей папкой вернулась — подключаемся и, если до обрыва был открыт общий
-        список, открываем его снова (если человек тем временем не ушёл в другой список)."""
+        """Связь с общей папкой вернулась — подключаемся и сообщаем об этом. Список, который
+        был открыт до обрыва, сами не открываем (человек мог уже работать в другом) —
+        предлагаем кнопкой на полосе."""
         if self.connect_team():
             self.reconnect_at = time_module.monotonic() + 30  # не вышло — попробуем позже
             return
         self.load_lists()
         lost, self.lost_list = self.lost_list, None
         item = next((i for i in self.lists if i["id"] == lost), None)
-        if item is None:
-            self.side.totoro.show("Связь с общей папкой восстановлена.", mood="done")
-        elif self.list_id == db.PERSONAL and self.editing is None and not self.dragging():
-            self.switch_list(lost)
-            self.side.totoro.show(f"Связь с общей папкой восстановлена — снова открыт "
-                                  f"список «{item['name']}».", mood="done")
+        if item and item["id"] != self.list_id:
+            self.banner.show("good", "Связь с общей папкой восстановлена — общие списки снова "
+                             "доступны.", f"Открыть «{item['name']}»",
+                             lambda: (self.banner.hide(), self.switch_list(item["id"])),
+                             hide_after=20_000)
         else:
-            self.side.totoro.show(f"Связь с общей папкой восстановлена — список «{item['name']}» "
-                                  "снова есть в меню списков.", mood="done")
+            self.banner.show("good", "Связь с общей папкой восстановлена — общие списки снова "
+                             "доступны.", hide_after=10_000)
 
     def user_name(self):
         return db.get_setting(self.prefs, "user_name", "") or os.environ.get("USERNAME", "Я")
@@ -6404,8 +6476,8 @@ class TodoApp:
         if self.probe and self.probe.online():
             self.reconnect_team()
         if self.team is None:
-            ui.showwarning(APP_NAME, self.team_error or self.offline_text(
-                db.get_setting(self.prefs, "shared_folder", "")), parent=self.root)
+            lost = next((i["name"] for i in self.unreachable_lists() if i["id"] == self.lost_list), None)
+            self.show_offline_banner(lost, again=True)
 
     def list_conn(self, list_id):
         """Соединение с файлом списка (открывается один раз и потом переиспользуется)."""
@@ -6632,7 +6704,7 @@ class TodoApp:
                 APP_NAME, f"Пропала связь с общим списком «{name}» — общая папка недоступна "
                 "(сеть, VPN) или файл занят слишком долго.\n\nОткрыт личный список. Последнее "
                 "действие в общем списке могло не сохраниться — проверьте его, когда связь "
-                "появится. Когда связь вернётся, общий список откроется сам.", parent=self.root)
+                "появится.", parent=self.root)
             return
         tk.Tk.report_callback_exception(self.root, kind, error, trace)
 
@@ -6643,11 +6715,7 @@ class TodoApp:
         вернулась — подключаемся снова."""
         probe = self.probe
         if self.team and not self.share_online():
-            name = self.go_offline()
-            if name:
-                self.side.totoro.show(f"Пропала связь с общим списком «{name}» — общая папка "
-                                      "недоступна (сеть, VPN). Пока открыт личный список. Когда "
-                                      "связь вернётся, общий список откроется сам.", mood="alert")
+            self.go_offline()
         elif self.team is None:
             if probe and probe.online() and time_module.monotonic() >= self.reconnect_at:
                 self.reconnect_team()
