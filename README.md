@@ -175,6 +175,13 @@ python todoro.py
 Код — MIT, © 2026 Machinist. См. [LICENSE](LICENSE).
 Code is MIT-licensed, © 2026 Machinist. See [LICENSE](LICENSE).
 
+## Конфиденциальность и безопасность / Privacy and security
+
+ToDoro ничего не собирает и не отправляет ваши задачи в интернет — подробнее в [PRIVACY.md](PRIVACY.md).
+Об уязвимостях сообщайте приватно — см. [SECURITY.md](SECURITY.md).
+*ToDoro collects nothing and never sends your tasks online — see [PRIVACY.md](PRIVACY.md).
+Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).*
+
 ---
 
 <p align="center">
