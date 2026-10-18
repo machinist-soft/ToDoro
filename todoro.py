@@ -610,7 +610,7 @@ def parse_csv_remind(text):
             return minutes
     if not text:
         return None
-    if text.isdigit():
+    if text.isdigit() and int(text) <= db.MAX_REMIND_MINUTES:
         return int(text)
     raise ValueError(text)
 
@@ -2336,7 +2336,9 @@ class Banner(tk.Frame):
     """Полоса-уведомление под заголовком окна: «нет связи с общей папкой», «связь
     восстановлена». Её видно всегда — в отличие от облачка Тоторо, которое прячется
     вместе с правой панелью и сменяется другими подсказками."""
-    COLORS = {"alert": (ALERT_BG, ALERT_BORDER, DANGER), "good": (GOOD_BG, GOOD_BORDER, GOOD_TEXT)}
+    COLORS = {"alert": (ALERT_BG, ALERT_BORDER, DANGER), "good": (GOOD_BG, GOOD_BORDER, GOOD_TEXT),
+              "wait": (GOOD_BG, GOOD_BORDER, GOOD_TEXT)}
+    ICONS = {"alert": "⚠", "good": "✔", "wait": "⏳"}
 
     def __init__(self, parent, before):
         super().__init__(parent, highlightthickness=1, bd=0)
@@ -2359,7 +2361,7 @@ class Banner(tk.Frame):
     def show(self, kind, text, action=None, command=None, hide_after=None):
         bg, border, accent = self.COLORS[kind]
         self.configure(bg=bg, highlightbackground=border, highlightcolor=border)
-        self.icon.configure(text="⚠" if kind == "alert" else "✔", bg=bg, fg=accent)
+        self.icon.configure(text=self.ICONS[kind], bg=bg, fg=accent)
         self.text.configure(text=text, bg=bg)
         self.close_x.configure(bg=bg)
         self.action.configure(bg=bg)
@@ -3377,6 +3379,18 @@ def in_background(root, work, done):
         else:
             done(box.get("result"), box.get("error"))
     root.after(100, poll)
+
+
+def open_team(folder, user):
+    """Открывает общую папку и отмечает в ней участника. Можно звать из фонового потока:
+    соединение team.Team разрешено передавать между потоками."""
+    group = team.Team(folder)
+    try:
+        group.touch_member(user)
+    except BaseException:
+        group.close()
+        raise
+    return group
 
 
 class PhoneDialog(tk.Toplevel):
@@ -4545,6 +4559,8 @@ class TodoApp:
         self.probe = None      # фоновая проверка связи с общей папкой (team.Probe)
         self.lost_list = None  # общий список, который был открыт, когда пропала связь
         self.reconnect_at = 0  # раньше этого времени (monotonic) не пытаемся переподключиться
+        self.connecting = False  # общую папку из настроек сейчас открывают в фоне
+        self.connect_attempt = 0  # номер последней такой попытки (ответы прежних — не в счёт)
         # что видела фоновая проверка (team.Probe) в прошлый раз — чтобы заметить чужие изменения
         self.seen_seq, self.team_counter, self.list_counter = None, None, None
         self.own_credit, self.credit_until = 0, 0  # свои записи, ещё не замеченные проверкой
@@ -5017,19 +5033,24 @@ class TodoApp:
             for item in [i for i in self.lists if i["shared"]]:
                 if item["id"] != self.list_id:
                     self.forget_list(item["id"])
-            error = self.connect_team()
-            self.load_lists()
-            if not any(i["id"] == self.list_id for i in self.lists):  # открытый общий список пропал
-                self.forget_list(self.list_id)
-                self.list_id = None
-                self.switch_list(db.PERSONAL)
-            self.banner.hide()
-            if error:
-                ui.showerror(APP_NAME, error, parent=self.root)
-                self.show_offline_banner()  # подключимся сами, когда папка станет доступна
-            elif self.team:
-                ui.showinfo(APP_NAME, "Общая папка подключена. Общие списки — в меню "
-                                    "списков (кнопка с названием списка вверху).", parent=self.root)
+            if result["shared_folder"].strip():
+                self.banner.show("wait", "Подключаюсь к общей папке… Можно работать дальше.")
+            self.connect_team_in_background(self.team_connected)
+
+    def team_connected(self, error):
+        """Общая папка из настроек подключилась (или нет) — см. connect_team_in_background."""
+        self.load_lists()
+        if not any(i["id"] == self.list_id for i in self.lists):  # открытый общий список пропал
+            self.forget_list(self.list_id)
+            self.list_id = None
+            self.switch_list(db.PERSONAL)
+        self.banner.hide()
+        if error:
+            ui.showerror(APP_NAME, error, parent=self.root)
+            self.show_offline_banner()  # подключимся сами, когда папка станет доступна
+        elif self.team:
+            ui.showinfo(APP_NAME, "Общая папка подключена. Общие списки — в меню "
+                                "списков (кнопка с названием списка вверху).", parent=self.root)
 
     def check_folder(self, folder, done):
         """Кнопка «Проверить подключение» в настройках: открывается ли папка и кто в ней."""
@@ -6582,17 +6603,9 @@ class TodoApp:
         """Подключает общую папку из настроек. Возвращает текст ошибки или None.
         wait — сначала дождаться фоновой проверки связи (при запуске программы): если сети
         нет, не подключаемся, а то окно повиснет; подключимся сами, когда связь появится."""
-        if self.team:
-            self.team.close()
-        self.team, self.team_error = None, None
-        folder = db.get_setting(self.prefs, "shared_folder", "")
-        if self.probe and self.probe.folder != folder:
-            self.probe.stop()
-            self.probe = None
+        folder = self.reset_team()
         if not folder:
             return None
-        if self.probe is None:
-            self.probe = team.Probe(folder)
         if wait:
             deadline = time_module.monotonic() + team.Probe.HANG + 0.5
             while self.probe.ok is None and time_module.monotonic() < deadline:
@@ -6601,13 +6614,62 @@ class TodoApp:
                 self.team_error = self.offline_text(folder)
                 return self.team_error
         try:
-            self.team = team.Team(folder)
-            self.team.touch_member(self.user_name())
-            self.seen_seq, self.team_counter, self.list_counter = None, None, None
-            in_background(self.root, self.team.backup_daily, lambda result, error: None)
+            self.use_team(open_team(folder, self.user_name()))
         except (team.TeamError, sqlite3.Error, OSError) as error:
             self.team, self.team_error = None, str(error)
         return self.team_error
+
+    def connect_team_in_background(self, done):
+        """Как connect_team, но саму папку открывает в фоновом потоке. Нужно после «Сохранить»
+        в настройках: связь с новой папкой ещё никто не проверял, и недоступная папка (нет VPN,
+        опечатка в адресе) «повесила» бы окно на десятки секунд. (Дождаться фоновой проверки,
+        как при запуске, нельзя: в новой пустой папке ещё нет team.db, и проверка решила бы,
+        что связи нет.) done(текст ошибки или None) вызывается в основном потоке."""
+        folder = self.reset_team()
+        if not folder:
+            done(None)
+            return
+        self.connecting = True
+        self.connect_attempt += 1
+        attempt = self.connect_attempt
+        user = self.user_name()
+
+        def finished(group, error):
+            if attempt != self.connect_attempt:  # пока подключались, настройки сохранили снова
+                if group:
+                    group.close()
+                return
+            self.connecting = False
+            if self.team is not None or folder != db.get_setting(self.prefs, "shared_folder", ""):
+                if group:
+                    group.close()
+                self.banner.hide()
+                return
+            if error:
+                self.team_error = str(error)
+            else:
+                self.use_team(group)
+            done(self.team_error)
+        in_background(self.root, lambda: open_team(folder, user), finished)
+
+    def reset_team(self):
+        """Закрывает прежнее подключение к общей папке и заводит фоновую проверку связи для
+        папки из настроек. Возвращает эту папку («» — не задана)."""
+        if self.team:
+            self.team.close()
+        self.team, self.team_error = None, None
+        folder = db.get_setting(self.prefs, "shared_folder", "")
+        if self.probe and self.probe.folder != folder:
+            self.probe.stop()
+            self.probe = None
+        if folder and self.probe is None:
+            self.probe = team.Probe(folder)
+        return folder
+
+    def use_team(self, group):
+        self.team = group
+        self.seen_seq, self.team_counter, self.list_counter = None, None, None
+        in_background(self.root, self.team.backup_daily, lambda result, error: None)
 
     @staticmethod
     def offline_text(folder):
@@ -6658,6 +6720,8 @@ class TodoApp:
         """Связь с общей папкой вернулась — подключаемся и сообщаем об этом. Список, который
         был открыт до обрыва, сами не открываем (человек мог уже работать в другом) —
         предлагаем кнопкой на полосе."""
+        if self.connecting:  # папку из настроек сейчас открывают в фоне
+            return
         if self.connect_team():
             self.reconnect_at = time_module.monotonic() + 30  # не вышло — попробуем позже
             return
@@ -6843,6 +6907,8 @@ class TodoApp:
         name = NameDialog(self.root, "Переименовать список", "Название списка", item["name"]).show()
         if not name or name == item["name"]:
             return
+        if item["shared"] and self.team_missing():
+            return
         if item["shared"]:
             self.team.rename_list(item["id"], name)
         else:
@@ -6852,9 +6918,21 @@ class TodoApp:
         self.load_lists()
         self.show_list_name()
 
+    def team_missing(self):
+        """Общая папка сейчас не подключена (подключается в фоне или нет связи) — говорим об
+        этом и возвращаем True: переименовать или удалить общий список пока нельзя."""
+        if self.team is not None:
+            return False
+        if self.connecting:
+            text = "Общая папка ещё подключается. Попробуйте через минуту."
+        else:
+            text = "Нет связи с общей папкой — общий список сейчас нельзя изменить."
+        ui.showerror(APP_NAME, text, parent=self.root)
+        return True
+
     def delete_list(self):
         item = self.current_list()
-        if item["id"] == db.PERSONAL:
+        if item["id"] == db.PERSONAL or (item["shared"] and self.team_missing()):
             return
         count = db.count_tasks(self.conn)
         what = f"вместе с задачами ({count} шт.)" if count else "(задач в нём нет)"

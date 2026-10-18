@@ -90,6 +90,19 @@ class DatabaseTests(TempDir):
         self.assertEqual(len(db.shared_reminders(conn, "Борис")), 1)
 
 
+    def test_broken_reminder_does_not_break_others(self):
+        """Огромное число минут (из CSV, с телефона, из другой версии в общем списке) раньше
+        роняло проверку напоминаний — и напоминаний не было совсем."""
+        conn = db.connect(self.dir / "a.db")
+        broken = db.add_task(conn, "испорчена", created_by="Аня")
+        fine = db.add_task(conn, "нормальная", created_by="Аня")
+        db.update_task(conn, broken, "испорчена", "2026-01-01 10:00", 10**15)
+        db.update_task(conn, fine, "нормальная", "2026-01-01 10:00", 30)
+        now = datetime(2026, 1, 2)
+        self.assertEqual([t[0] for t in db.due_reminders(conn, now)], [fine])
+        self.assertEqual([t[1] for t in db.shared_reminders(conn, "Аня", now)], [fine])
+        self.assertEqual([t[0] for t in db.pending_tasks(conn, now=now)], [fine])
+
     def test_attachment_info_without_reading_files(self):
         """Содержимое файла — последний столбец (новые списки), а в старых списках сведения
         о вложении читаются один раз: иначе SQLite каждый раз читал бы весь файл."""
@@ -269,6 +282,17 @@ class UpdaterTests(unittest.TestCase):
         self.assertFalse(updater.is_newer("2.0", "2.0"))
         self.assertFalse(updater.is_newer("", "1.0"))
 
+    def test_update_only_from_github_with_checksum(self):
+        good = {"asset_url": "https://github.com/machinist-soft/ToDoro/releases/download/v9/"
+                             "ToDoro-Setup-9.exe", "sha256": "ab" * 32}
+        updater.check_release(good)  # всё в порядке — без ошибки
+        for wrong in ({"asset_url": good["asset_url"].replace("https", "http")},
+                      {"asset_url": "https://github.com.evil.example/ToDoro-Setup-9.exe"},
+                      {"asset_url": "file:///C:/ToDoro-Setup-9.exe"},
+                      {"sha256": None}):
+            with self.assertRaises(updater.UpdateError):
+                updater.check_release({**good, **wrong})
+
     def test_feedback_url_has_version(self):
         url = updater.feedback_url("bug", "2.2")
         self.assertIn("template=bug_report.yml", url)
@@ -316,6 +340,11 @@ class AppHelpersTests(TempDir):
                           t["important"], t["created_by"], t["assignee"]),
                          ("Сдать отчёт", "строка 1\nстрока 2", "2030-01-02 18:00", 60, 1, 1, "Анна", "Борис"))
 
+    def test_csv_remind_limit(self):
+        self.assertEqual(self.T.parse_csv_remind("525600"), 525600)  # год — можно
+        with self.assertRaises(ValueError):
+            self.T.parse_csv_remind("79991234567")  # например, номер телефона не в том столбце
+
     def test_csv_from_russian_excel(self):
         """Русский Excel сохраняет CSV в кодировке Windows-1251; даты — как 5.1.2027 7:05."""
         path = self.dir / "excel.csv"
@@ -357,20 +386,20 @@ class OutlookTests(TempDir):
     def test_sender_kept_and_moved(self):
         conn, other = db.connect(self.dir / "a.db"), db.connect(self.dir / "b.db")
         task_id = db.add_task(conn, "из письма")
-        db.set_mail_id(conn, task_id, "<abc@mail>", "Иван Петров <ivan@firma.ru>")
-        self.assertEqual(db.mail_from(conn, task_id), "Иван Петров <ivan@firma.ru>")
+        db.set_mail_id(conn, task_id, "<abc@mail>", "Иван Петров <ivan@example.com>")
+        self.assertEqual(db.mail_from(conn, task_id), "Иван Петров <ivan@example.com>")
         self.assertEqual(db.mail_from(conn, db.add_task(conn, "обычная")), "")
         moved = db.move_task_to(conn, task_id, other)
-        self.assertEqual(db.mail_from(other, moved), "Иван Петров <ivan@firma.ru>")
+        self.assertEqual(db.mail_from(other, moved), "Иван Петров <ivan@example.com>")
         self.assertEqual(db.find_by_mail(other, "<abc@mail>"), moved)
 
     def test_draft_addressed_to_sender(self):
         import email
         import todoro
         todoro.DRAFTS_DIR = self.dir
-        path = todoro.write_draft(7, "Задача", "текст", "Иван Петров <ivan@firma.ru>")
+        path = todoro.write_draft(7, "Задача", "текст", "Иван Петров <ivan@example.com>")
         message = email.message_from_bytes(Path(path).read_bytes(), policy=email.policy.default)
-        self.assertEqual(message["To"].addresses[0].addr_spec, "ivan@firma.ru")
+        self.assertEqual(message["To"].addresses[0].addr_spec, "ivan@example.com")
         self.assertEqual(message["To"].addresses[0].display_name, "Иван Петров")
         self.assertNotIn("To", email.message_from_bytes(
             Path(todoro.write_draft(8, "Задача", "текст")).read_bytes()))
