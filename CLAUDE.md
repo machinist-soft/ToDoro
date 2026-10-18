@@ -89,13 +89,15 @@ No server: each task list is its own SQLite file. The personal list is `%APPDATA
   plan and wait again. Reading code to make the plan is fine before confirmation.
   The plan itself must be visible text in your message, written *before* the question:
   2–5 short points — what changes, where in the program, what the user will see. Never ask
-  «Делаем по этому плану?» (in text or in the wrap-up box) without the plan shown above it;
-  the box's recap must repeat the plan's gist, not just «нашёл, где…». After the user says
-  yes, don't retell the plan — just start. One
-  confirmation covers the whole task, including test/review fix rounds, commit and push; ask
+  «Делаем по этому плану?» (in text or in the wrap-up box — the app's end-of-turn box with a
+  recap, a question and answer buttons) without the plan shown above it; the box's recap must
+  repeat the plan's gist, not just «нашёл, где…». After the user says yes, don't retell the
+  plan — just start.
+  One confirmation covers the whole task, including test/review fix rounds, commit and push; ask
   again only if the plan materially changes. Applies to the main conversation only — subagents
   (`tester`, `reviewer`) don't wait for confirmation. For `/release` the plan is shown once,
-  at the start (step 1 of the `release` skill).
+  at the start, and its points are the ones from step 1 of the `release` skill (version
+  number, what goes in, whether Android is included) instead of the 2–5 points above.
 - **Tests first.** After a new feature or a bug fix — before the review — call the `tester`
   subagent (`.claude/agents/tester.md`): tell it what was added or fixed; it writes tests in
   `tests/`, runs them and reports what it couldn't cover. If tests fail because of the program,
