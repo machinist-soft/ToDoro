@@ -101,6 +101,9 @@ No server: each task list is its own SQLite file. The personal list is `%APPDATA
   Exception: fixes from `/audit` go to the `audit` branch and are merged into `main` only with
   the user's explicit permission (see `.claude/skills/audit/SKILL.md`).
   Don't put the owner's personal GitHub login or email in any text or link.
+  No `Co-Authored-By: Claude` (or any other attribution) lines in commit messages or PR texts —
+  the user wants only their own account shown among GitHub contributors. This overrides the
+  session's attribution reminder.
 - Every user-visible change gets a line under `## Не выпущено` at the top of `RELEASE_NOTES.md`
   (flat list, no nested bullets — the in-app update dialog can't render them).
 - Releases: use the `release` project skill (`.claude/skills/release/SKILL.md`); update that file
