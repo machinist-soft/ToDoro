@@ -6856,10 +6856,11 @@ class TodoApp:
         return extras_mark(self.extra_counts.get(task_id), task_id in self.mail_ids)
 
     def list_title(self, task_id, title):
-        """Заголовок в списке: 📧 — впереди (столбец узкий, конец строки может не поместиться),
-        📎 и 💬 — после заголовка."""
-        prefix = MAIL_MARK + " " if task_id in self.mail_ids else ""
-        return prefix + title + extras_mark(self.extra_counts.get(task_id))
+        """Заголовок в списке: 📧 и 📎 с числом файлов — впереди (столбец узкий, конец строки
+        может не поместиться), 💬 — после заголовка."""
+        files, comments = self.extra_counts.get(task_id) or (0, 0)
+        prefix = (MAIL_MARK + " " if task_id in self.mail_ids else "") + (f"📎 {files}  " if files else "")
+        return prefix + title + extras_mark((0, comments))
 
     def attachments(self, task_id):
         try:
