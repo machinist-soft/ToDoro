@@ -17,6 +17,10 @@ description: Полный аудит проекта ToDoro (Python, SQLite, Kotl
 - Проект: `D:\Claude\ToDoro`. Python: `%LOCALAPPDATA%\Python\bin\python.exe`.
 - Инструменты проверки ставь только с согласия пользователя (`python -m pip install --user ...`).
   Если чего-то нет — скажи, что именно, и предложи установить; не устанавливай молча.
+- bandit на Python 3.15 не ставится (нет готового PyYAML) — вместо него `ruff check . --select S`
+  (те же проверки). pip-audit, mypy, pytest, pytest-cov установлены (18.10.2026). Файл
+  `.coverage` после `pytest --cov` удаляй — он не для git.
+- Android lint: `gradlew lintRelease` (~6 мин) → `android/app/build/reports/lint-results-release.txt`.
 - Android: JDK и Gradle — в `D:\Claude\android-tools` (как в `tools/build_apk.py`:
   `JAVA_HOME` = последняя папка `jdk-*`, `GRADLE_USER_HOME` = `gradle-home`), запуск
   `android\gradlew.bat` из папки `android`. Долгие сборки — в фоне.
