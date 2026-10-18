@@ -26,6 +26,7 @@ from tkinter import colorchooser, filedialog, font as tkfont, ttk
 import db
 import outlook
 import phone
+import smart
 import snip
 import team
 import tray
@@ -987,6 +988,130 @@ class DatePicker(ttk.Frame):
                        fg=MUTED, font=FONT_SMALL).pack(side="right")
 
 
+class TitleSuggest:
+    """Выпадающий список вариантов названия под полем ввода (умные подсказки, smart.py).
+
+    ↓/↑ — выбрать вариант, Enter или Tab — подставить, Esc — закрыть. Enter поля по-прежнему
+    обрабатывает его хозяин: сначала спрашивает accept() — если вариант подставлен, дальше
+    ничего не делает (задачу не добавляет и форму не сохраняет)."""
+
+    def __init__(self, entry, get_text, rows):
+        self.entry, self.get_text, self.rows = entry, get_text, rows  # rows() — прошлые задачи
+        self.popup, self.items, self.index, self.job = None, [], -1, None
+        entry.bind("<KeyRelease>", self.typed, add="+")
+        entry.bind("<Down>", lambda e: self.move(1), add="+")
+        entry.bind("<Up>", lambda e: self.move(-1), add="+")
+        entry.bind("<Tab>", lambda e: "break" if self.accept() else None, add="+")
+        entry.bind("<Escape>", lambda e: (self.close(), "break")[1] if self.popup else None, add="+")
+        entry.bind("<FocusOut>", lambda e: entry.after(200, self.close_if_unfocused), add="+")
+        entry.bind("<Destroy>", lambda e: self.close(), add="+")
+
+    def shown(self):
+        return self.popup is not None
+
+    def typed(self, event):
+        if event.keysym in ("Up", "Down", "Return", "KP_Enter", "Escape", "Tab"):
+            return
+        if self.job:  # считаем, когда пальцы остановились: в большом списке это заметные мс
+            self.entry.after_cancel(self.job)
+        self.job = self.entry.after(120, self.update)
+
+    def update(self):
+        self.job = None
+        if not self.entry.winfo_exists():
+            return
+        text = self.get_text()
+        found = smart.suggest_titles(text, self.rows()) if text else []
+        if found:
+            self.show(found)
+        else:
+            self.close()
+
+    def show(self, items):
+        self.items, self.index = items, -1
+        if self.popup is None:
+            self.popup = tk.Toplevel(self.entry)
+            self.popup.overrideredirect(True)
+            self.popup.attributes("-topmost", True)
+            self.popup.configure(bg=BORDER)
+        for child in self.popup.winfo_children():
+            child.destroy()
+        box = tk.Frame(self.popup, bg=SURFACE)
+        box.pack(fill="both", expand=True, padx=1, pady=1)
+        tk.Label(box, text="Похожие задачи — ↓ выбрать, Enter подставить", bg=SURFACE, fg=MUTED,
+                 font=FONT_SMALL, anchor="w").pack(fill="x", padx=10, pady=(5, 2))
+        self.labels = []
+        for i, title in enumerate(items):
+            label = tk.Label(box, text=short_text(title, 90), bg=SURFACE, fg=TEXT, font=FONT,
+                             anchor="w", padx=10, pady=3, cursor="hand2")
+            label.pack(fill="x")
+            label.bind("<Enter>", lambda e, i=i: self.highlight(i))
+            label.bind("<Button-1>", lambda e, i=i: self.pick(i))
+            self.labels.append(label)
+        tk.Frame(box, bg=SURFACE, height=4).pack()
+        self.entry.update_idletasks()
+        width = max(self.entry.winfo_width(), 260)
+        self.popup.geometry(f"{width}x{self.popup.winfo_reqheight()}"
+                            f"+{self.entry.winfo_rootx()}"
+                            f"+{self.entry.winfo_rooty() + self.entry.winfo_height() + 2}")
+
+    def highlight(self, index):
+        self.index = index
+        for i, label in enumerate(self.labels):
+            label.configure(bg=HOVER if i == index else SURFACE)
+
+    def move(self, step):
+        if self.popup is None:
+            return None
+        self.highlight((self.index + step) % len(self.items) if self.index >= 0 or step > 0
+                       else len(self.items) - 1)
+        return "break"
+
+    def pick(self, index):
+        self.entry.delete(0, "end")
+        self.entry.insert(0, self.items[index])
+        self.entry.icursor("end")
+        self.entry.focus_set()
+        self.close()
+
+    def accept(self):
+        """Enter/Tab: подставляет выбранный стрелками вариант. True — подставили."""
+        if self.popup is None or self.index < 0:
+            self.close()
+            return False
+        self.pick(self.index)
+        return True
+
+    def close_if_unfocused(self):
+        try:
+            if self.entry.focus_get() is not self.entry:
+                self.close()
+        except (KeyError, tk.TclError):  # фокус в уже закрытом окне
+            self.close()
+
+    def close(self):
+        if self.job:
+            try:
+                self.entry.after_cancel(self.job)
+            except tk.TclError:
+                pass
+            self.job = None
+        if self.popup is not None:
+            try:
+                self.popup.destroy()
+            except tk.TclError:
+                pass
+        self.popup, self.items, self.index = None, [], -1
+
+
+def apply_when(when):
+    """Срок, найденный в названии (smart.parse_when), — в значения формы: due_at и напоминание.
+    Время сказано явно — напоминаем за 15 минут; только день — срок в 9:00 без напоминания."""
+    _, day, clock = when
+    moment = datetime.combine(day, clock or time(int(DEFAULT_TIME[0]), int(DEFAULT_TIME[1])))
+    return moment.strftime("%Y-%m-%d %H:%M"), (15 if clock else None)
+
+
 class TaskForm(ttk.Frame):
     """Форма задачи: заголовок, описание, статус, срок, приоритет, напоминание.
 
@@ -994,9 +1119,14 @@ class TaskForm(ttk.Frame):
     on_save получает словарь с новыми значениями, on_cancel вызывается при отмене.
     """
 
-    def __init__(self, parent, task, statuses, on_save, on_cancel, compact=False, members=None):
+    def __init__(self, parent, task, statuses, on_save, on_cancel, compact=False, members=None,
+                 history=None, hints=False):
+        """history — прошлые задачи списка (строки db.list_tasks) для умных подсказок, None —
+        подсказки выключены. hints — показывать под заголовком советы (срок из названия,
+        приоритет и шаги похожих задач): для новой задачи, не для правки старой."""
         super().__init__(parent, style="Card.TFrame" if compact else "TFrame")
         self.on_save, self.on_cancel = on_save, on_cancel
+        self.history = history
         self.statuses = statuses  # [(id, название, цвет, выполнено)]
         self.members = members    # участники общего списка; None — личный список, исполнителя нет
         style_bg = SURFACE if compact else BG
@@ -1009,6 +1139,14 @@ class TaskForm(ttk.Frame):
         self.title_entry = ttk.Entry(self, font=FONT, width=1 if compact else 48)
         self.title_entry.pack(fill="x")
         self.title_entry.insert(0, task["title"])
+        self.suggest = None
+        if history is not None:
+            self.suggest = TitleSuggest(self.title_entry, self.title_entry.get, lambda: self.history)
+        # Советы умных подсказок — строками со ссылкой «применить» под заголовком
+        self.hints = tk.Frame(self, bg=style_bg)
+        self.hints.pack(fill="x")
+        self.hints_on, self.hints_used, self.hints_job = hints and history is not None, set(), None
+        self.hint_bg, self.hint_wrap = style_bg, 250 if compact else 380
 
         label("Описание")
         desc_box = tk.Frame(self, bg=SURFACE, highlightthickness=1,
@@ -1114,12 +1252,82 @@ class TaskForm(ttk.Frame):
         self.date_changed()
         self.initial = self.values()
         bind_tree(self, "<Control-Return>", lambda e: (self.save(), "break")[1])
-        bind_tree(self, "<Escape>", lambda e: (self.on_cancel(), "break")[1])
-        self.title_entry.bind("<Return>", lambda e: self.save())
+        bind_tree(self, "<Escape>", lambda e: (self.on_cancel(), "break")[1]
+                  if not (self.suggest and self.suggest.shown()) else "break")
+        self.title_entry.bind("<Return>", lambda e: None if self.suggest and self.suggest.accept()
+                              else self.save())
+        if self.hints_on:
+            self.title_entry.bind("<KeyRelease>", lambda e: self.hints_later(), add="+")
+            self.update_hints()
 
     def focus_title(self):
         self.title_entry.focus_set()
         self.title_entry.icursor("end")
+
+    # --- умные подсказки (smart.py) ---
+
+    def hints_later(self):
+        if self.hints_job:
+            self.after_cancel(self.hints_job)
+        self.hints_job = self.after(300, self.update_hints)
+
+    def update_hints(self):
+        """Под заголовком — советы: срок, найденный в названии; приоритет похожих задач; шаги
+        из похожей задачи. Каждый совет, который применили, больше не предлагается."""
+        self.hints_job = None
+        for child in self.hints.winfo_children():
+            child.destroy()
+        title = self.title_entry.get().strip()
+        if not title:
+            return
+        found = []
+        when = smart.parse_when(title) if "when" not in self.hints_used else None
+        if when:
+            found.append(("when", f"Срок в названии: {smart.describe_when(when[1], when[2])}",
+                          "Поставить", lambda: self.use_when(when)))
+        clean = when[0] if when else title
+        prio = smart.suggest_priority(clean, self.history) if "prio" not in self.hints_used else None
+        if prio and (prio[0], prio[1]) != (self.urgent.get(), self.important.get()):
+            name = PRIORITY_NAMES[priority_level(prio[0], prio[1])]
+            found.append(("prio", f"«{name}» — {prio[2]}", "Отметить", lambda: self.use_priority(prio)))
+        steps = None
+        if "steps" not in self.hints_used and not self.desc.get("1.0", "end-1c").strip():
+            steps = smart.suggest_steps(clean, self.history)
+        if steps:
+            found.append(("steps", f"Шаги из похожей задачи «{short_text(steps[0], 40)}»",
+                          "Вставить в описание", lambda: self.use_steps(steps[1])))
+        for kind, text, action, command in found:
+            row = tk.Frame(self.hints, bg=self.hint_bg)
+            row.pack(fill="x", pady=(4, 0))
+            tk.Label(row, text="✨ " + text, bg=self.hint_bg, fg=MUTED, font=FONT_SMALL,
+                     anchor="w", justify="left", wraplength=self.hint_wrap).pack(side="left")
+            link = tk.Label(row, text=action, bg=self.hint_bg, fg=ACCENT, font=FONT_SMALL_BOLD,
+                            cursor="hand2")
+            link.pack(side="left", padx=(8, 0))
+            link.bind("<Button-1>", lambda e, k=kind, c=command: (self.hints_used.add(k), c(),
+                                                                   self.update_hints()))
+
+    def use_when(self, when):
+        due_at, remind = apply_when(when)
+        due = datetime.fromisoformat(due_at)
+        self.title_entry.delete(0, "end")
+        self.title_entry.insert(0, when[0])
+        self.date.set(due.date())
+        self.date_changed()
+        self.hour.set(due.strftime("%H"))
+        self.minute.set(due.strftime("%M"))
+        if remind is not None:
+            self.remind.set(next(label for label, minutes in self.remind_options.items()
+                                 if minutes == remind))
+
+    def use_priority(self, prio):
+        self.urgent.set(prio[0])
+        self.important.set(prio[1])
+        self.priority_changed()
+
+    def use_steps(self, body):
+        self.desc.delete("1.0", "end")
+        self.desc.insert("1.0", body)
 
     def set_date(self, days):
         self.date.set(date.today() + timedelta(days=days))
@@ -1174,7 +1382,7 @@ class TaskDialog(tk.Toplevel):
     """Запасное окно с формой задачи — когда правая панель скрыта (узкое окно)."""
 
     def __init__(self, parent, task, statuses, members=None, title="Задача", note="",
-                 standalone=False, image=None):
+                 standalone=False, image=None, history=None, hints=False):
         """standalone — отдельное окно (своя кнопка на панели задач): главное окно ToDoro скрыто
         или позади, а форма должна появиться поверх Outlook.
         image — картинка Pillow (снимок экрана), её уменьшенная копия показывается над формой."""
@@ -1186,7 +1394,7 @@ class TaskDialog(tk.Toplevel):
         if not standalone:
             self.transient(parent)
         self.form = TaskForm(self, task, statuses, on_save=self.saved, on_cancel=self.destroy,
-                             members=members)
+                             members=members, history=history, hints=hints)
         self.form.configure(padding=(20, 18, 20, 18))
         if note:  # например, «Из письма Outlook; будут приложены: …»
             ttk.Label(self, text=note, style="Muted.TLabel", wraplength=520, justify="left").pack(
@@ -2337,8 +2545,9 @@ class Banner(tk.Frame):
     восстановлена». Её видно всегда — в отличие от облачка Тоторо, которое прячется
     вместе с правой панелью и сменяется другими подсказками."""
     COLORS = {"alert": (ALERT_BG, ALERT_BORDER, DANGER), "good": (GOOD_BG, GOOD_BORDER, GOOD_TEXT),
-              "wait": (GOOD_BG, GOOD_BORDER, GOOD_TEXT)}
-    ICONS = {"alert": "⚠", "good": "✔", "wait": "⏳"}
+              "wait": (GOOD_BG, GOOD_BORDER, GOOD_TEXT),
+              "hint": (ACCENT_SOFT, ACCENT_SOFT_HOVER, ACCENT)}
+    ICONS = {"alert": "⚠", "good": "✔", "wait": "⏳", "hint": "✨"}
 
     def __init__(self, parent, before):
         super().__init__(parent, highlightthickness=1, bd=0)
@@ -2357,8 +2566,11 @@ class Banner(tk.Frame):
         self.text.bind("<Configure>", lambda e: self.text.configure(wraplength=max(e.width, 200)))
         self.command = None
         self.hide_job = None
+        self.kind = None  # что показано сейчас; None — полоса скрыта
+        self.has_action = False
 
     def show(self, kind, text, action=None, command=None, hide_after=None):
+        self.kind = kind
         bg, border, accent = self.COLORS[kind]
         self.configure(bg=bg, highlightbackground=border, highlightcolor=border)
         self.icon.configure(text=self.ICONS[kind], bg=bg, fg=accent)
@@ -2366,6 +2578,7 @@ class Banner(tk.Frame):
         self.close_x.configure(bg=bg)
         self.action.configure(bg=bg)
         self.command = command
+        self.has_action = bool(action)
         if action:
             self.action.configure(text=action)
             self.action.pack(side="right", padx=(16, 4), before=self.text)
@@ -2383,6 +2596,7 @@ class Banner(tk.Frame):
         if self.hide_job:
             self.after_cancel(self.hide_job)
             self.hide_job = None
+        self.kind = None
         self.pack_forget()
 
 
@@ -2428,7 +2642,7 @@ class SidePanel(tk.Frame):
         self.card.show(**task)
         self.switch("task", self.card)
 
-    def show_form(self, task, statuses, on_save, on_cancel, members=None):
+    def show_form(self, task, statuses, on_save, on_cancel, members=None, history=None):
         """Форма изменения задачи прямо в панели."""
         if self.editor is not None:
             self.editor.destroy()
@@ -2451,7 +2665,7 @@ class SidePanel(tk.Frame):
         close.bind("<Button-1>", lambda e: on_cancel())
         collapse_button(head, self.on_collapse).pack(side="right", padx=(0, 10))
         self.form = TaskForm(area.inner, task, statuses, on_save, on_cancel, compact=True,
-                             members=members)
+                             members=members, history=history)
         self.form.pack(fill="x", padx=18, pady=(0, 16))
         cancel = ttk.Button(buttons, text="Отмена", style="Soft.TButton", cursor="hand2",
                             command=on_cancel)
@@ -2983,7 +3197,7 @@ class SettingsDialog(tk.Toplevel):
 
     def __init__(self, parent, start_mode, card_fields, update_auto, shared_folder="", user_name="",
                  team_status=None, page="general", check_folder=None, check_update=None,
-                 animate=True, theme="light", tour=True, tray_on=False):
+                 animate=True, theme="light", tour=True, tray_on=False, smart_on=True):
         super().__init__(parent)
         self.result = None
         self.update_found = None  # найденная новая версия: откроется после закрытия настроек
@@ -3000,6 +3214,7 @@ class SettingsDialog(tk.Toplevel):
         self.theme = tk.StringVar(value=theme)
         self.tour = tk.BooleanVar(value=tour)
         self.tray_on = tk.BooleanVar(value=tray_on)
+        self.smart_on = tk.BooleanVar(value=smart_on)
 
         body = tk.Frame(self, bg=BG)
         body.pack(fill="both", expand=True)
@@ -3022,7 +3237,7 @@ class SettingsDialog(tk.Toplevel):
                 widget.bind("<Leave>", lambda e, k=key: self.paint_nav(k))
             self.nav_items[key] = (item, mark, text)
 
-        self.content = tk.Frame(body, bg=BG, width=560, height=470)
+        self.content = tk.Frame(body, bg=BG, width=560, height=560)
         self.content.pack(side="left", fill="both", expand=True, padx=(10, 22), pady=16)
         self.content.pack_propagate(False)
         self.pages = {
@@ -3119,6 +3334,10 @@ class SettingsDialog(tk.Toplevel):
                            "Показывать при запуске программы тур по её главным возможностям. "
                            "Пройти его в любой момент: «☰ Меню» → «Ознакомительный тур».")
         Toggle(control, self.tour).pack()
+        control = self.row(card, "Умные подсказки",
+                           "Варианты названия из ваших прошлых задач, срок из слов «завтра в 10», "
+                           "приоритет и шаги похожих задач. Работают без интернета.")
+        Toggle(control, self.smart_on).pack()
         control = self.row(card, "Значок в трее при входе в Windows",
                            f"Значок возле часов: {OUTLOOK_HOTKEY_NAME} в Outlook делает задачу из письма, "
                            f"{SNIP_HOTKEY_NAME} — задачу со снимка экрана, даже если ToDoro не открыт.")
@@ -3289,7 +3508,8 @@ class SettingsDialog(tk.Toplevel):
                            card_fields=[key for key, var in self.fields.items() if var.get()],
                            update_auto=self.update_auto.get(), shared_folder=folder, user_name=name,
                            animate=self.animate.get(), theme=self.theme.get(),
-                           tour=self.tour.get(), tray=self.tray_on.get())
+                           tour=self.tour.get(), tray=self.tray_on.get(),
+                           smart=self.smart_on.get())
         self.destroy()
 
     def show(self):
@@ -4554,6 +4774,7 @@ class TodoApp:
         root.withdraw()
         # self.prefs — основной файл: настройки и личный список; self.conn — текущий список задач
         self.prefs = db.connect()
+        self.smart_on = db.get_setting(self.prefs, "smart_hints", "1") == "1"  # умные подсказки
         self.list_conns = {db.PERSONAL: self.prefs}  # открытые списки: id -> соединение
         self.team, self.team_error = None, None      # общая папка (team.Team), если подключена
         self.probe = None      # фоновая проверка связи с общей папкой (team.Probe)
@@ -4638,12 +4859,13 @@ class TodoApp:
         self.banner = Banner(page, before=add_row)
         self.entry = ttk.Entry(add_row, font=FONT)
         self.entry.pack(side="left", fill="x", expand=True, ipady=2)
-        self.entry.bind("<Return>", lambda e: self.add())
+        self.entry.bind("<Return>", lambda e: self.entry_enter())
         self.entry.bind("<KeyPress>", self.on_entry_key)
         self.entry.bind("<<Paste>>", lambda e: self.hide_placeholder())
         self.entry.bind("<FocusIn>", lambda e: self.cursor_to_start())
         self.entry.bind("<Button-1>", lambda e: self.root.after_idle(self.cursor_to_start))
         self.entry.bind("<FocusOut>", lambda e: self.show_placeholder())
+        self.title_suggest = TitleSuggest(self.entry, self.entry_text, lambda: self.smart_rows() or [])
         ttk.Button(add_row, text="＋  Добавить", style="Accent.TButton",
                    command=self.add).pack(side="left", padx=(10, 0), ipady=2)
         self.mail_button = ttk.Button(add_row, text="✉  Из письма", style="TButton",
@@ -4995,7 +5217,7 @@ class TodoApp:
             status, page, check_folder=self.check_folder, check_update=self.check_update_inline,
             animate=self.side.totoro.animate, theme=THEME_SETTING,
             tour=db.get_setting(self.prefs, "tour_show", "1") == "1",
-            tray_on=tray.autostart_enabled())
+            tray_on=tray.autostart_enabled(), smart_on=self.smart_on)
         result = dialog.show()
         if dialog.update_found:  # нашли новую версию кнопкой в настройках
             UpdateDialog(self.root, dialog.update_found, self.close)
@@ -5005,6 +5227,8 @@ class TodoApp:
         db.set_setting(self.prefs, "update_auto", "1" if result["update_auto"] else "0")
         db.set_setting(self.prefs, "totoro_animate", "1" if result["animate"] else "0")
         db.set_setting(self.prefs, "tour_show", "1" if result["tour"] else "0")
+        db.set_setting(self.prefs, "smart_hints", "1" if result["smart"] else "0")
+        self.smart_on = result["smart"]
         if result["tray"] != tray.autostart_enabled():
             if not tray.set_autostart(result["tray"]):
                 ui.showerror("Значок в трее", "Не удалось изменить автозапуск в реестре Windows.",
@@ -6024,16 +6248,109 @@ class TodoApp:
             return None
         return task_id, info["done"]
 
+    def entry_enter(self):
+        if not self.title_suggest.accept():  # Enter подставил вариант названия — не добавляем
+            self.add()
+
+    def banner_busy(self):
+        """На полосе важное: связь с общей папкой или кнопка «Открыть список» — не перекрываем."""
+        return self.banner.kind in ("alert", "wait") or (self.banner.kind == "good"
+                                                          and self.banner.has_action)
+
     def add(self):
         title = self.entry_text()
         if not title:
             return
-        task_id = db.add_task(self.conn, title, created_by=self.created_by())
+        history = self.smart_rows()
+        # Что поняли из названия, применяем, только если можем сказать об этом на полосе
+        # (с кнопкой «Отменить»); иначе задача добавляется как написана
+        when = smart.parse_when(title) if history is not None and not self.banner_busy() else None
+        name = when[0] if when else title
+        prio = smart.suggest_priority(name, history) if history is not None else None
+        # «срочно/важно» сказали в названии
+        told = prio if prio and prio[3] and not self.banner_busy() else None
+        task_id = db.add_task(self.conn, name, created_by=self.created_by())
+        # Срок из названия и «срочно/важно» из его слов ставим сразу — их сказали явно;
+        # приоритет и шаги похожих задач — только предлагаем в полосе над полем ввода
+        if when or told:
+            due_at, remind = apply_when(when) if when else (None, None)
+            db.update_task(self.conn, task_id, name, due_at, remind, bool(told and told[0]),
+                           bool(told and told[1]), by=self.created_by())
         self.entry.delete(0, "end")
         self.show_placeholder()
         if FILTERS[self.filter.get()] not in (None, False):
             self.filter.set("Все")  # иначе новую задачу (без срока) не будет видно
         self.refresh(select_id=task_id)
+        if history is not None:
+            self.smart_banner(task_id, title, when, told, None if told else prio, history)
+
+    def smart_banner(self, task_id, title, when, told, prio, history):
+        """После быстрого добавления: что умные подсказки поняли из названия (с «Отменить»)
+        или совет по похожим задачам. Сообщение о связи с общей папкой не перекрываем."""
+        if self.banner_busy():
+            return
+        name = when[0] if when else title
+        conn = self.conn  # кнопки полосы — только для этого списка, не для открытого позже
+
+        def same_list():
+            if self.conn is conn:
+                return True
+            self.banner.hide()
+            return False
+        if when or told:
+            parts = []
+            if when:
+                parts.append("срок " + smart.describe_when(when[1], when[2]) +
+                             (", напомню за 15 минут" if when[2] else ""))
+            if told:
+                parts.append("«" + PRIORITY_NAMES[priority_level(told[0], told[1])] + "»")
+            version = (db.task_meta(self.conn, task_id) or {}).get("version")
+
+            def undo():
+                if not same_list():
+                    return
+                self.banner.hide()
+                self.finish_editing()
+                # задачу с тех пор меняли (вы или другой участник) — не трогаем
+                if db.update_task(self.conn, task_id, title, None, None, False, False,
+                                  by=self.created_by(), version=version):
+                    self.refresh(select_id=task_id)
+                else:
+                    self.banner.show("hint", "Задачу уже изменили — отменять не стал.",
+                                     hide_after=6_000)
+            self.banner.show("hint", "Понял из названия: " + "; ".join(parts) + ".", "Отменить",
+                             undo, hide_after=12_000)
+            return
+        if prio:
+            urgent, important = prio[0], prio[1]
+
+            def mark():
+                if not same_list():
+                    return
+                self.banner.hide()
+                if db.get_task(self.conn, task_id) is not None:
+                    self.quick_priority(task_id, urgent, important)
+            self.banner.show("hint", f"Отметить новую задачу как «{PRIORITY_NAMES[priority_level(urgent, important)]}»? "
+                             f"Так {prio[2].removeprefix('так ')}.", "Отметить", mark, hide_after=15_000)
+            return
+        steps = smart.suggest_steps(name, history)
+        if steps:
+            def insert():
+                if not same_list():
+                    return
+                self.banner.hide()
+                self.finish_editing()
+                task = db.get_task(self.conn, task_id)
+                if task is None:
+                    return
+                title_, due_at, remind_before, urgent, important, body = task
+                if not (body or "").strip():
+                    db.update_task(self.conn, task_id, title_, due_at, remind_before, urgent,
+                                   important, steps[1], by=self.created_by())
+                self.refresh(select_id=task_id)
+            self.banner.show("hint", f"У похожей задачи «{short_text(steps[0], 50)}» есть список "
+                             "шагов. Вставить их в описание новой?", "Вставить шаги", insert,
+                             hide_after=15_000)
 
     def edit(self):
         task = self.selected()
@@ -6052,11 +6369,13 @@ class TodoApp:
             self.edit_version = data["version"]
             self.side.show_form(data, statuses,
                                 on_save=lambda result: self.save_edit(task_id, result),
-                                on_cancel=self.cancel_edit, members=self.members())
+                                on_cancel=self.cancel_edit, members=self.members(),
+                                history=self.smart_rows())
             return
         # Окно узкое и панель скрыта — открываем форму в отдельном окне
         data = self.form_data(task_id)
-        dialog = TaskDialog(self.root, data, statuses, members=self.members())
+        dialog = TaskDialog(self.root, data, statuses, members=self.members(),
+                            history=self.smart_rows())
         self.root.wait_window(dialog)
         if dialog.result:
             version = data["version"] if self.created_by() else None
@@ -6791,6 +7110,13 @@ class TodoApp:
     def current_list(self):
         return next(i for i in self.lists if i["id"] == self.list_id)
 
+    def smart_rows(self):
+        """Прошлые задачи списка для умных подсказок (уже прочитанные refresh — по сети заново
+        не ходим) или None, если подсказки выключены в настройках."""
+        if not self.smart_on:
+            return None
+        return getattr(self, "all_rows", None) or []
+
     def created_by(self):
         """Кто создаёт или меняет задачу: в общем списке — имя участника, в личном — никто."""
         return self.user_name() if self.list_id and self.current_list()["shared"] else None
@@ -6858,6 +7184,8 @@ class TodoApp:
     def switch_list(self, list_id):
         if list_id == self.list_id:
             return
+        if self.banner.kind == "hint":  # совет был про задачу прежнего списка
+            self.banner.hide()
         if self.list_id is not None:
             self.finish_editing()  # спросит, сохранить ли незаконченную правку задачи
             self.clear_selection()
@@ -7225,7 +7553,7 @@ class TodoApp:
             note += " Будут приложены: " + ", ".join(name for name, _ in mail["files"])
         dialog = TaskDialog(self.root, self.mail_task(mail), db.list_statuses(self.conn),
                             members=self.members(), title="Новая задача из письма", note=note,
-                            standalone=quiet)
+                            standalone=quiet, history=self.smart_rows(), hints=True)
         self.root.wait_window(dialog)
         if dialog.result:
             self.show_new_tasks([self.create_from_mail(mail, dialog.result)])
@@ -7288,7 +7616,8 @@ class TodoApp:
                 f"Снимок {image.width} × {image.height} будет приложен к задаче.")
         dialog = TaskDialog(self.root, task, statuses, members=members,
                             title="Новая задача со снимка экрана", note=note,
-                            standalone=quiet or self.hidden, image=image)
+                            standalone=quiet or self.hidden, image=image,
+                            history=self.smart_rows(), hints=True)
         self.root.wait_window(dialog)
         if dialog.result:
             task_id = db.add_task(self.conn, dialog.result["title"],

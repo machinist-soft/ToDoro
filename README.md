@@ -30,6 +30,9 @@
 
 - **Задачи**: заголовок и описание, срок с календарём, напоминания, приоритет «Срочно / Важно»
   (матрица Эйзенхауэра), номер у каждой задачи.
+- **Умные подсказки** (без интернета): при вводе задачи ToDoro предлагает названия из ваших
+  прошлых задач, понимает срок из текста («Сдать отчёт завтра в 10» — срок и напоминание
+  поставятся сами), советует «срочно / важно» и список шагов по похожим задачам.
 - **Напоминания**: в срок окно ToDoro всплывает поверх остальных и показывает все просроченные
   задачи; щелчок по задаче открывает её. Окно можно открыть и самому из меню.
 - **Файлы, картинки и комментарии** в каждой задаче: приложите документ или снимок экрана
@@ -60,7 +63,9 @@
 - **Обновления в один клик**: программа сама сообщает о новой версии и ставит её — задачи
   сохраняются; «Что нового» во всех версиях — прямо в программе.
 
-*Tasks with due dates, reminders and urgent / important priority · a reminders window with every
+*Tasks with due dates, reminders and urgent / important priority · smart hints that work offline:
+title suggestions from your past tasks, due dates understood from the text (“завтра в 10”),
+priority and checklist suggestions from similar tasks · a reminders window with every
 overdue task, one click opens a task · file attachments, pasted
 screenshots and comments in every task · list, kanban board with
 custom columns and Eisenhower matrix (drag a card to another quadrant to change its priority),
