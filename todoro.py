@@ -998,6 +998,7 @@ class TitleSuggest:
     def __init__(self, entry, get_text, rows):
         self.entry, self.get_text, self.rows = entry, get_text, rows  # rows() — прошлые задачи
         self.popup, self.items, self.index, self.job = None, [], -1, None
+        self.follow_job, self.spot = None, None  # слежка за положением поля, где оно было
         entry.bind("<KeyRelease>", self.typed, add="+")
         entry.bind("<Down>", lambda e: self.move(1), add="+")
         entry.bind("<Up>", lambda e: self.move(-1), add="+")
@@ -1028,12 +1029,13 @@ class TitleSuggest:
             self.close()
 
     def show(self, items):
+        """Список — рамка внутри того же окна (place поверх остального), а не отдельное окно:
+        отдельное окно Windows сначала показывало в углу экрана и делало активным — поле ввода
+        теряло фокус, и список тут же закрывался."""
         self.items, self.index = items, -1
+        top = self.entry.winfo_toplevel()
         if self.popup is None:
-            self.popup = tk.Toplevel(self.entry)
-            self.popup.overrideredirect(True)
-            self.popup.attributes("-topmost", True)
-            self.popup.configure(bg=BORDER)
+            self.popup = tk.Frame(top, bg=BORDER)
         for child in self.popup.winfo_children():
             child.destroy()
         box = tk.Frame(self.popup, bg=SURFACE)
@@ -1050,10 +1052,56 @@ class TitleSuggest:
             self.labels.append(label)
         tk.Frame(box, bg=SURFACE, height=4).pack()
         self.entry.update_idletasks()
-        width = max(self.entry.winfo_width(), 260)
-        self.popup.geometry(f"{width}x{self.popup.winfo_reqheight()}"
-                            f"+{self.entry.winfo_rootx()}"
-                            f"+{self.entry.winfo_rooty() + self.entry.winfo_height() + 2}")
+        self.place_popup()
+        if self.follow_job is None:
+            self.follow_job = self.entry.after(150, self.follow)
+
+    def place_popup(self):
+        """Ставит список под полем (не помещается до низа окна — над полем)."""
+        top = self.entry.winfo_toplevel()
+        x = self.entry.winfo_rootx() - top.winfo_rootx()
+        y = self.entry.winfo_rooty() - top.winfo_rooty()
+        height = self.popup.winfo_reqheight()
+        below = y + self.entry.winfo_height() + 2
+        if below + height > top.winfo_height() and y - height - 2 >= 0:
+            below = y - height - 2
+        width = min(max(self.entry.winfo_width(), 260), max(top.winfo_width() - x - 4, 120))
+        self.popup.place(x=x, y=below, width=width)
+        self.popup.lift()
+        self.spot = (self.entry.winfo_rootx(), self.entry.winfo_rooty(), self.entry.winfo_width(),
+                     top.winfo_height())
+
+    def entry_visible(self):
+        """Поле на экране: не спрятано и не уехало за край прокручиваемой панели (Canvas)."""
+        if not self.entry.winfo_viewable():
+            return False
+        widget = self.entry.master
+        while widget is not None and not isinstance(widget, tk.Canvas):
+            widget = widget.master
+        if widget is None:
+            return True
+        y = self.entry.winfo_rooty()
+        return widget.winfo_rooty() <= y and y + self.entry.winfo_height() <= (
+            widget.winfo_rooty() + widget.winfo_height())
+
+    def follow(self):
+        """Поле сдвинулось без изменения размера (спряталась полоса над ним, прокрутили
+        панель) — список переезжает за ним."""
+        self.follow_job = None
+        if self.popup is None:
+            return
+        try:
+            top = self.entry.winfo_toplevel()
+            spot = (self.entry.winfo_rootx(), self.entry.winfo_rooty(), self.entry.winfo_width(),
+                    top.winfo_height())
+            if not self.entry_visible():  # поле спрятали или прокрутили за край панели
+                self.close()
+                return
+            if spot != self.spot:
+                self.place_popup()
+        except tk.TclError:  # окно закрыли
+            return
+        self.follow_job = self.entry.after(150, self.follow)
 
     def highlight(self, index):
         self.index = index
@@ -1090,12 +1138,13 @@ class TitleSuggest:
             self.close()
 
     def close(self):
-        if self.job:
-            try:
-                self.entry.after_cancel(self.job)
-            except tk.TclError:
-                pass
-            self.job = None
+        for name in ("job", "follow_job"):
+            if getattr(self, name):
+                try:
+                    self.entry.after_cancel(getattr(self, name))
+                except tk.TclError:
+                    pass
+                setattr(self, name, None)
         if self.popup is not None:
             try:
                 self.popup.destroy()
