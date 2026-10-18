@@ -86,7 +86,12 @@ No server: each task list is its own SQLite file. The personal list is `%APPDATA
 - **Plan first, then wait.** Before starting to implement any task that changes files, briefly
   tell the user (in Russian, plain words) how you plan to do it — «Планирую сделать так: …» —
   and stop. Continue only after the user confirms; if they correct the plan, show the updated
-  plan and wait again. Reading code to make the plan is fine before confirmation. One
+  plan and wait again. Reading code to make the plan is fine before confirmation.
+  The plan itself must be visible text in your message, written *before* the question:
+  2–5 short points — what changes, where in the program, what the user will see. Never ask
+  «Делаем по этому плану?» (in text or in the wrap-up box) without the plan shown above it;
+  the box's recap must repeat the plan's gist, not just «нашёл, где…». After the user says
+  yes, don't retell the plan — just start. One
   confirmation covers the whole task, including test/review fix rounds, commit and push; ask
   again only if the plan materially changes. Applies to the main conversation only — subagents
   (`tester`, `reviewer`) don't wait for confirmation. For `/release` the plan is shown once,
