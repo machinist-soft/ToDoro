@@ -1172,7 +1172,8 @@ class TaskForm(ttk.Frame):
                  history=None, hints=False):
         """history — прошлые задачи списка (строки db.list_tasks) для умных подсказок, None —
         подсказки выключены. hints — показывать под заголовком советы (срок из названия,
-        приоритет и шаги похожих задач): для новой задачи, не для правки старой."""
+        приоритет и шаги похожих задач): True — для новой задачи, "changed" — для правки готовой
+        (советы только по тому, что дописали в заголовок)."""
         super().__init__(parent, style="Card.TFrame" if compact else "TFrame")
         self.on_save, self.on_cancel = on_save, on_cancel
         self.history = history
@@ -1195,6 +1196,13 @@ class TaskForm(ttk.Frame):
         self.hints = tk.Frame(self, bg=style_bg)
         self.hints.pack(fill="x")
         self.hints_on, self.hints_used, self.hints_job = hints and history is not None, set(), None
+        # hints == "changed" — правка готовой задачи: советуем только по тому, что дописали в
+        # заголовок (слова, которые были в нём и раньше, уже учтены или сознательно не учтены)
+        self.hints_changed_only = hints == "changed"
+        self.initial_title = task["title"]
+        self.auto_marked = [False, False]  # «срочно», «важно», отмеченные по словам в заголовке
+        self.prio_undone = False           # нажали «Снять» — сами больше не отмечаем
+        self.refused = [False, False]      # нашу галочку сняли руками — её больше не ставим
         self.hint_bg, self.hint_wrap = style_bg, 250 if compact else 380
 
         label("Описание")
@@ -1267,9 +1275,9 @@ class TaskForm(ttk.Frame):
         self.important = tk.BooleanVar(value=bool(task["important"]))
         check_style = "Card.TCheckbutton" if compact else "TCheckbutton"
         ttk.Checkbutton(prio_row, text="Срочно", variable=self.urgent, style=check_style,
-                        command=self.priority_changed, cursor="hand2").pack(side="left")
+                        command=self.priority_clicked, cursor="hand2").pack(side="left")
         ttk.Checkbutton(prio_row, text="Важно", variable=self.important, style=check_style,
-                        command=self.priority_changed, cursor="hand2").pack(side="left", padx=(18, 0))
+                        command=self.priority_clicked, cursor="hand2").pack(side="left", padx=(18, 0))
         self.priority_label = ttk.Label(prio_row if not compact else self, style=label_style,
                                         compound="left")
         self.priority_label.pack(side="left" if not compact else "top", anchor="w",
@@ -1330,17 +1338,25 @@ class TaskForm(ttk.Frame):
         if not title:
             return
         found = []
-        when = smart.parse_when(title) if "when" not in self.hints_used else None
-        if when:
+        changed_only = self.hints_changed_only
+        if changed_only and title == self.initial_title.strip():
+            title = ""  # в правке заголовок не меняли — советовать нечего
+        old_when = smart.parse_when(self.initial_title) if changed_only else None
+        when = smart.parse_when(title) if title and "when" not in self.hints_used else None
+        clean = when[0] if when else title
+        # в правке: срок, который был в заголовке и раньше, не предлагаем — только новый
+        if when and (old_when is None or old_when[1:] != when[1:]) and not self.due_is(when):
             found.append(("when", f"Срок в названии: {smart.describe_when(when[1], when[2])}",
                           "Поставить", lambda: self.use_when(when)))
-        clean = when[0] if when else title
-        prio = smart.suggest_priority(clean, self.history) if "prio" not in self.hints_used else None
+        found += self.explicit_priority(clean)
+        explicit = smart.suggest_priority(clean, []) if clean else None
+        prio = (smart.suggest_priority(clean, self.history)
+                if clean and "prio" not in self.hints_used and not (explicit and explicit[3]) else None)
         if prio and (prio[0], prio[1]) != (self.urgent.get(), self.important.get()):
             name = PRIORITY_NAMES[priority_level(prio[0], prio[1])]
             found.append(("prio", f"«{name}» — {prio[2]}", "Отметить", lambda: self.use_priority(prio)))
         steps = None
-        if "steps" not in self.hints_used and not self.desc.get("1.0", "end-1c").strip():
+        if title and "steps" not in self.hints_used and not self.desc.get("1.0", "end-1c").strip():
             steps = smart.suggest_steps(clean, self.history)
         if steps:
             found.append(("steps", f"Шаги из похожей задачи «{short_text(steps[0], 40)}»",
@@ -1355,6 +1371,49 @@ class TaskForm(ttk.Frame):
             link.pack(side="left", padx=(8, 0))
             link.bind("<Button-1>", lambda e, k=kind, c=command: (self.hints_used.add(k), c(),
                                                                    self.update_hints()))
+
+    def due_is(self, when):
+        """Такой срок в форме уже стоит."""
+        due = datetime.fromisoformat(apply_when(when)[0])
+        if self.date.value != due.date():
+            return False
+        return when[2] is None or (self.hour.get(), self.minute.get()) == (due.strftime("%H"),
+                                                                          due.strftime("%M"))
+
+    def explicit_priority(self, clean):
+        """«срочно / asap / важно», дописанные в заголовок, отмечаем сразу, каждое слово
+        отдельно и ничего не снимая; стёрли слово — снимаем свою же отметку. Слова, которые
+        были в прежнем заголовке (правка задачи), не считаем. Возвращает строку-совет «Отметил…
+        — Снять» для update_hints (или ничего)."""
+        said = smart.suggest_priority(clean, []) if clean else None
+        said = (said[0], said[1]) if said and said[3] else (False, False)
+        old = smart.suggest_priority(self.initial_title, []) if self.hints_changed_only else None
+        was = (old[0], old[1]) if old and old[3] else (False, False)
+        if not self.prio_undone:
+            for k, var in enumerate((self.urgent, self.important)):
+                new = said[k] and not was[k]
+                if self.auto_marked[k] and not var.get():  # нашу галочку сняли руками — отказ
+                    self.auto_marked[k], self.refused[k] = False, True
+                if new and not var.get() and not self.refused[k]:
+                    var.set(True)
+                    self.auto_marked[k] = True
+                elif self.auto_marked[k] and not new:  # слово стёрли — снимаем свою отметку
+                    var.set(False)
+                    self.auto_marked[k] = False
+            self.priority_changed()
+        names = [n for n, marked in zip(("«Срочно»", "«Важно»"), self.auto_marked) if marked]
+        if not names:
+            return []
+        return [("prio_note", f"Отметил {' и '.join(names)} — так сказано в названии", "Снять",
+                 self.undo_priority)]
+
+    def undo_priority(self):
+        """«Снять»: убираем свои отметки и больше сами не отмечаем."""
+        for k, var in enumerate((self.urgent, self.important)):
+            if self.auto_marked[k]:
+                var.set(False)
+        self.auto_marked, self.prio_undone = [False, False], True
+        self.priority_changed()
 
     def use_when(self, when):
         due_at, remind = apply_when(when)
@@ -1378,6 +1437,12 @@ class TaskForm(ttk.Frame):
 
     def set_date(self, days):
         self.date.set(date.today() + timedelta(days=days))
+
+    def priority_clicked(self):
+        """Галочку поставили или сняли руками — советы под заголовком тоже пересчитываем."""
+        self.priority_changed()
+        if self.hints_on:
+            self.hints_later()
 
     def priority_changed(self):
         """Показывает, какой приоритет получился из галочек."""
@@ -2689,7 +2754,7 @@ class SidePanel(tk.Frame):
         self.card.show(**task)
         self.switch("task", self.card)
 
-    def show_form(self, task, statuses, on_save, on_cancel, members=None, history=None):
+    def show_form(self, task, statuses, on_save, on_cancel, members=None, history=None, hints=False):
         """Форма изменения задачи прямо в панели."""
         if self.editor is not None:
             self.editor.destroy()
@@ -2712,7 +2777,7 @@ class SidePanel(tk.Frame):
         close.bind("<Button-1>", lambda e: on_cancel())
         collapse_button(head, self.on_collapse).pack(side="right", padx=(0, 10))
         self.form = TaskForm(area.inner, task, statuses, on_save, on_cancel, compact=True,
-                             members=members, history=history)
+                             members=members, history=history, hints=hints)
         self.form.pack(fill="x", padx=18, pady=(0, 16))
         cancel = ttk.Button(buttons, text="Отмена", style="Soft.TButton", cursor="hand2",
                             command=on_cancel)
@@ -6420,12 +6485,12 @@ class TodoApp:
             self.side.show_form(data, statuses,
                                 on_save=lambda result: self.save_edit(task_id, result),
                                 on_cancel=self.cancel_edit, members=self.members(),
-                                history=self.smart_rows())
+                                history=self.smart_rows(), hints="changed")
             return
         # Окно узкое и панель скрыта — открываем форму в отдельном окне
         data = self.form_data(task_id)
         dialog = TaskDialog(self.root, data, statuses, members=self.members(),
-                            history=self.smart_rows())
+                            history=self.smart_rows(), hints="changed")
         self.root.wait_window(dialog)
         if dialog.result:
             version = data["version"] if self.created_by() else None
