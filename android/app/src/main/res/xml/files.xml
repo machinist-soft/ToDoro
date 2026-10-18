@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Что приложение может показать другим программам: только скачанное обновление -->
+<paths>
+    <cache-path name="update" path="update/" />
+</paths>

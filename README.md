@@ -44,7 +44,7 @@
 - **Несколько списков**: личные и **общие для команды** — в общей сетевой папке, в том числе
   через VPN.
 - **Задачи на телефоне Android**: личные и общие списки в приложении ToDoro — отметить, добавить,
-  изменить, обсудить в комментариях; работает и без связи, напоминает о сроках. Установка и подключение — по QR-коду
+  изменить, обсудить в комментариях; работает и без связи, напоминает о сроках, обновляется прямо с телефона. Установка и подключение — по QR-коду
   (☰ Меню → Подключить телефон); телефон берёт задачи у компьютера по домашней сети или VPN.
 - **Командная работа**: автор и исполнитель задачи, «Мои задачи», уведомление «Вам назначены
   задачи», «кто и когда изменил», защита от затирания чужих правок.
@@ -71,7 +71,7 @@ screenshots and comments in every task · list, kanban board with
 custom columns and Eisenhower matrix (drag a card to another quadrant to change its priority),
 filters, search and column sorting · several lists, personal and shared with a team via a network
 folder (VPN works) · an Android app: personal and shared lists on your phone, comments, works offline,
-due-date reminders, installed and paired by QR code · author and assignee, “My tasks”, “assigned to you” notices, last editor,
+due-date reminders, updates itself from the phone, installed and paired by QR code · author and assignee, “My tasks”, “assigned to you” notices, last editor,
 protection against overwriting others’ edits · a living Totoro helper and the Catbus · a guided
 tour on first launch · create a task from an Outlook e-mail (Ctrl+Alt+T): subject, text,
 attachments and the message itself, replies go to the sender; a tray icon started with Windows
@@ -125,8 +125,8 @@ CSV export / import, e-mail a task, built-in help · one-click updates and an in
 
 ![Подключить телефон / Connect a phone](docs/screenshots/phone.png)
 
-Приложение на телефоне выглядит как ToDoro на компьютере: список задач, карточка задачи с комментариями, светлая или тёмная тема (☰ Меню → Тема). Файлы задач на телефон не передаются.
-*The phone app looks like ToDoro on the PC: the task list, a task card with comments, light or dark theme (☰ Menu → Theme). Task files are never sent to the phone.*
+Приложение на телефоне выглядит как ToDoro на компьютере: список задач, карточка задачи с комментариями, светлая или тёмная тема (☰ Меню → Тема). Файлы задач на телефон не передаются. Новую версию приложения можно поставить прямо с телефона: ☰ Меню → О приложении и обновления.
+*The phone app looks like ToDoro on the PC: the task list, a task card with comments, light or dark theme (☰ Menu → Theme). Task files are never sent to the phone. A new app version installs right from the phone: ☰ Menu → About and updates.*
 
 <p>
 <img src="docs/screenshots/android-list.png" width="260" alt="Список задач на телефоне / Task list on the phone">
@@ -324,6 +324,7 @@ flowchart TB
 | `Reminders.kt` | напоминания-уведомления, в том числе после перезагрузки / reminder notifications, also after reboot |
 | `AppViewModel.kt` | состояние экранов и Тоторо-помощник / screen state and the Totoro buddy |
 | `MainScreen.kt`, `TaskCard.kt`, `TaskForm.kt`, `Comments.kt` | экраны: список, карточка, форма, комментарии / screens |
+| `Updates.kt`, `About.kt` | проверка и установка новой версии с GitHub, окно «О приложении» / update check and install from GitHub, About screen |
 | `Theme.kt`, `Ui.kt` | цвета и оформление как на компьютере / colours and styling matching the desktop |
 
 **Сборка и проверка / Build and tests**

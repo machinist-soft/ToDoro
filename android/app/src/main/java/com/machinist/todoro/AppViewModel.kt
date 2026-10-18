@@ -47,6 +47,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var filter by mutableStateOf(Filter.ALL)
     var onlyMine by mutableStateOf(false)
     var draft by mutableStateOf<Draft?>(null)
+    /** Открыто окно «О приложении». */
+    var about by mutableStateOf(false)
     /** Открытая карточка задачи (номер задачи в открытом списке). */
     var cardId by mutableStateOf<Long?>(null)
     var buddyOn by mutableStateOf(prefs.getBoolean("buddy", false))

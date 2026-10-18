@@ -231,7 +231,8 @@ fun LinkText(text: String, onClick: () -> Unit) {
 
 /** Полоса-уведомление под шапкой (как Banner на компьютере): красная, жёлтая или зелёная. */
 @Composable
-fun Strip(text: String, kind: String = "alert", action: String? = null, onAction: (() -> Unit)? = null) {
+fun Strip(text: String, kind: String = "alert", action: String? = null, onAction: (() -> Unit)? = null,
+          secondary: String? = null, onSecondary: (() -> Unit)? = null) {
     val p = P
     val (bg, border) = when (kind) {
         "good" -> p.goodBg to p.goodBorder
@@ -244,7 +245,12 @@ fun Strip(text: String, kind: String = "alert", action: String? = null, onAction
     ) {
         Text(text, color = p.text, fontSize = 14.sp)
         if (action != null && onAction != null) {
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically) {
+                if (secondary != null && onSecondary != null) {
+                    LinkText(secondary, onSecondary)
+                    Spacer(Modifier.width(12.dp))
+                }
                 FlatButton(action, onAction, height = 36.dp)
             }
         }

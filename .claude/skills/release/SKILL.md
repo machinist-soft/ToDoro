@@ -108,20 +108,22 @@ description: Выпуск новой версии ToDoro — номер верс
 - Если с прошлого выпуска менялась папка `android/` (`git diff --stat v<прошлая версия> -- android`),
   подними в `android/app/build.gradle.kts` `versionCode` на 1 и `versionName` (иначе телефон не
   поставит новый APK поверх старого).
-- `python tools/build_apk.py` → `dist\ToDoro-<versionName>.apk` (нужен ключ подписи
+- `python tools/build_apk.py` → `dist\ToDoro-<versionName>.apk` и `dist\ToDoro-android.json` (нужен ключ подписи
   `D:\Claude\android-tools\keys` — без него APK подпишется отладочным ключом и не встанет поверх
   установленного; тогда остановись и скажи пользователю).
 - Скопируй его в `dist\ToDoro.apk`: **имя без версии обязательно** — QR-код «Установить
   приложение» в окне «Подключить телефон» ведёт на `releases/latest/download/ToDoro.apk`.
-- APK прикладывается к **каждому** выпуску (даже если Android не менялся), иначе ссылка
-  из QR-кода сломается.
+- APK и `ToDoro-android.json` прикладываются к **каждому** выпуску (даже если Android не
+  менялся), иначе ссылка из QR-кода сломается, а телефон не сможет проверить обновление
+  (☰ Меню → О приложении берёт номер версии из `ToDoro-android.json` последнего выпуска и
+  скачивает `ToDoro.apk`, сверяя контрольную сумму, которую даёт GitHub).
 
 ## 7. Коммит
 
 - `git add` изменённые файлы (todoro.py, RELEASE_NOTES.md, README.md, help_text.py,
   .github/ISSUE_TEMPLATE/*, docs/screenshots/*, tools/*) — никогда не добавляй `*.db`,
   `*.lnk`, `build/`, `dist/`.
-- Сообщение: `Версия <версия>` (+ строка Co-Authored-By по правилам сессии), `git push`.
+- Сообщение: `Версия <версия>` (без строки Co-Authored-By — см. CLAUDE.md), `git push`.
 
 ## 8. GitHub Release
 
@@ -142,9 +144,10 @@ description: Выпуск новой версии ToDoro — номер верс
    Ссылки — на полный SHA коммита из шага 7 (не на `main`), чтобы картинки выпуска не
    менялись потом. Показывай снимки новых функций выпуска + `list.png` / `board.png` /
    `dark.png` по смыслу. Проверь, что каждая ссылка отдаёт 200 (`curl -s -o /dev/null -w "%{http_code}"`).
-2. `gh release create v<версия> dist/ToDoro-Setup-<версия>.exe dist/ToDoro.apk --title "ToDoro <версия>" --notes-file <файл> --target main`
+2. `gh release create v<версия> dist/ToDoro-Setup-<версия>.exe dist/ToDoro.apk dist/ToDoro-android.json --title "ToDoro <версия>" --notes-file <файл> --target main`
 3. Проверки:
-   - `gh release view v<версия> --json assets,isDraft` — установщик и `ToDoro.apk` приложены, не черновик;
+   - `gh release view v<версия> --json assets,isDraft` — установщик, `ToDoro.apk` и
+     `ToDoro-android.json` приложены, у `ToDoro.apk` есть `digest` (sha256), не черновик;
    - `curl -s --ssl-no-revoke -o /dev/null -w "%{http_code}" -L https://github.com/machinist-soft/ToDoro/releases/latest/download/ToDoro.apk`
      → 200 (по этой ссылке телефон скачивает приложение из QR-кода);
    - `curl -s --ssl-no-revoke https://api.github.com/repos/machinist-soft/ToDoro/releases/latest`

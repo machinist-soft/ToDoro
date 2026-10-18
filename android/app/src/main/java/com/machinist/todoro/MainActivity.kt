@@ -85,6 +85,7 @@ class MainActivity : ComponentActivity() {
         }
         if (savedInstanceState == null) handle(intent)
         Reminders.createChannels(this)
+        Updates.autoCheck(this)  // раз в сутки: нет ли новой версии приложения (полоска на главном экране)
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
                 this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)

@@ -106,6 +106,17 @@ class ScreenshotTest {
         assertEquals(key, Repo.pairing?.key)
     }
 
+    /** ☰ Меню → О приложении и обновления. */
+    @Test
+    fun about() {
+        start()
+        compose.onNode(hasText("☰  Меню")).performClick()
+        compose.onNode(hasText("О приложении и обновления")).performClick()
+        shot("9-about")
+        compose.onNode(hasText("‹ Назад к списку")).performClick()
+        compose.waitForIdle()
+    }
+
     @Test
     @Config(qualifiers = "w393dp-h851dp-night-xxhdpi")
     fun dark() {

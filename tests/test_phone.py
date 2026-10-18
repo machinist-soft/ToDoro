@@ -13,6 +13,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -102,6 +103,14 @@ class PhoneServerTests(unittest.TestCase):
         self.assertEqual([i["id"] for i in answer["lists"]], ["personal"])
         self.assertEqual([t["title"] for t in answer["views"]["personal"]["tasks"]], ["Хлеб"])
         self.assertEqual(answer["user"], "Аня")
+
+    def test_sync_returns_pc_version(self):
+        """В ответе /sync — версия ToDoro на компьютере (для «О приложении» в телефоне)."""
+        # версию задаёт start_in_background (из todoro.APP_VERSION); здесь подставляем свою
+        with mock.patch.object(phone, "APP_VERSION", "9.8.7"):
+            answer = self.call("GET", "/api/v1/sync")[1]
+        self.assertEqual(answer["version"], "9.8.7")
+        self.assertEqual(answer["user"], "Аня")  # прежние поля на месте
 
     def test_comments(self):
         task_id = self.call("POST", "/api/v1/lists/personal/tasks", {"title": "Отчёт"})[1]["task"]["id"]

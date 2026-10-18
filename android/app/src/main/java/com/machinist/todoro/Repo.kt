@@ -21,6 +21,7 @@ data class SyncData(
     val sharedOffline: Boolean,
     val user: String,
     val syncedAt: Long,
+    val pcVersion: String = "",  // версия ToDoro на компьютере («О приложении»)
 )
 
 /**
@@ -450,5 +451,6 @@ fun parseSync(o: JSONObject): SyncData {
         sharedOffline = o.optBoolean("shared_offline"),
         user = o.optString("user"),
         syncedAt = o.optLong("synced_at"),
+        pcVersion = o.optString("version"),
     )
 }

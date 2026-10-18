@@ -18,6 +18,7 @@
     GET    /api/v1/hello                         — версия, имя, компьютер
     GET    /api/v1/lists                         — все списки
     GET    /api/v1/sync                          — все списки сразу с задачами (копия для телефона)
+                                                   и версия ToDoro на компьютере
     GET    /api/v1/lists/<список>                — колонки, задачи, участники
     POST   /api/v1/lists/<список>/tasks          — новая задача
     GET    /api/v1/lists/<список>/tasks/<номер>  — задача с комментариями
@@ -361,7 +362,8 @@ class Store:
                 offline = True
                 continue
             lists.append({"id": item["id"], "name": item["name"], "shared": item["shared"]})
-        return {"lists": lists, "views": views, "shared_offline": offline, "user": self.user()}
+        return {"lists": lists, "views": views, "shared_offline": offline, "user": self.user(),
+                "version": APP_VERSION}  # версия ToDoro на компьютере — для «О приложении» в телефоне
 
     def check_status(self, conn, status_id):
         check_number(status_id, "status_id")  # True == 1 в Python — колонкой «да» не выбрать

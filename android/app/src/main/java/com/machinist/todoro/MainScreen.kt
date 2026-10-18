@@ -44,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -65,6 +66,10 @@ fun MessageEffect(snackbar: SnackbarHostState) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(vm: AppViewModel, onScan: () -> Unit) {
+    if (vm.about) {
+        AboutScreen(vm)
+        return
+    }
     val view = vm.view
     val draft = vm.draft
     if (draft != null && view != null) {
@@ -80,6 +85,7 @@ fun MainScreen(vm: AppViewModel, onScan: () -> Unit) {
     val snackbar = remember { SnackbarHostState() }
     MessageEffect(snackbar)
     var confirmUnpair by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     Scaffold(containerColor = p.bg, snackbarHost = { SnackbarHost(snackbar) }) { padding ->
         PullToRefreshBox(
@@ -98,6 +104,14 @@ fun MainScreen(vm: AppViewModel, onScan: () -> Unit) {
                 } else Repo.problem?.let { text ->
                     item { Strip(offlineText(text), if (Repo.data != null) "warn" else "alert", "Повторить") { vm.refresh() } }
                 }
+                (Updates.state as? UpdateState.Available)?.release
+                    ?.takeIf { it.versionCode != Updates.dismissedCode }?.let { release ->
+                        item {
+                            Strip("Вышла новая версия приложения — ${release.versionName}.", "good", "Обновить",
+                                { vm.about = true; Updates.startDownload(context, release) },
+                                "Не сейчас", { Updates.dismiss(context, release) })
+                        }
+                    }
                 if (view != null && Repo.data?.sharedOffline == true) {
                     item {
                         Strip("Компьютер сейчас не видит общую папку. Общие списки — в том виде, как были " +
@@ -191,6 +205,8 @@ fun Header(vm: AppViewModel, onScan: () -> Unit, onUnpair: () -> Unit) {
                 HorizontalDivider(color = p.border)
                 DropdownMenuItem(text = { Text("Подключить заново (QR-код)") }, onClick = { menu = false; onScan() })
                 DropdownMenuItem(text = { Text("Отключиться от компьютера") }, onClick = { menu = false; onUnpair() })
+                HorizontalDivider(color = p.border)
+                DropdownMenuItem(text = { Text("О приложении и обновления") }, onClick = { menu = false; vm.about = true })
             }
         }
     }
