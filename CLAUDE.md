@@ -21,7 +21,7 @@ python -m unittest discover tests                  # all tests (no windows, temp
 python -m unittest tests.test_core.DatabaseTests.test_version_protects_from_overwrite  # one test
 python tools/build_installer.py                    # PyInstaller + Inno Setup 6 → dist/ToDoro-Setup-<ver>.exe
 python tools/build_apk.py                          # Gradle assembleRelease → dist/ToDoro-<ver>.apk
-python tools/make_screenshots.py [dark|matrix|whatsnew|reminders|phone]  # README screenshots (window goes topmost ~20 s)
+python tools/make_screenshots.py [card files ...|dark]  # README screenshots: named ones only, or all (~20 s topmost)
 python tools/android_screenshots.py                # Android screenshots via Robolectric (no device)
 python tools/make_images.py / make_icon.py / make_android_icons.py      # regenerate images/ and icons
 ```
@@ -80,6 +80,12 @@ No server: each task list is its own SQLite file. The personal list is `%APPDATA
   need a DB patch `db.DATA_DIR`, `db.DB_PATH`, `db.LISTS_DIR` (and `db.OLD_DB_PATHS`) to a temp dir,
   as `tools/make_screenshots.py` does. Theme is read at import of `todoro.py`, so set it before import.
 - Never let tests set categories on real Outlook mail (patch `outlook.mark_added`).
+- Screenshots: capture only the window or dialog you need, never the whole screen (no full-desktop
+  computer-use screenshots to check the app). To look at a change, run a small script in the
+  scratchpad on temp data that grabs just that window (`ImageGrab.grab(frame_box(window))`, as in
+  `tools/make_screenshots.py`), or `python tools/make_screenshots.py <names>` for README pictures —
+  only the names you need, never the full run unless the whole look changed. One picture per
+  check, read it once; no "just in case" repeats.
 
 ## Workflow
 

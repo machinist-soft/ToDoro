@@ -4,6 +4,8 @@
 во временной «общей папке» — данные пользователя не попадают в кадр.
 Окно на время съёмки встаёт поверх остальных; мышь лучше не трогать (~20 секунд).
 Запуск из папки проекта:  python tools/make_screenshots.py
+Только нужные снимки — по именам файлов без .png:  python tools/make_screenshots.py card files
+(остальные картинки не перезаписываются). Тёмная тема — отдельно:  python tools/make_screenshots.py dark
 Нужен Pillow:  pip install pillow
 """
 import ctypes
@@ -24,10 +26,23 @@ sys.path.insert(0, str(ROOT))
 import db  # noqa: E402
 
 DARK = "dark" in sys.argv[1:]  # python tools/make_screenshots.py dark — только снимок тёмной темы
-MATRIX = "matrix" in sys.argv[1:]  # python tools/make_screenshots.py matrix — только снимок матрицы
-WHATSNEW = "whatsnew" in sys.argv[1:]  # python tools/make_screenshots.py whatsnew — только «Что нового»
-REMINDERS = "reminders" in sys.argv[1:]  # python tools/make_screenshots.py reminders — только напоминания
-PHONE = "phone" in sys.argv[1:]  # python tools/make_screenshots.py phone — только «Подключить телефон»
+# снимки светлой темы (имена файлов без .png); catbus — анимация catbus.gif
+SHOTS = ("list", "lists", "card", "form", "files", "comments", "outlook", "snip", "smart", "board",
+         "matrix", "tour", "settings", "about", "whatsnew", "reminders", "phone", "update", "catbus")
+# python tools/make_screenshots.py card files — только эти снимки; без имён — все
+WANTED = {name.removesuffix(".png").removesuffix(".gif") for name in sys.argv[1:]}
+DARK = DARK or "dark" in WANTED
+WANTED.discard("dark")
+if DARK and WANTED:
+    sys.exit("dark снимается отдельным запуском: python tools/make_screenshots.py dark")
+if WANTED - set(SHOTS):
+    sys.exit("Нет таких снимков: " + ", ".join(sorted(WANTED - set(SHOTS))) + "\nЕсть: " + ", ".join(SHOTS))
+
+
+def wanted(name):
+    return not WANTED or name in WANTED
+
+
 work = Path(tempfile.mkdtemp(prefix="todoro-shots-"))
 out = ROOT / "docs" / "screenshots"
 out.mkdir(parents=True, exist_ok=True)
@@ -213,49 +228,75 @@ def shoot_phone():
     dialog.destroy()
 
 
-def run_phone():
-    for _ in range(4):
-        root.update()
-        time.sleep(0.2)
-    shoot_phone()
-    root.destroy()
-
-
-def run_reminders():
-    for _ in range(4):
-        root.update()
-        time.sleep(0.2)
-    shoot_reminders()
-    root.destroy()
-
-
-def run_whatsnew():
-    for _ in range(4):
-        root.update()
-        time.sleep(0.2)
-    shoot_whatsnew()
-    root.destroy()
-
-
-def run_matrix():
-    """Только матрица Эйзенхауэра."""
-    for _ in range(6):
-        root.update()
-        time.sleep(0.2)
-    app.view.set("matrix")
-    app.switch_view()
-    grab("matrix.png")
-    root.destroy()
-
-
 def run():
     # 1. Общий список команды с Тоторо: исполнители, авторы
     app.clear_selection()
     for _ in range(6):  # даём окну полностью перерисоваться после смены размера
         root.update()
         time.sleep(0.2)
-    grab("list.png")
-    # 2. Меню списков: личные и общие
+    if wanted("list"):
+        grab("list.png")
+    if wanted("lists"):
+        shoot_lists()
+    if wanted("card"):  # 3. Карточка задачи справа
+        select("Сдать квартальный отчёт")
+        grab("card.png")
+    if wanted("form"):  # 4. Форма изменения задачи (с исполнителем)
+        select("Подготовить презентацию для клиента")
+        app.edit()
+        grab("form.png")
+        app.cancel_edit()
+    if wanted("files") or wanted("comments"):  # 4б. Вкладки «Файлы» и «Комментарии» в карточке
+        shoot_card_tabs()
+    app.clear_selection()  # после card/form — дальше снимки без выделенной задачи, как при полной съёмке
+    if wanted("outlook"):
+        shoot_outlook()
+    if wanted("snip"):
+        shoot_snip()
+    if wanted("smart"):
+        shoot_smart()
+    if wanted("board"):  # 5. Доска
+        app.view.set("board")
+        app.switch_view()
+        grab("board.png")
+    if wanted("matrix"):  # 5б. Матрица Эйзенхауэра
+        app.view.set("matrix")
+        app.switch_view()
+        grab("matrix.png")
+    app.view.set("list")
+    app.switch_view()
+    app.clear_selection()
+    if wanted("tour"):
+        shoot_tour()
+    if wanted("settings"):  # 6. Настройки — раздел «Совместная работа»
+        dialog = T.SettingsDialog(root, "window", app.card_fields, True, r"\\server\Общая\ToDoro", ME,
+                                  ("ok", "Подключено. Участники: " + ", ".join([ME] + TEAM)), "sharing",
+                                  check_folder=app.check_folder, check_update=app.check_update_inline)
+        T.center_on_screen(dialog)
+        dialog.attributes("-topmost", True)
+        grab("settings.png", window=dialog)
+        dialog.destroy()
+    if wanted("about"):  # 6б. «О программе»: логотип Machinist Soft (до шага 7 — там подменяется APP_VERSION)
+        dialog = T.AboutWindow(root, lambda: None)
+        dialog.attributes("-topmost", True)
+        grab("about.png", window=dialog)
+        dialog.destroy()
+    if wanted("whatsnew"):
+        shoot_whatsnew()
+    if wanted("reminders"):
+        shoot_reminders()
+    if wanted("phone"):
+        shoot_phone()
+    if wanted("update"):
+        shoot_update()
+    if wanted("catbus"):
+        shoot_catbus()  # закрывает окно сам, когда анимация снята
+    else:
+        root.destroy()
+
+
+def shoot_lists():
+    """2. Меню списков: личные и общие."""
     app.show_lists_menu()
     root.update()
     menu = [w for w in root.winfo_children() if isinstance(w, T._MenuWindow)][-1]
@@ -263,25 +304,23 @@ def run():
     left, top, _, _ = frame_box()
     grab("lists.png", (left, top, left + 620, menu.winfo_rooty() + menu.winfo_height() + 16))
     menu.close()
-    # 3. Карточка задачи справа
-    select("Сдать квартальный отчёт")
-    grab("card.png")
-    # 4. Форма изменения задачи (с исполнителем)
-    select("Подготовить презентацию для клиента")
-    app.edit()
-    grab("form.png")
-    app.cancel_edit()
-    # 4б. Вкладки «Файлы» и «Комментарии» в карточке задачи
+
+
+def shoot_card_tabs():
     select(EXTRAS_TASK)
     card = app.side.card
-    for tab, name in (("files", "files.png"), ("comments", "comments.png")):
-        card.tab.set(tab)
-        card.show_tab()
-        grab(name)
+    for tab in ("files", "comments"):
+        if wanted(tab):
+            card.tab.set(tab)
+            card.show_tab()
+            grab(tab + ".png")
     card.tab.set("body")
     card.show_tab()
     app.clear_selection()
-    # 4в. Новая задача из письма Outlook (письмо выдуманное — настоящий Outlook не нужен)
+
+
+def shoot_outlook():
+    """4в. Новая задача из письма Outlook (письмо выдуманное — настоящий Outlook не нужен)."""
     friday = T.date.today() + T.timedelta(days=(4 - T.date.today().weekday()) % 7 or 7)
     mail = dict(title="Согласовать договор с поставщиком", important=True,
                 body="От: Ирина Ковалёва <i.kovaleva@example.com>, " + T.date.today().strftime("%d.%m.%Y")
@@ -304,28 +343,34 @@ def run():
     root.after(300, shoot_mail)
     app.from_outlook()
     root.attributes("-topmost", True)
-    # 4г. Новая задача со снимка экрана: «снимок» — кусок списка задач этого же окна
-    for _ in range(4):  # окно письма из прошлого шага должно успеть исчезнуть с экрана
+    for _ in range(4):  # окно письма должно успеть исчезнуть с экрана
         root.update()
         time.sleep(0.25)
+
+
+def shoot_snip():
+    """4г. Новая задача со снимка экрана: «снимок» — кусок списка задач этого же окна."""
     x, y = app.main_widget().winfo_rootx(), app.main_widget().winfo_rooty()
     picture = ImageGrab.grab((x, y, x + 760, y + 230))
     T.snip.select_area = lambda master: picture
 
-    def shoot_snip():
+    def shoot_dialog():
         dialog = next((w for w in root.winfo_children() if isinstance(w, T.TaskDialog)), None)
         if dialog is None:
-            root.after(100, shoot_snip)
+            root.after(100, shoot_dialog)
             return
         dialog.form.title_entry.insert(0, "Проверить сроки задач команды")
         dialog.attributes("-topmost", True)
         grab("snip.png", window=dialog)
         dialog.destroy()  # «Отмена»: задачу не создаём
 
-    root.after(300, shoot_snip)
+    root.after(300, shoot_dialog)
     app.from_screen()
     root.attributes("-topmost", True)
-    # 4д. Умные подсказки: варианты названия из прошлых задач под полем ввода
+
+
+def shoot_smart():
+    """4д. Умные подсказки: варианты названия из прошлых задач под полем ввода."""
     app.entry.focus_force()
     app.hide_placeholder()
     app.entry.insert(0, "По")
@@ -338,18 +383,10 @@ def run():
     app.title_suggest.close()
     app.entry.delete(0, "end")
     app.show_placeholder()
-    # 5. Доска
-    app.view.set("board")
-    app.switch_view()
-    grab("board.png")
-    # 5б. Матрица Эйзенхауэра
-    app.view.set("matrix")
-    app.switch_view()
-    grab("matrix.png")
-    app.view.set("list")
-    app.switch_view()
-    app.clear_selection()
-    # 5в. Ознакомительный тур: шаг «Список, доска и матрица»
+
+
+def shoot_tour():
+    """5в. Ознакомительный тур: шаг «Список, доска и матрица»."""
     app.start_tour()
     tour = app.tour
     for window in (tour.tip, tour.frame):
@@ -361,24 +398,11 @@ def run():
     grab("tour.png")
     tour.hide_next.set(True)  # не меняем настройку: в базе для снимков тур и так выключен
     tour.close()
-    # 6. Настройки — раздел «Совместная работа»
-    dialog = T.SettingsDialog(root, "window", app.card_fields, True, r"\\server\Общая\ToDoro", ME,
-                              ("ok", "Подключено. Участники: " + ", ".join([ME] + TEAM)), "sharing",
-                              check_folder=app.check_folder, check_update=app.check_update_inline)
-    T.center_on_screen(dialog)
-    dialog.attributes("-topmost", True)
-    grab("settings.png", window=dialog)
-    dialog.destroy()
-    # 6б. «О программе»: логотип Machinist Soft (снимаем до шага 7 — там подменяется APP_VERSION)
-    dialog = T.AboutWindow(root, lambda: None)
-    dialog.attributes("-topmost", True)
-    grab("about.png", window=dialog)
-    dialog.destroy()
-    shoot_whatsnew()
-    shoot_reminders()
-    shoot_phone()
-    # 7. Окно обновления: последний выпущенный раздел RELEASE_NOTES.md («Не выпущено» пропускаем),
-    # «текущая» версия — предыдущий выпуск (подменяется только для снимка)
+
+
+def shoot_update():
+    """7. Окно обновления: последний выпущенный раздел RELEASE_NOTES.md («Не выпущено» пропускаем),
+    «текущая» версия — предыдущий выпуск (подменяется только для снимка)."""
     notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
     sections = [part for part in notes.split("\n## ")[1:] if part[:1].isdigit()]
     version, section = sections[0].split(" ", 1)[0], sections[0].split("\n", 1)[1]
@@ -387,7 +411,10 @@ def run():
     dialog.attributes("-topmost", True)
     grab("update.png", window=dialog)
     dialog.destroy()
-    # 8. Котобус: отмечаем задачу выполненной и снимаем кадры в отдельном потоке
+
+
+def shoot_catbus():
+    """8. Котобус: отмечаем задачу выполненной и снимаем кадры в отдельном потоке."""
     select("Купить продукты на неделю")
     box = frame_box()
     frames = []
@@ -423,6 +450,5 @@ def make_gif(frames):
     print("saved catbus.gif", len(gif), "frames", (out / "catbus.gif").stat().st_size // 1024, "KB")
 
 
-root.after(1200, run_dark if DARK else run_matrix if MATRIX else run_whatsnew if WHATSNEW
-           else run_reminders if REMINDERS else run_phone if PHONE else run)
+root.after(1200, run_dark if DARK else run)
 root.mainloop()
