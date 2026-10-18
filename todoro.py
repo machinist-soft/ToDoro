@@ -5216,6 +5216,7 @@ class TodoApp:
         columns = {
             "num": ("№", 52, False),
             "status": ("СТАТУС", 140, False),
+            "marks": ("📎 💬", 100, False),  # 📧 из письма, 📎 файлы, 💬 комментарии
             "title": ("ЗАДАЧА", 220, False),
             "priority": ("ПРИОРИТЕТ", 130, False),
             "due": ("СРОК", 125, False),
@@ -5238,6 +5239,9 @@ class TodoApp:
         # Ширину столбцов можно менять, потянув за разделитель в заголовке; она запоминается
         # («_v2»: ширины из прошлой версии не годятся — там «Задача» растягивалась на всё место)
         widths = db.get_json_setting(self.prefs, "list_columns_v2", {})
+        if widths and "marks" not in widths and "title" in widths:
+            # столбец значков появился после 2.18: место для него берём у «Задачи», а не у окна
+            widths["title"] = max(widths["title"] - columns["marks"][1], 150)
         self.column_titles = {key: text for key, (text, _, _) in columns.items()}
         for key, (text, width, stretch) in columns.items():
             # Щелчок по заголовку столбца сортирует по нему, повторный — в обратном порядке
@@ -5246,6 +5250,9 @@ class TodoApp:
             self.tree.column(key, width=widths.get(key, width), minwidth=40, stretch=stretch)
         # Сортировка по столбцу: [столбец, по убыванию ли] или None — тогда работает список «Сортировка»
         self.column_sort = db.get_json_setting(self.prefs, "list_sort", None)
+        if not (isinstance(self.column_sort, list) and len(self.column_sort) == 2
+                and self.column_sort[0] in self.column_titles):
+            self.column_sort = None  # столбца больше нет (или настройка испорчена) — обычная сортировка
         self.show_column_sort()
         # Пока ширины не настраивали — «Задача» занимает всё свободное место таблицы
         self.columns_fitted = bool(widths)
@@ -6364,7 +6371,7 @@ class TodoApp:
             self.row_status[iid] = name
             self.tree.insert(
                 "", "end", iid=iid, image=IMAGES.get(f"priority_{level}", ""),
-                values=(f"#{task_id}", status_label(name, done), self.list_title(task_id, title),
+                values=(f"#{task_id}", status_label(name, done), self.list_marks(task_id), title,
                         PRIORITY_NAMES[level],
                         format_due(due_at), remind, self.assignees.get(task_id, ""),
                         self.authors.get(task_id, ""), created),
@@ -6423,6 +6430,7 @@ class TodoApp:
                 "assignee": (self.assignees.get(task_id) or "").casefold() or None,
                 "status": position.get(status_id, len(position)),
                 "title": title.casefold(),
+                "marks": self.marks_order(task_id),
                 "priority": priority_level(urgent, important),
                 "due": due_at,
                 "remind": remind_before if due_at else None,
@@ -6843,9 +6851,7 @@ class TodoApp:
         mark = self.task_mark(task_id)
         iid = str(task_id)
         if self.tree.exists(iid):
-            title = next((r[1] for r in self.all_rows if r[0] == task_id), None)
-            if title is not None:
-                self.tree.set(iid, "title", self.list_title(task_id, title))
+            self.tree.set(iid, "marks", self.list_marks(task_id))
         if self.cards_view():
             self.cards_view().set_mark(task_id, mark)
         if self.side.mode == "task" and self.side.card.task_id == task_id:
@@ -6855,12 +6861,16 @@ class TodoApp:
         """Значки карточки на доске: 📧 (из письма Outlook), 📎 файлы, 💬 комментарии."""
         return extras_mark(self.extra_counts.get(task_id), task_id in self.mail_ids)
 
-    def list_title(self, task_id, title):
-        """Заголовок в списке: 📧 и 📎 с числом файлов — впереди (столбец узкий, конец строки
-        может не поместиться), 💬 — после заголовка."""
+    def list_marks(self, task_id):
+        """Столбец значков в списке: '📧  📎 3  💬 2' (или '', если ничего нет) — отдельно от
+        названия, чтобы названия задач стояли ровно."""
+        return extras_mark(self.extra_counts.get(task_id), task_id in self.mail_ids).strip()
+
+    def marks_order(self, task_id):
+        """Сортировка по столбцу значков: больше файлов, потом комментариев — выше; без значков — None."""
         files, comments = self.extra_counts.get(task_id) or (0, 0)
-        prefix = (MAIL_MARK + " " if task_id in self.mail_ids else "") + (f"📎 {files}  " if files else "")
-        return prefix + title + extras_mark((0, comments))
+        mail = task_id in self.mail_ids
+        return (-files, -comments, -mail) if files or comments or mail else None
 
     def attachments(self, task_id):
         try:
