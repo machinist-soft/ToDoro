@@ -76,6 +76,13 @@ No server: each task list is its own SQLite file. The personal list is `%APPDATA
 
 ## Workflow
 
+- **Plan first, then wait.** Before starting to implement any task that changes files, briefly
+  tell the user (in Russian, plain words) how you plan to do it — «Планирую сделать так: …» —
+  and stop. Continue only after the user confirms; if they correct the plan, show the updated
+  plan and wait again. Reading code to make the plan is fine before confirmation. One
+  confirmation covers the whole task, including test/review fix rounds, commit and push; ask
+  again only if the plan materially changes. Applies to the main conversation only — subagents
+  (`tester`, `reviewer`) don't wait for confirmation.
 - **Tests first.** After a new feature or a bug fix — before the review — call the `tester`
   subagent (`.claude/agents/tester.md`): tell it what was added or fixed; it writes tests in
   `tests/`, runs them and reports what it couldn't cover. If tests fail because of the program,
