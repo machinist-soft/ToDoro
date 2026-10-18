@@ -7,6 +7,9 @@ companion Android app (Kotlin, Jetpack Compose) in `android/`. The project is Ru
 UI strings, code comments, docstrings, commit messages and `RELEASE_NOTES.md` are all in Russian —
 keep it that way. README is bilingual (Russian, then English in italics).
 
+**Always reply to the user in Russian** — every message, summary and question, even when the
+command or prompt is in English (e.g. `/init`). The user is not a programmer: plain words, no jargon.
+
 ## Commands
 
 Run from the project root. On this PC Python is `%LOCALAPPDATA%\Python\bin\python.exe` and git is
