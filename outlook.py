@@ -134,7 +134,7 @@ def sender_parts(item):
 
 
 def sender_address(item):
-    """Отправитель для поля «Кому» письма по задаче: «Иван Иванов <ivan@firma.ru>»."""
+    """Отправитель для поля «Кому» письма по задаче: «Иван Иванов <ivan@example.com>»."""
     name, address = sender_parts(item)
     if not address:
         return ""

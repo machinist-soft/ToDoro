@@ -386,20 +386,20 @@ class OutlookTests(TempDir):
     def test_sender_kept_and_moved(self):
         conn, other = db.connect(self.dir / "a.db"), db.connect(self.dir / "b.db")
         task_id = db.add_task(conn, "из письма")
-        db.set_mail_id(conn, task_id, "<abc@mail>", "Иван Петров <ivan@firma.ru>")
-        self.assertEqual(db.mail_from(conn, task_id), "Иван Петров <ivan@firma.ru>")
+        db.set_mail_id(conn, task_id, "<abc@mail>", "Иван Петров <ivan@example.com>")
+        self.assertEqual(db.mail_from(conn, task_id), "Иван Петров <ivan@example.com>")
         self.assertEqual(db.mail_from(conn, db.add_task(conn, "обычная")), "")
         moved = db.move_task_to(conn, task_id, other)
-        self.assertEqual(db.mail_from(other, moved), "Иван Петров <ivan@firma.ru>")
+        self.assertEqual(db.mail_from(other, moved), "Иван Петров <ivan@example.com>")
         self.assertEqual(db.find_by_mail(other, "<abc@mail>"), moved)
 
     def test_draft_addressed_to_sender(self):
         import email
         import todoro
         todoro.DRAFTS_DIR = self.dir
-        path = todoro.write_draft(7, "Задача", "текст", "Иван Петров <ivan@firma.ru>")
+        path = todoro.write_draft(7, "Задача", "текст", "Иван Петров <ivan@example.com>")
         message = email.message_from_bytes(Path(path).read_bytes(), policy=email.policy.default)
-        self.assertEqual(message["To"].addresses[0].addr_spec, "ivan@firma.ru")
+        self.assertEqual(message["To"].addresses[0].addr_spec, "ivan@example.com")
         self.assertEqual(message["To"].addresses[0].display_name, "Иван Петров")
         self.assertNotIn("To", email.message_from_bytes(
             Path(todoro.write_draft(8, "Задача", "текст")).read_bytes()))
