@@ -4,12 +4,13 @@
 (общий список «Команда», как на скриншотах окна) и запускает в android/ тест ScreenshotTest:
 Robolectric выполняет приложение прямо в Java и снимает экраны.
 Снимки — в android/app/build/screens/; для README уменьшенные копии главного экрана,
-карточки задачи и тёмной темы кладутся в docs/screenshots/android-*.png.
+карточки задачи, тёмной темы, меню и окна «О приложении» кладутся в docs/screenshots/android-*.png.
 Данные пользователя не трогаются.
 
 Запуск из папки проекта:  python tools/android_screenshots.py
 """
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -70,7 +71,7 @@ def prepare(work):
 
 # снимок экрана телефона -> картинка для README
 README_SHOTS = {"1-main": "android-list.png", "2-card": "android-card.png", "4-dark": "android-dark.png",
-               "6-menu": "android-theme.png"}
+               "6-menu": "android-theme.png", "9-about": "android-about.png"}
 
 
 def copy_for_readme(screens):
@@ -88,6 +89,9 @@ def main():
     work = Path(tempfile.mkdtemp(prefix="todoro-android-shots-"))
     try:
         prefs_path, token, list_id = prepare(work)
+        # версия ToDoro на компьютере — для окна «О приложении» (в трее её задаёт start_in_background)
+        phone.APP_VERSION = re.search(r'APP_VERSION = "([^"]+)"',
+                                      (ROOT / "todoro.py").read_text(encoding="utf-8")).group(1)
         server = phone.Server(PORT, token, prefs_path)
         threading.Thread(target=server.serve, daemon=True).start()
         env = dict(os.environ)

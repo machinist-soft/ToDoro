@@ -132,6 +132,7 @@ CSV export / import, e-mail a task, built-in help · one-click updates and an in
 <img src="docs/screenshots/android-list.png" width="260" alt="Список задач на телефоне / Task list on the phone">
 <img src="docs/screenshots/android-card.png" width="260" alt="Карточка задачи на телефоне / Task card on the phone">
 <img src="docs/screenshots/android-dark.png" width="260" alt="Тёмная тема на телефоне / Dark theme on the phone">
+<img src="docs/screenshots/android-about.png" width="260" alt="О приложении и обновления / About and updates">
 </p>
 
 ### Ознакомительный тур / Guided tour
