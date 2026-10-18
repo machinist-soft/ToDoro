@@ -4,6 +4,7 @@
 Работают на временных файлах — данные пользователя не трогают.
 """
 import shutil
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -88,6 +89,32 @@ class DatabaseTests(TempDir):
         self.assertEqual(len(db.shared_reminders(conn, "Анна")), 0)
         self.assertEqual(len(db.shared_reminders(conn, "Борис")), 1)
 
+
+    def test_attachment_info_without_reading_files(self):
+        """Содержимое файла — последний столбец (новые списки), а в старых списках сведения
+        о вложении читаются один раз: иначе SQLite каждый раз читал бы весь файл."""
+        conn = db.connect(self.dir / "new.db")
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(attachments)")]
+        self.assertEqual(columns[-1], "data")
+        old = sqlite3.connect(self.dir / "old.db")  # таблица в порядке столбцов версий до 2.17
+        old.execute("CREATE TABLE attachments (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER "
+                    "NOT NULL, name TEXT NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, "
+                    "added_by TEXT, added_at TEXT NOT NULL)")
+        old.commit()
+        old.close()
+        conn = db.connect(self.dir / "old.db")
+        task = db.add_task(conn, "с файлами")
+        first = db.add_attachment(conn, task, "большой.bin", b"x" * 300_000, by="Аня")
+        second = db.add_attachment(conn, task, "ещё.txt", b"y", by="Борис")
+        self.assertEqual([a[:4] for a in db.list_attachments(conn, task)],
+                         [(first, "большой.bin", 300_000, "Аня"), (second, "ещё.txt", 1, "Борис")])
+        queries = []
+        conn.set_trace_callback(queries.append)
+        self.assertEqual(len(db.list_attachments(conn, task)), 2)
+        self.assertFalse([q for q in queries if "added_by" in q])  # второй раз — из памяти
+        conn.set_trace_callback(None)
+        db.delete_attachment(conn, first)
+        self.assertEqual([a[0] for a in db.list_attachments(conn, task)], [second])
 
     def test_attachments_and_comments(self):
         conn = db.connect(self.dir / "a.db")

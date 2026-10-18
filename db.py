@@ -166,6 +166,9 @@ def connect(path=None, timeout=5, shared=False):
         )
     # Вложения (файлы и картинки) и комментарии к задачам. Файл хранится прямо в базе списка:
     # так он виден всем участникам общего списка и переносится вместе с задачей.
+    # Содержимое (data) — последним столбцом: SQLite читает строку по порядку, и чтобы узнать
+    # столбцы после большого файла, ему пришлось бы прочитать весь файл (в старых списках
+    # data стоит раньше added_by и added_at — см. list_attachments).
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS attachments (
@@ -173,9 +176,9 @@ def connect(path=None, timeout=5, shared=False):
             task_id  INTEGER NOT NULL,
             name     TEXT    NOT NULL,
             size     INTEGER NOT NULL,
-            data     BLOB    NOT NULL,
             added_by TEXT,
-            added_at TEXT    NOT NULL
+            added_at TEXT    NOT NULL,
+            data     BLOB    NOT NULL
         );
         CREATE INDEX IF NOT EXISTS attachments_task ON attachments (task_id);
         CREATE TABLE IF NOT EXISTS comments (
@@ -631,10 +634,26 @@ def add_attachment(conn, task_id, name, data, by=None):
         ).lastrowid
 
 
+# Сведения о вложениях: {(файл списка, id): (id, имя, размер, кто добавил, когда)}.
+# Вложение после добавления не меняется (только удаляется), а номера не повторяются, поэтому
+# сведения можно запомнить: в старых файлах списков, чтобы прочитать «кто и когда добавил»,
+# SQLite читает всё содержимое файла — через VPN для большого файла это секунды при каждом
+# обновлении карточки.
+_attachment_info = {}
+
+
 def list_attachments(conn, task_id):
     """[(id, имя, размер, кто добавил, когда), ...] — без содержимого файлов."""
-    return conn.execute("SELECT id, name, size, added_by, added_at FROM attachments "
-                        "WHERE task_id = ? ORDER BY id", (task_id,)).fetchall()
+    path = conn.execute("PRAGMA database_list").fetchone()[2]
+    ids = [row[0] for row in conn.execute("SELECT id FROM attachments WHERE task_id = ? ORDER BY id",
+                                          (task_id,))]
+    missing = [i for i in ids if (path, i) not in _attachment_info]
+    if missing:
+        marks = ", ".join("?" * len(missing))
+        for row in conn.execute("SELECT id, name, size, added_by, added_at FROM attachments "
+                                f"WHERE id IN ({marks})", missing):
+            _attachment_info[(path, row[0])] = tuple(row)
+    return [_attachment_info[(path, i)] for i in ids if (path, i) in _attachment_info]
 
 
 def attachment_data(conn, attachment_id):
