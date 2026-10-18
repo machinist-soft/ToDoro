@@ -325,6 +325,19 @@ def run():
     root.after(300, shoot_snip)
     app.from_screen()
     root.attributes("-topmost", True)
+    # 4д. Умные подсказки: варианты названия из прошлых задач под полем ввода
+    app.entry.focus_force()
+    app.hide_placeholder()
+    app.entry.insert(0, "По")
+    app.title_suggest.update()
+    app.title_suggest.move(1)
+    popup = app.title_suggest.popup
+    popup.update()
+    left, top, right, _ = frame_box()
+    grab("smart.png", (left, top, right, popup.winfo_rooty() + popup.winfo_height() + 16))
+    app.title_suggest.close()
+    app.entry.delete(0, "end")
+    app.show_placeholder()
     # 5. Доска
     app.view.set("board")
     app.switch_view()

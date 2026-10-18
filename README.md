@@ -97,6 +97,13 @@ CSV export / import, e-mail a task, built-in help · one-click updates and an in
 
 ![Матрица Эйзенхауэра / Eisenhower matrix](docs/screenshots/matrix.png)
 
+### Умные подсказки / Smart hints
+
+Начните писать задачу — ToDoro предложит похожие названия из ваших прошлых задач; «Сдать отчёт завтра в 10» сам поставит срок и напоминание. Без интернета.
+*Start typing a task and ToDoro suggests titles from your past tasks; “завтра в 10” in the title sets the due date and a reminder. Works offline.*
+
+![Умные подсказки / Smart hints](docs/screenshots/smart.png)
+
 ### Задача из письма Outlook / Task from an Outlook e-mail
 
 Выделите письмо в Outlook и нажмите Ctrl+Alt+T — задача заполнится по письму, а письмо и вложения приложатся к ней.
