@@ -9,7 +9,10 @@
 Нужен Pillow:  pip install pillow
 """
 import ctypes
+import gc
 import io
+import shutil
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -57,6 +60,7 @@ import team  # noqa: E402
 import todoro as T  # noqa: E402
 # окно и так держится поверх всех на время съёмки; вывод вперёд при запуске снял бы это
 T.TodoApp.raise_on_start = lambda self: None
+T.DRAFTS_DIR = work / "temp"  # черновики и копии файлов — во временной папке съёмки
 from examples import make_examples  # noqa: E402
 
 ME = "Андрей"
@@ -450,5 +454,24 @@ def make_gif(frames):
     print("saved catbus.gif", len(gif), "frames", (out / "catbus.gif").stat().st_size // 1024, "KB")
 
 
+
+def remove_work():
+    """Убирает временные базы съёмки: сначала закрывает все соединения с ними
+    (открытый файл Windows удалить не даст), потом удаляет папку."""
+    gc.collect()
+    for item in gc.get_objects():
+        if isinstance(item, sqlite3.Connection):
+            try:
+                item.close()
+            except sqlite3.Error:
+                pass
+    shutil.rmtree(work, ignore_errors=True)
+    if work.exists():
+        print("Не удалось удалить временную папку:", work)
+
+
 root.after(1200, run_dark if DARK else run)
-root.mainloop()
+try:
+    root.mainloop()
+finally:
+    remove_work()

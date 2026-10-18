@@ -6,6 +6,7 @@ import math
 import os
 import random
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -241,7 +242,9 @@ SEARCH_HINT = "Поиск задач  (Ctrl+F)"
 # Длиннее ссылку «создать письмо» (mailto:) почтовые программы могут не принять:
 # Outlook ломался уже на ~1700 символах (русская буква в ссылке занимает 6 символов).
 MAILTO_LIMIT = 1000
-DRAFTS_DIR = Path(tempfile.gettempdir()) / APP_NAME  # временные черновики писем (.eml)
+# временные черновики писем (.eml) и копии открытых файлов задач; старше недели — удаляются при запуске
+DRAFTS_DIR = Path(tempfile.gettempdir()) / APP_NAME
+TEMP_MAX_AGE = 7 * 24 * 3600  # секунд: неделя — копию файла могут держать открытой несколько дней
 
 
 def setup_style(root):
@@ -680,6 +683,28 @@ def write_draft(number, subject, body, to=""):
     path = DRAFTS_DIR / f"Задача {number}.eml"
     path.write_bytes(message.as_bytes())
     return str(path)
+
+
+def clean_temp_files(folder=None, max_age=TEMP_MAX_AGE):
+    """Удаляет из временной папки ToDoro черновики писем и копии открытых файлов задач,
+    которых не трогали дольше max_age секунд. Свежие не трогаем: файл может быть ещё открыт
+    в почте или в Word. Файл, занятый другой программой, просто пропускаем."""
+    folder = Path(folder or DRAFTS_DIR)
+    limit = time_module.time() - max_age
+    try:
+        items = list(folder.iterdir())
+    except OSError:
+        return
+    for item in items:
+        try:
+            if item.is_dir():
+                times = [f.stat().st_mtime for f in item.rglob("*")] + [item.stat().st_mtime]
+                if max(times) < limit:
+                    shutil.rmtree(item, ignore_errors=True)
+            elif item.stat().st_mtime < limit:
+                item.unlink()
+        except OSError:
+            pass
 
 
 # ---------- экспорт и импорт задач в CSV (таблица для Excel) ----------
@@ -5314,6 +5339,7 @@ class TodoApp:
         start_hotkey(root, [(OUTLOOK_HOTKEY, lambda: self.from_outlook(quiet=True)),  # Ctrl+Alt+T
                             (SNIP_HOTKEY, lambda: self.from_screen(quiet=True))])     # Ctrl+Alt+S
         self.start_tray()
+        threading.Thread(target=clean_temp_files, daemon=True).start()  # старые черновики и копии файлов
         root.after(WATCH_EVERY_MS, self.watch_changes)  # изменения других участников в общих списках
         if self.team is None and db.get_setting(self.prefs, "shared_folder", ""):
             self.show_offline_banner()  # запустились без связи с общей папкой
@@ -6978,7 +7004,7 @@ class TodoApp:
                 "Запустить?", icon="warning", default="no", parent=self.root):
             return
         safe = file_name_for_disk(name)
-        folder = Path(tempfile.gettempdir()) / "ToDoro" / f"{self.list_id}-{attachment_id}"
+        folder = DRAFTS_DIR / f"{self.list_id}-{attachment_id}"
         try:
             folder.mkdir(parents=True, exist_ok=True)
             path = folder / safe

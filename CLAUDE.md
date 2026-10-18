@@ -80,6 +80,11 @@ No server: each task list is its own SQLite file. The personal list is `%APPDATA
   need a DB patch `db.DATA_DIR`, `db.DB_PATH`, `db.LISTS_DIR` (and `db.OLD_DB_PATHS`) to a temp dir,
   as `tools/make_screenshots.py` does. Theme is read at import of `todoro.py`, so set it before import.
 - Never let tests set categories on real Outlook mail (patch `outlook.mark_added`).
+- Clean up after yourself: temp folders from tests and scripts go in `tempfile.mkdtemp()` (or the
+  scratchpad) and are removed when done — close SQLite connections first, Windows won't delete an
+  open file. Nothing temporary goes into the project folder. The app itself removes old drafts and
+  opened-file copies in `%TEMP%\ToDoro` at start (`clean_temp_files`) and old downloaded installers
+  (`updater.remove_old_downloads`); `/release` clears old versions out of `dist\` at the end.
 - Screenshots: capture only the window or dialog you need, never the whole screen (no full-desktop
   computer-use screenshots to check the app). To look at a change, run a small script in the
   scratchpad on temp data that grabs just that window (`ImageGrab.grab(frame_box(window))`, as in

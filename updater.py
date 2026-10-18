@@ -210,6 +210,7 @@ def download(release, on_progress=None, timeout=30):
     folder = Path(tempfile.gettempdir()) / "ToDoro-update"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / Path(release["asset_name"]).name
+    remove_old_downloads(folder, keep=path)
     sha = hashlib.sha256()
     received = 0
     try:
@@ -232,6 +233,21 @@ def download(release, on_progress=None, timeout=30):
         path.unlink(missing_ok=True)
         raise UpdateError("Скачанный файл повреждён (не совпала контрольная сумма). Попробуйте ещё раз.")
     return path
+
+
+def remove_old_downloads(folder, keep=None):
+    """Удаляет установщики, скачанные раньше: после установки они больше не нужны.
+    Занятый файл (установщик ещё работает) пропускаем — уберём в следующий раз."""
+    try:
+        items = list(Path(folder).glob("*.exe"))
+    except OSError:
+        return
+    for item in items:
+        if item != keep:
+            try:
+                item.unlink()
+            except OSError:
+                pass
 
 
 def can_self_update():

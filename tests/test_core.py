@@ -4,13 +4,19 @@
 Работают на временных файлах — данные пользователя не трогают.
 """
 import gc
+import hashlib
+import io
+import os
 import shutil
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -400,13 +406,156 @@ class OutlookTests(TempDir):
     def test_draft_addressed_to_sender(self):
         import email
         import todoro
-        todoro.DRAFTS_DIR = self.dir
+        patcher = mock.patch.object(todoro, "DRAFTS_DIR", self.dir)  # вернётся после теста
+        patcher.start()
+        self.addCleanup(patcher.stop)
         path = todoro.write_draft(7, "Задача", "текст", "Иван Петров <ivan@example.com>")
         message = email.message_from_bytes(Path(path).read_bytes(), policy=email.policy.default)
         self.assertEqual(message["To"].addresses[0].addr_spec, "ivan@example.com")
         self.assertEqual(message["To"].addresses[0].display_name, "Иван Петров")
         self.assertNotIn("To", email.message_from_bytes(
             Path(todoro.write_draft(8, "Задача", "текст")).read_bytes()))
+
+
+class CleanTempFilesTests(TempDir):
+    """Уборка временной папки ToDoro: старые черновики и копии файлов задач удаляются."""
+
+    DAY = 24 * 3600
+
+    def make_old(self, path, age):
+        old = time.time() - age
+        os.utime(path, (old, old))
+
+    def test_old_file_removed_fresh_kept(self):
+        import todoro
+        old, fresh = self.dir / "Задача 1.eml", self.dir / "Задача 2.eml"
+        old.write_text("старый")
+        fresh.write_text("свежий")
+        self.make_old(old, 2 * self.DAY)
+        todoro.clean_temp_files(self.dir, max_age=self.DAY)
+        self.assertFalse(old.exists())
+        self.assertTrue(fresh.exists())
+
+    def test_old_subfolder_removed_entirely(self):
+        import todoro
+        folder = self.dir / "1-5"
+        (folder / "inner").mkdir(parents=True)
+        files = [folder / "отчёт.docx", folder / "inner" / "x.txt"]
+        for f in files:
+            f.write_text("данные")
+            self.make_old(f, 3 * self.DAY)
+        self.make_old(folder / "inner", 3 * self.DAY)
+        self.make_old(folder, 3 * self.DAY)
+        todoro.clean_temp_files(self.dir, max_age=self.DAY)
+        self.assertFalse(folder.exists())
+
+    def test_subfolder_with_fresh_file_kept(self):
+        """Папка сама старая, но внутри свежий файл (его ещё правят в Word) — не трогаем."""
+        import todoro
+        folder = self.dir / "1-6"
+        folder.mkdir()
+        old, fresh = folder / "старый.txt", folder / "свежий.docx"
+        old.write_text("1")
+        fresh.write_text("2")
+        self.make_old(old, 3 * self.DAY)
+        self.make_old(folder, 3 * self.DAY)
+        todoro.clean_temp_files(self.dir, max_age=self.DAY)
+        self.assertTrue(fresh.exists())
+        self.assertTrue(old.exists())  # папку целиком оставляем, по одному файлу не чистим
+
+    def test_fresh_empty_subfolder_kept_old_empty_removed(self):
+        import todoro
+        fresh, old = self.dir / "1-7", self.dir / "1-8"
+        fresh.mkdir()
+        old.mkdir()
+        self.make_old(old, 3 * self.DAY)
+        todoro.clean_temp_files(self.dir, max_age=self.DAY)
+        self.assertTrue(fresh.exists())
+        self.assertFalse(old.exists())
+
+    def test_missing_folder_no_error(self):
+        import todoro
+        todoro.clean_temp_files(self.dir / "нет такой", max_age=self.DAY)
+
+    def test_default_folder_is_drafts_dir(self):
+        import todoro
+        old = self.dir / "Задача 3.eml"
+        old.write_text("старый")
+        self.make_old(old, todoro.TEMP_MAX_AGE + 3600)
+        with mock.patch.object(todoro, "DRAFTS_DIR", self.dir):
+            todoro.clean_temp_files()
+        self.assertFalse(old.exists())
+
+    def test_busy_file_skipped(self):
+        """Занятый файл (unlink даёт ошибку) пропускаем, остальные всё равно убираем."""
+        import todoro
+        busy, other = self.dir / "a.eml", self.dir / "b.eml"
+        for f in (busy, other):
+            f.write_text("x")
+            self.make_old(f, 2 * self.DAY)
+        real_unlink = Path.unlink
+
+        def unlink(path, *args, **kwargs):
+            if path.name == "a.eml":
+                raise PermissionError("занят")
+            return real_unlink(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "unlink", unlink):
+            todoro.clean_temp_files(self.dir, max_age=self.DAY)
+        self.assertTrue(busy.exists())
+        self.assertFalse(other.exists())
+
+    def test_open_file_copy_goes_to_list_attachment_folder(self):
+        """Копия открытого файла задачи — в DRAFTS_DIR/<список>-<файл>, а не в общей «ToDoro»."""
+        import todoro
+        app = SimpleNamespace(attachment_name=lambda i: "отчёт.txt", file_data=lambda i: b"data",
+                              list_id=3, root=None)
+        with mock.patch.object(todoro, "DRAFTS_DIR", self.dir), \
+                mock.patch.object(todoro.os, "startfile", create=True) as startfile:
+            todoro.TodoApp.open_file(app, 42)
+        path = self.dir / "3-42" / "отчёт.txt"
+        startfile.assert_called_once_with(path)
+        self.assertEqual(path.read_bytes(), b"data")
+
+
+class RemoveOldDownloadsTests(TempDir):
+    def test_removes_other_installers_keeps_new_and_other_files(self):
+        old, new, note = (self.dir / "ToDoro-Setup-2.15.exe", self.dir / "ToDoro-Setup-2.16.exe",
+                          self.dir / "readme.txt")
+        for f in (old, new, note):
+            f.write_text("x")
+        updater.remove_old_downloads(self.dir, keep=new)
+        self.assertFalse(old.exists())
+        self.assertTrue(new.exists())
+        self.assertTrue(note.exists())
+
+    def test_without_keep_removes_all_exe(self):
+        (self.dir / "a.exe").write_text("x")
+        (self.dir / "b.exe").write_text("x")
+        updater.remove_old_downloads(self.dir)
+        self.assertEqual(list(self.dir.glob("*.exe")), [])
+
+    def test_missing_folder_no_error(self):
+        updater.remove_old_downloads(self.dir / "нет такой", keep=None)
+
+    def test_download_removes_old_installer(self):
+        """download(): старый установщик в ToDoro-update удалён, новый скачан и проверен."""
+        data = b"new installer" * 1000
+        folder = self.dir / "ToDoro-update"
+        folder.mkdir()
+        old = folder / "ToDoro-Setup-2.15.exe"
+        old.write_bytes(b"old")
+        release = {"asset_url": "https://github.com/x/ToDoro-Setup-2.16.exe",
+                   "asset_name": "ToDoro-Setup-2.16.exe", "size": len(data),
+                   "sha256": hashlib.sha256(data).hexdigest()}
+        response = io.BytesIO(data)
+        response.headers = {"Content-Length": str(len(data))}
+        with mock.patch.object(updater.tempfile, "gettempdir", return_value=str(self.dir)), \
+                mock.patch.object(updater, "_urlopen", return_value=response):
+            path = updater.download(release)
+        self.assertEqual(path, folder / "ToDoro-Setup-2.16.exe")
+        self.assertEqual(path.read_bytes(), data)
+        self.assertFalse(old.exists())
 
 
 if __name__ == "__main__":
