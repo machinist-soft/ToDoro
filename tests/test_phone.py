@@ -5,6 +5,7 @@
 import json
 import shutil
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -144,6 +145,33 @@ class PhoneServerTests(unittest.TestCase):
         self.addCleanup(idle.close)
         status, answer = self.call("GET", "/api/v1/hello")
         self.assertEqual((status, answer["app"]), (200, "ToDoro"))
+
+    def test_sync_survives_lost_shared_folder(self):
+        """Связь с общей папкой пропала на первом общем списке — остальные общие пропускаются,
+        личный список всё равно приходит телефону."""
+        folder = self.dir / "share"
+        group = team.Team(folder)
+        group.add_list("Команда", "Боря")
+        group.add_list("Дом", "Боря")
+        group.close()
+        prefs = db.connect(self.prefs_path)
+        db.set_setting(prefs, "shared_folder", str(folder))
+        prefs.close()
+        store = phone.Store(self.prefs_path)
+        self.addCleanup(store.close)
+        list_view, broken_ids = store.list_view, []
+
+        def broken(item):
+            if item["shared"] and not broken_ids:  # первый же общий список
+                broken_ids.append(item["id"])
+                store.conn(item)
+                raise sqlite3.OperationalError("disk I/O error")  # как при обрыве сети
+            return list_view(item)
+
+        store.list_view = broken
+        answer = store.sync()
+        self.assertTrue(answer["shared_offline"])
+        self.assertEqual(list(answer["views"]), ["personal"])
 
     def test_shared_list(self):
         folder = self.dir / "share"

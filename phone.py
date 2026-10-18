@@ -256,6 +256,8 @@ class Store:
 
     def conn(self, item):
         if item["id"] not in self.conns:
+            if item["shared"] and self.team is None:  # связь с общей папкой только что пропала
+                raise ApiError(503, "Нет связи с общей папкой (сеть, VPN)")
             if item["shared"]:
                 # shared=True — только чтобы при обрыве связи закрыть соединение в другом потоке
                 self.conns[item["id"]] = db.connect(self.team.path(item), timeout=team.TIMEOUT,
@@ -277,7 +279,8 @@ class Store:
         names |= {r[0] for r in conn.execute(
             "SELECT DISTINCT assignee FROM tasks WHERE assignee IS NOT NULL AND assignee <> ''")}
         try:
-            names |= set(self.team.members())
+            if self.team is not None:
+                names |= set(self.team.members())
         except sqlite3.Error:
             pass
         return sorted(names, key=str.lower)
@@ -318,7 +321,7 @@ class Store:
         for item in items:
             try:
                 views[item["id"]] = self.list_view(item)
-            except (sqlite3.Error, OSError):
+            except (sqlite3.Error, OSError, ApiError):
                 if not item["shared"]:
                     raise
                 self.on_error(item)
