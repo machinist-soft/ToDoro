@@ -65,11 +65,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             return data.views[listId] ?: data.views["personal"]
         }
 
-    fun pair(text: String): String? {
+    /** Подключение, которое ждёт «Подключить» в окне-вопросе (см. PairingDialog). */
+    var pendingPairing by mutableStateOf<Pairing?>(null)
+        private set
+
+    /**
+     * fromLink — пришла ссылка todoro://connect (камера телефона, но так же её может открыть
+     * любой сайт или письмо): тогда сначала спрашиваем, чтобы чужая ссылка не подключила
+     * телефон к чужому компьютеру. Спрашиваем и когда смена компьютера сотрёт неотправленные правки.
+     */
+    fun pair(text: String, fromLink: Boolean = false): String? {
         val parsed = Pairing.parse(text)
             ?: return "Это не QR-код ToDoro. Откройте на компьютере ☰ Меню → Подключить телефон."
-        Repo.pair(parsed)
+        val unknownLink = fromLink && Repo.pairing?.key != parsed.key
+        val losesEdits = !Repo.samePc(parsed) && Repo.pendingCount > 0
+        if (unknownLink || losesEdits) pendingPairing = parsed else Repo.pair(parsed)
         return null
+    }
+
+    fun answerPairing(connect: Boolean) {
+        val p = pendingPairing ?: return
+        pendingPairing = null
+        if (connect) Repo.pair(p)
     }
 
     fun unpair() {

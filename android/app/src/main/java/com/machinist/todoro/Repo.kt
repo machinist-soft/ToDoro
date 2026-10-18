@@ -119,12 +119,15 @@ object Repo {
 
     // --- подключение ---
 
+    /** Это компьютер, к которому телефон уже подключён (тот же ключ или тот же адрес)? */
+    fun samePc(p: Pairing) =
+        pairing?.let { it.key == p.key || it.hosts.intersect(p.hosts.toSet()).isNotEmpty() } == true
+
     fun pair(p: Pairing) {
         p.save(app)
         scope.launch {
             mutex.withLock {
-                val samePc = pairing?.let { it.key == p.key || it.hosts.intersect(p.hosts.toSet()).isNotEmpty() } == true
-                if (!samePc) clearData()  // другой компьютер — старые задачи и правки не к нему
+                if (!samePc(p)) clearData()  // другой компьютер — старые задачи и правки не к нему
                 pairing = p
                 api = Api(p)
                 keyRejected = false
@@ -294,6 +297,9 @@ object Repo {
 
     fun create(list: String, fields: JSONObject, title: String): Long {
         val id = -System.currentTimeMillis()
+        // Метка задачи: если ответ компьютера потеряется и задача уйдёт ещё раз, компьютер
+        // узнает её и не создаст вторую такую же (phone.py, add_task)
+        fields.put("client_id", java.util.UUID.randomUUID().toString())
         enqueue(Op("create", list, id, fields, null, title))
         return id
     }

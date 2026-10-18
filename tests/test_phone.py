@@ -130,6 +130,20 @@ class PhoneServerTests(unittest.TestCase):
         self.assertEqual(self.call("POST", f"{path}/attachments?name=a.txt", raw=b"x")[0], 404)
         self.assertEqual(self.call("DELETE", f"{path}/attachments/{attachment_id}")[0], 404)
 
+    def test_repeated_create_makes_one_task(self):
+        """Ответ потерялся, телефон прислал ту же новую задачу ещё раз — задача одна."""
+        data = {"title": "Хлеб", "client_id": "abc-123"}
+        first = self.call("POST", "/api/v1/lists/personal/tasks", data)
+        again = self.call("POST", "/api/v1/lists/personal/tasks", data)
+        self.assertEqual(first[0], 201)
+        self.assertEqual(again[1]["task"]["id"], first[1]["task"]["id"])
+        other = self.call("POST", "/api/v1/lists/personal/tasks", {"title": "Хлеб", "client_id": "xyz"})
+        self.assertNotEqual(other[1]["task"]["id"], first[1]["task"]["id"])
+        self.assertEqual(len(self.call("GET", "/api/v1/lists/personal")[1]["tasks"]), 2)
+        # задачу удалили на компьютере, а телефон шлёт её снова — не создаём заново
+        self.call("DELETE", f"/api/v1/lists/personal/tasks/{first[1]['task']['id']}")
+        self.assertEqual(self.call("POST", "/api/v1/lists/personal/tasks", data)[0], 404)
+
     def test_bad_input(self):
         self.assertEqual(self.call("POST", "/api/v1/lists/personal/tasks", {"title": "  "})[0], 400)
         self.assertEqual(self.call("POST", "/api/v1/lists/personal/tasks",

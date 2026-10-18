@@ -1,6 +1,8 @@
 package com.machinist.todoro
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onRoot
@@ -10,6 +12,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.github.takahirom.roborazzi.captureScreenRoboImage
+import org.junit.Assert.assertEquals
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
@@ -84,6 +87,23 @@ class ScreenshotTest {
         compose.onNode(hasText("☰  Меню")).performClick()
         compose.onNode(hasText("Как в телефоне")).performClick()
         compose.waitForIdle()
+    }
+
+    /** Ссылка todoro://connect на чужой компьютер (сайт, письмо) — сначала вопрос, «Отмена» ничего не меняет. */
+    @Test
+    fun pairingLinkAsks() {
+        start()
+        val key = Repo.pairing?.key
+        val link = "todoro://connect?v=1&hosts=10.6.6.6&port=47815&key=chuzhoy&name=Чужой-ПК"
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(link),
+            ApplicationProvider.getApplicationContext(), MainActivity::class.java)
+        ActivityScenario.launch<MainActivity>(intent)
+        compose.waitForIdle()
+        captureScreenRoboImage("build/screens/8-pair-link.png")
+        compose.onNode(hasText("Подключиться к компьютеру?")).assertExists()
+        compose.onNode(hasText("Отмена")).performClick()
+        compose.waitForIdle()
+        assertEquals(key, Repo.pairing?.key)
     }
 
     @Test

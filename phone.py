@@ -48,6 +48,8 @@ API = "/api/v1"
 APP_VERSION = ""            # версия ToDoro для /hello (задаёт start_in_background)
 CHECK_EVERY = 3            # секунд: как часто сервер смотрит, не включили ли/выключили связь
 RECONNECT_AFTER = 30       # секунд: не открылась общая папка — пробуем снова не раньше
+CREATED_KEY = "phone_created"  # настройка: {метка задачи с телефона: [список, номер задачи]}
+CREATED_KEEP = 200             # сколько последних меток помнить
 
 
 # ---------- ключ и адреса (для окна «Подключить телефон») ----------
@@ -336,7 +338,18 @@ class Store:
         return status_id
 
     def add_task(self, item, data):
+        """client_id — метка, которую телефон дал новой задаче. Если ответ до телефона не дошёл
+        (пропал Wi-Fi), телефон пришлёт ту же задачу ещё раз — по метке видно, что она уже
+        создана, и второй такой же задачи не появится."""
         conn = self.conn(item)
+        client_id = data.get("client_id")
+        if not isinstance(client_id, str) or not 0 < len(client_id) <= 64:
+            client_id = None
+        created = db.get_json_setting(self.prefs, CREATED_KEY, {}) if client_id else {}
+        if client_id in created:
+            list_id, task_id = created[client_id]
+            if list_id == item["id"]:
+                return self.task(conn, task_id)  # 404, если её с тех пор удалили, — так и надо
         title = check_title(data.get("title"))
         due_at = check_due(data.get("due_at"))
         remind = check_minutes(data.get("remind_before"))
@@ -351,6 +364,9 @@ class Store:
             db.set_assignee(conn, task_id, str(data["assignee"]), by=by)
         if data.get("done"):
             db.set_done(conn, task_id, True, by=by)
+        if client_id:
+            created[client_id] = [item["id"], task_id]
+            db.set_json_setting(self.prefs, CREATED_KEY, dict(list(created.items())[-CREATED_KEEP:]))
         return self.task(conn, task_id)
 
     def change_task(self, item, task_id, data):

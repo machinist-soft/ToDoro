@@ -24,10 +24,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -78,6 +80,7 @@ class MainActivity : ComponentActivity() {
             }
             ToDoroTheme(dark) {
                 if (Repo.pairing == null) PairScreen(::startScan) else MainScreen(vm, ::startScan)
+                PairingDialog(vm)
             }
         }
         if (savedInstanceState == null) handle(intent)
@@ -105,7 +108,7 @@ class MainActivity : ComponentActivity() {
     private fun handle(intent: Intent?) {
         // открыли ссылку todoro://connect?... (QR-код отсканировали камерой телефона)
         intent?.takeIf { it.action == Intent.ACTION_VIEW }?.dataString?.let { link ->
-            vm.pair(link)?.let { Repo.message = it }
+            vm.pair(link, fromLink = true)?.let { Repo.message = it }
         }
         // нажали на напоминание — открываем задачу
         val list = intent?.getStringExtra("open_list") ?: return
@@ -159,6 +162,33 @@ fun PairScreen(onScan: () -> Unit) {
             FlatButton("Сканировать QR-код", onScan, Modifier.fillMaxWidth(), look = Look.ACCENT, height = 50.dp)
         }
     }
+}
+
+/** «Подключиться к компьютеру?» — перед подключением по ссылке или со сменой компьютера. */
+@Composable
+fun PairingDialog(vm: AppViewModel) {
+    val pairing = vm.pendingPairing ?: return
+    val p = P
+    val pc = if (pairing.name.isNotEmpty()) "«${pairing.name}»" else "с ToDoro"
+    val parts = mutableListOf(
+        "Компьютер $pc, адрес: ${pairing.hosts.joinToString(", ")}.",
+        "Подключайтесь, только если сами отсканировали QR-код в ToDoro на своём компьютере " +
+            "(☰ Меню → Подключить телефон). Ссылка с сайта или из письма может вести на чужой компьютер.",
+    )
+    val old = Repo.pairing
+    if (old != null && !Repo.samePc(pairing)) {
+        val oldPc = if (old.name.isNotEmpty()) "«${old.name}»" else "с ToDoro"
+        parts += "Телефон забудет прежний компьютер $oldPc." + if (Repo.pendingCount > 0)
+            " Правки, которые ещё не дошли до него (${Repo.pendingCount}), пропадут." else ""
+    }
+    AlertDialog(
+        onDismissRequest = { vm.answerPairing(false) },
+        containerColor = p.surface,
+        title = { Text("Подключиться к компьютеру?") },
+        text = { Text(parts.joinToString("\n\n")) },
+        confirmButton = { TextButton(onClick = { vm.answerPairing(true) }) { Text("Подключить") } },
+        dismissButton = { TextButton(onClick = { vm.answerPairing(false) }) { Text("Отмена") } },
+    )
 }
 
 /** «Нет связи…» + когда последний раз видели компьютер и сколько правок ждёт отправки. */
