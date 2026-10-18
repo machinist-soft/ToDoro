@@ -149,6 +149,14 @@ class PhoneServerTests(unittest.TestCase):
         self.assertEqual(self.call("POST", "/api/v1/lists/personal/tasks",
                                    {"title": "x", "due_at": "завтра"})[0], 400)
         self.assertEqual(self.call("GET", "/api/v1/lists/nope")[0], 404)
+        task = self.call("POST", "/api/v1/lists/personal/tasks", {"title": "a"})[1]["task"]
+        path = f"/api/v1/lists/personal/tasks/{task['id']}"
+        for wrong in ({"urgent": "false"}, {"done": 1}, {"status_id": True}, {"body": ["x"]},
+                      {"assignee": {"x": 1}}, {"version": "1"}, {"title": "b", "status_id": "1"}):
+            self.assertEqual(self.call("PATCH", path, wrong)[0], 400, wrong)
+        self.assertEqual(self.call("GET", path)[1]["task"]["title"], "a")  # ничего не записалось
+        self.assertEqual(self.call("GET", "/api/v1/lists/personal/tasks/" + "9" * 25)[0], 404)
+        self.call("DELETE", path)
         # огромное число минут — отказ, и задача не создаётся наполовину
         self.assertEqual(self.call("POST", "/api/v1/lists/personal/tasks",
                                    {"title": "x", "remind_before": 10**30})[0], 400)

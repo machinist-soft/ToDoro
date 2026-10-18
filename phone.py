@@ -161,6 +161,37 @@ def check_title(value):
     return value.strip()
 
 
+def check_flag(data, key, default=False):
+    """Да или нет — только true/false: текст «false» не должен молча стать «да»."""
+    value = data.get(key, default)
+    if not isinstance(value, bool):
+        raise ApiError(400, f"{key} — true или false")
+    return value
+
+
+def check_body(value):
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ApiError(400, "body — текст")
+    return value
+
+
+def check_person(value):
+    """Исполнитель: имя участника или null (пустое имя — тоже «никто»)."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ApiError(400, "assignee — имя участника или null")
+    return value.strip() or None
+
+
+def check_number(value, key):
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ApiError(400, f"{key} — целое число")
+    return value
+
+
 class Store:
     """Списки и задачи для телефона. Работает только в потоке сервера."""
 
@@ -333,6 +364,7 @@ class Store:
         return {"lists": lists, "views": views, "shared_offline": offline, "user": self.user()}
 
     def check_status(self, conn, status_id):
+        check_number(status_id, "status_id")  # True == 1 в Python — колонкой «да» не выбрать
         if not any(s[0] == status_id for s in db.list_statuses(conn)):
             raise ApiError(400, "Такой колонки нет")
         return status_id
@@ -350,19 +382,23 @@ class Store:
             list_id, task_id = created[client_id]
             if list_id == item["id"]:
                 return self.task(conn, task_id)  # 404, если её с тех пор удалили, — так и надо
+        # сначала проверяем всё присланное: ошибка не должна оставить задачу созданной наполовину
         title = check_title(data.get("title"))
         due_at = check_due(data.get("due_at"))
         remind = check_minutes(data.get("remind_before"))
+        urgent, important = check_flag(data, "urgent"), check_flag(data, "important")
+        body = check_body(data.get("body"))
+        assignee = check_person(data.get("assignee"))
+        done = check_flag(data, "done")
         status_id = data.get("status_id")
         if status_id is not None:
             self.check_status(conn, status_id)
         by = self.author(item)
         task_id = db.add_task(conn, title, status_id, created_by=by)
-        db.update_task(conn, task_id, title, due_at, remind, bool(data.get("urgent")),
-                       bool(data.get("important")), str(data.get("body") or ""), by=by)
-        if item["shared"] and data.get("assignee"):
-            db.set_assignee(conn, task_id, str(data["assignee"]), by=by)
-        if data.get("done"):
+        db.update_task(conn, task_id, title, due_at, remind, urgent, important, body, by=by)
+        if item["shared"] and assignee:
+            db.set_assignee(conn, task_id, assignee, by=by)
+        if done:
             db.set_done(conn, task_id, True, by=by)
         if client_id:
             created[client_id] = [item["id"], task_id]
@@ -376,29 +412,33 @@ class Store:
         conn = self.conn(item)
         current = self.task(conn, task_id)
         version = data.get("version")
-        if version is not None and version != current["version"]:
+        if version is not None and check_number(version, "version") != current["version"]:
             raise ApiError(409, "Задачу уже изменили", {"task": self.full_task(conn, task_id)})
+        # сначала проверяем всё присланное: ошибка в одном поле не должна оставить правку
+        # записанной наполовину
+        title = check_title(data["title"]) if "title" in data else current["title"]
+        due_at = check_due(data["due_at"]) if "due_at" in data else current["due_at"]
+        remind = (check_minutes(data["remind_before"]) if "remind_before" in data
+                  else current["remind_before"])
+        body = check_body(data["body"]) if "body" in data else None
+        urgent = check_flag(data, "urgent", current["urgent"])
+        important = check_flag(data, "important", current["important"])
+        done = check_flag(data, "done", current["done"])
+        status_id = self.check_status(conn, data["status_id"]) if "status_id" in data else None
+        assignee = check_person(data.get("assignee"))
         by = self.author(item)
         fields = ("title", "body", "due_at", "remind_before", "urgent", "important")
         if any(key in data for key in fields):
-            title = check_title(data["title"]) if "title" in data else current["title"]
-            due_at = check_due(data["due_at"]) if "due_at" in data else current["due_at"]
-            remind = (check_minutes(data["remind_before"]) if "remind_before" in data
-                      else current["remind_before"])
-            body = str(data.get("body") or "") if "body" in data else None
-            saved = db.update_task(conn, task_id, title, due_at, remind,
-                                   bool(data.get("urgent", current["urgent"])),
-                                   bool(data.get("important", current["important"])),
+            saved = db.update_task(conn, task_id, title, due_at, remind, urgent, important,
                                    body, by=by, version=current["version"])
             if not saved:  # успели изменить за эти миллисекунды
                 raise ApiError(409, "Задачу уже изменили", {"task": self.full_task(conn, task_id)})
-        if "status_id" in data:
-            db.set_task_status(conn, task_id, self.check_status(conn, data["status_id"]), by=by)
-        elif "done" in data and bool(data["done"]) != current["done"]:
-            if not db.set_done(conn, task_id, bool(data["done"]), by=by):
-                raise ApiError(400, "На доске нет подходящей колонки")
+        if status_id is not None:
+            db.set_task_status(conn, task_id, status_id, by=by)
+        elif done != current["done"] and not db.set_done(conn, task_id, done, by=by):
+            raise ApiError(400, "На доске нет подходящей колонки")
         if "assignee" in data and item["shared"]:
-            db.set_assignee(conn, task_id, data["assignee"] or None, by=by)
+            db.set_assignee(conn, task_id, assignee, by=by)
         return self.task(conn, task_id)
 
     def delete_task(self, item, task_id):
@@ -436,8 +476,9 @@ HOME_PAGE = """<!doctype html><html lang="ru"><meta charset="utf-8">
 <p>Телефон видит этот компьютер — приложение ToDoro на телефоне сможет к нему подключиться.</p>
 </body></html>"""
 
+# номера — не длиннее 18 цифр: больше не помещается в число SQLite, и запрос упал бы без ответа
 ROUTE = re.compile(r"^/api/v1/lists/(?P<list>[A-Za-z0-9_-]+)"
-                   r"(?:/tasks(?:/(?P<task>\d+)(?:/(?P<kind>comments)(?:/(?P<sub>\d+))?)?)?)?$")
+                   r"(?:/tasks(?:/(?P<task>\d{1,18})(?:/(?P<kind>comments)(?:/(?P<sub>\d{1,18}))?)?)?)?$")
 
 
 class Handler(BaseHTTPRequestHandler):
