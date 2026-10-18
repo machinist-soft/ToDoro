@@ -2,6 +2,7 @@
 
 Запуск из папки проекта:  python -m unittest discover tests
 """
+import gc
 import json
 import shutil
 import socket
@@ -26,6 +27,9 @@ import team  # noqa: E402
 class PhoneServerTests(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp(prefix="todoro-phone-"))
+        # удаляем папку последней — после store.close() и прочих addCleanup, иначе Windows
+        # не даст удалить ещё открытые файлы и папка останется во временной папке
+        self.addCleanup(self.remove_dir)
         self.prefs_path = self.dir / "todoro.db"
         prefs = db.connect(self.prefs_path)
         db.set_setting(prefs, "user_name", "Аня")
@@ -40,6 +44,9 @@ class PhoneServerTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(5)
+
+    def remove_dir(self):
+        gc.collect()  # закрыть забытые подключения SQLite
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def call(self, method, path, data=None, raw=None, token=None):

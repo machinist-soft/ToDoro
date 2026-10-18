@@ -488,6 +488,126 @@ def format_size(size):
         size /= 1024
 
 
+class _SHFileInfo(ctypes.Structure):
+    _fields_ = [("hIcon", ctypes.c_void_p), ("iIcon", ctypes.c_int), ("dwAttributes", wintypes.DWORD),
+                ("szDisplayName", wintypes.WCHAR * 260), ("szTypeName", wintypes.WCHAR * 80)]
+
+
+class _BitmapHeader(ctypes.Structure):
+    _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG), ("biHeight", wintypes.LONG),
+                ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD),
+                ("biCompression", wintypes.DWORD), ("biSizeImage", wintypes.DWORD),
+                ("biXPelsPerMeter", wintypes.LONG), ("biYPelsPerMeter", wintypes.LONG),
+                ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
+
+
+class _Guid(ctypes.Structure):
+    _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD), ("Data3", wintypes.WORD),
+                ("Data4", ctypes.c_ubyte * 8)]
+
+
+def _shell_icon_handle(ext):
+    """Значок типа файла из Проводника: (HICON, размер) или (None, 0). Сам файл не нужен —
+    Windows смотрит только на расширение."""
+    shell32 = ctypes.WinDLL("shell32")
+    shell32.SHGetFileInfoW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(_SHFileInfo),
+                                       wintypes.UINT, wintypes.UINT]
+    shell32.SHGetFileInfoW.restype = ctypes.c_size_t
+    shell32.SHGetImageList.argtypes = [ctypes.c_int, ctypes.POINTER(_Guid), ctypes.POINTER(ctypes.c_void_p)]
+    shell32.SHGetImageList.restype = ctypes.c_long
+    ctypes.WinDLL("ole32").CoInitialize(None)
+    use_attributes, sys_index, icon_flag = 0x10, 0x4000, 0x100
+    info = _SHFileInfo()
+    if shell32.SHGetFileInfoW("file" + ext, 0x80, ctypes.byref(info), ctypes.sizeof(info),
+                              use_attributes | sys_index):
+        # большой значок 48×48 (как «Крупные значки» в Проводнике) — через IImageList::GetIcon
+        iid = _Guid(0x46EB5926, 0x582E, 0x4017, (ctypes.c_ubyte * 8)(0x9F, 0xDF, 0xE8, 0x99, 0x8D, 0xAA, 0x09, 0x50))
+        images = ctypes.c_void_p()
+        if shell32.SHGetImageList(2, ctypes.byref(iid), ctypes.byref(images)) == 0 and images:
+            table = ctypes.cast(images, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+            get_icon = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_int, wintypes.UINT,
+                                          ctypes.POINTER(ctypes.c_void_p))(table[10])
+            release = ctypes.WINFUNCTYPE(wintypes.ULONG, ctypes.c_void_p)(table[2])
+            icon = ctypes.c_void_p()
+            ok = get_icon(images, info.iIcon, 1, ctypes.byref(icon)) == 0 and icon.value
+            release(images)
+            if ok:
+                return icon.value, 48
+    info = _SHFileInfo()
+    if shell32.SHGetFileInfoW("file" + ext, 0x80, ctypes.byref(info), ctypes.sizeof(info),
+                              use_attributes | icon_flag) and info.hIcon:
+        return info.hIcon, 32
+    return None, 0
+
+
+def _draw_icon(icon, size, fill):
+    """Рисует значок на квадрате цвета fill (0 — чёрный, 255 — белый); байты BGRA."""
+    user32, gdi32 = ctypes.WinDLL("user32"), ctypes.WinDLL("gdi32")
+    gdi32.CreateCompatibleDC.argtypes = [ctypes.c_void_p]
+    gdi32.CreateCompatibleDC.restype = ctypes.c_void_p
+    gdi32.CreateDIBSection.argtypes = [ctypes.c_void_p, ctypes.c_void_p, wintypes.UINT,
+                                       ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, wintypes.DWORD]
+    gdi32.CreateDIBSection.restype = ctypes.c_void_p
+    gdi32.SelectObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    gdi32.SelectObject.restype = ctypes.c_void_p
+    gdi32.DeleteObject.argtypes = [ctypes.c_void_p]
+    gdi32.DeleteDC.argtypes = [ctypes.c_void_p]
+    user32.DrawIconEx.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_void_p,
+                                  ctypes.c_int, ctypes.c_int, wintypes.UINT, ctypes.c_void_p, wintypes.UINT]
+    header = _BitmapHeader(ctypes.sizeof(_BitmapHeader), size, -size, 1, 32, 0, 0, 0, 0, 0, 0)
+    dc = gdi32.CreateCompatibleDC(None)
+    bits = ctypes.c_void_p()
+    bitmap = gdi32.CreateDIBSection(dc, ctypes.byref(header), 0, ctypes.byref(bits), None, 0)
+    try:
+        if not bitmap or not bits.value:
+            return None
+        old = gdi32.SelectObject(dc, bitmap)
+        ctypes.memset(bits, fill, size * size * 4)
+        user32.DrawIconEx(dc, 0, 0, icon, size, size, 0, None, 3)
+        gdi32.GdiFlush()
+        data = ctypes.string_at(bits, size * size * 4)
+        gdi32.SelectObject(dc, old)
+        return data
+    finally:
+        if bitmap:
+            gdi32.DeleteObject(bitmap)
+        gdi32.DeleteDC(dc)
+
+
+def file_type_icon(name):
+    """Значок типа файла таким, как его показывает Проводник Windows (картинка PIL RGBA),
+    или None — не Windows, нет Pillow или Windows не дала значок."""
+    if sys.platform != "win32":
+        return None
+    ext = Path(file_name_for_disk(name)).suffix.lower()
+    if not re.fullmatch(r"\.[\w\-]{1,15}", ext):
+        ext = ".file"
+    try:
+        from PIL import Image
+        icon, size = _shell_icon_handle(ext)
+        if not icon:
+            return None
+        try:
+            black, white = _draw_icon(icon, size, 0), _draw_icon(icon, size, 255)
+        finally:
+            ctypes.WinDLL("user32").DestroyIcon(ctypes.c_void_p(icon))
+        if not black or not white:
+            return None
+        # прозрачность узнаём по разнице рисунка на чёрном и на белом — так верно и для
+        # новых значков с полупрозрачными краями, и для старых с маской
+        pixels = bytearray(size * size * 4)
+        for i in range(0, len(black), 4):
+            alpha = 255 - max(0, min(255, white[i + 1] - black[i + 1]))
+            if alpha:
+                pixels[i] = min(255, black[i + 2] * 255 // alpha)
+                pixels[i + 1] = min(255, black[i + 1] * 255 // alpha)
+                pixels[i + 2] = min(255, black[i] * 255 // alpha)
+                pixels[i + 3] = alpha
+        return Image.frombytes("RGBA", (size, size), bytes(pixels))
+    except Exception:  # noqa: BLE001 — значок лишь украшение: без него покажем плашку с расширением
+        return None
+
+
 def short_time(stamp):
     """'2026-10-17 14:05:33' -> '17.10 14:05' (год — только если не нынешний)."""
     when = datetime.fromisoformat(stamp)
@@ -2363,6 +2483,7 @@ class TaskCard(tk.Frame):
         self.files_area = ScrollArea(page, SURFACE)
         self.files_area.pack(fill="both", expand=True)
         self.thumbs = {}  # id вложения -> картинка-превью (иначе Tk её «забудет»)
+        self.type_icons = {}  # расширение -> значок типа файла из Проводника (или None)
         self.file_labels = []
         self.files_area.inner.bind("<Configure>", lambda e: [
             label.configure(wraplength=max(e.width - 80, 120)) for label in self.file_labels], add="+")
@@ -2441,7 +2562,7 @@ class TaskCard(tk.Frame):
         for attachment_id, name, size, added_by, added_at in files:
             row = tk.Frame(inner, bg=SURFACE, cursor="hand2")
             row.pack(fill="x", pady=(0, 6))
-            thumb = self.thumbnail(attachment_id, name)
+            thumb = self.thumbnail(attachment_id, name) or self.type_icon(name)
             if thumb:
                 preview = tk.Label(row, image=thumb, bg=SURFACE, width=56, height=56)
             else:
@@ -2482,6 +2603,18 @@ class TaskCard(tk.Frame):
                 thumb = None
         self.thumbs[attachment_id] = thumb
         return thumb
+
+    def type_icon(self, name):
+        """Значок типа файла, как в Проводнике (или None — покажем плашку с расширением)."""
+        ext = Path(file_name_for_disk(name)).suffix.lower()
+        if ext not in self.type_icons:
+            icon = file_type_icon(name)
+            try:
+                from PIL import ImageTk
+                self.type_icons[ext] = ImageTk.PhotoImage(icon) if icon else None
+            except Exception:  # noqa: BLE001 — нет Pillow: без значка
+                self.type_icons[ext] = None
+        return self.type_icons[ext]
 
     def paste(self):
         if self.task_id is not None:

@@ -3,6 +3,7 @@
 Запуск из папки проекта:  python -m unittest discover tests
 Работают на временных файлах — данные пользователя не трогают.
 """
+import gc
 import shutil
 import sqlite3
 import sys
@@ -25,6 +26,9 @@ class TempDir(unittest.TestCase):
         self.dir = Path(tempfile.mkdtemp(prefix="todoro-test-"))
 
     def tearDown(self):
+        # незакрытые подключения SQLite держат файлы, и Windows не даёт удалить папку:
+        # сборка мусора закрывает их, иначе папки копятся во временной папке Windows
+        gc.collect()
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
