@@ -629,6 +629,43 @@ def extras_mark(counts, from_mail=False):
     return "   " + "  ".join(parts) if parts else ""
 
 
+def merge_column_order(saved, default):
+    """Порядок столбцов списка из настройки: известные столбцы — в сохранённом порядке,
+    неизвестные и повторы выбрасываем, а новые (появились в новой версии) ставим на их
+    обычное место — сразу после того столбца, за которым они стоят по умолчанию."""
+    order = []
+    for key in saved if isinstance(saved, list) else []:
+        if key in default and key not in order:
+            order.append(key)
+    for i, key in enumerate(default):
+        if key not in order:
+            before = default[i - 1] if i else None
+            order.insert(order.index(before) + 1 if before in order else 0, key)
+    return order
+
+
+def drop_index(lefts, widths, x):
+    """Куда встанет перетаскиваемый столбец: номер места (0…len) по координате мыши x.
+    lefts/widths — левые края и ширины видимых столбцов."""
+    for i, (left, width) in enumerate(zip(lefts, widths)):
+        if x < left + width / 2:
+            return i
+    return len(lefts)
+
+
+def move_column(order, column, place, shown):
+    """Новый порядок столбцов: column встаёт на место place среди видимых столбцов shown
+    (скрытые столбцы — например «Автор» в личном списке — остаются рядом с прежними соседями)."""
+    shown = [c for c in shown if c != column]
+    target = shown[place] if place < len(shown) else None
+    order = [c for c in order if c != column]
+    if target is None:  # в самый конец — за последним видимым столбцом
+        order.insert(order.index(shown[-1]) + 1 if shown else len(order), column)
+    else:
+        order.insert(order.index(target), column)
+    return order
+
+
 def paint_tree(widget, bg):
     """Меняет фон у виджета и всех вложенных (кроме превью-картинок и значков)."""
     if not (isinstance(widget, tk.Label) and widget.cget("bg") == BG):
@@ -5268,6 +5305,13 @@ class TodoApp:
             # столбец значков появился после 2.18: место для него берём у «Задачи», а не у окна
             widths["title"] = max(widths["title"] - columns["marks"][1], 150)
         self.column_titles = {key: text for key, (text, _, _) in columns.items()}
+        # Столбцы можно переставлять, перетащив заголовок; порядок запоминается
+        self.default_columns = list(columns)
+        self.column_order = merge_column_order(
+            db.get_json_setting(self.prefs, "list_column_order", None), self.default_columns)
+        self.tree["displaycolumns"] = self.column_order
+        self.column_drag = None  # перетаскиваемый столбец: dict(column, x, moved)
+        self.drop_line = tk.Frame(self.tree, bg=ACCENT, width=3)
         for key, (text, width, stretch) in columns.items():
             # Щелчок по заголовку столбца сортирует по нему, повторный — в обратном порядке
             self.tree.heading(key, text=text, anchor="w",
@@ -5295,6 +5339,9 @@ class TodoApp:
         for sequence in ("<ButtonPress-1>", "<ButtonPress-3>", "<MouseWheel>", "<KeyPress>"):
             self.tree.bind(sequence, self.hide_title_tip, add="+")
         self.tree.bind("<ButtonRelease-1>", self.save_column_widths, add="+")
+        self.tree.bind("<ButtonPress-1>", self.column_drag_start, add="+")
+        self.tree.bind("<B1-Motion>", self.column_drag_move, add="+")
+        self.tree.bind("<ButtonRelease-1>", self.column_drag_end, add="+")
         self.tree.tag_configure("done", foreground=DONE)
         self.tree.tag_configure("overdue", foreground=DANGER)
         # У обычных строк цвет тоже задан явно: иначе в Tk 9 красный цвет
@@ -5445,6 +5492,88 @@ class TodoApp:
                 tags = [t for t in self.tree.item(item, "tags") if t != "hover"]
                 self.tree.item(item, tags=tags + (["hover"] if add else []))
         self.hover_row = row
+
+    # --- перестановка столбцов перетаскиванием заголовка ---
+
+    def shown_columns(self):
+        shown = self.tree["displaycolumns"]
+        return list(self.tree["columns"] if tuple(shown) == ("#all",) else shown)
+
+    def column_edges(self):
+        """Левые края и ширины видимых столбцов в координатах таблицы (с учётом прокрутки)."""
+        shown = self.shown_columns()
+        widths = [self.tree.column(c, "width") for c in shown]
+        total = self.tree.column("#0", "width") + sum(widths)
+        left = self.tree.column("#0", "width") - round(self.tree.xview()[0] * total)
+        lefts = []
+        for width in widths:
+            lefts.append(left)
+            left += width
+        return lefts, widths
+
+    def column_drag_start(self, event):
+        self.column_drag = None
+        self.drop_line.place_forget()  # на случай, если прошлое отпускание мыши потерялось
+        self.tree.configure(cursor="")
+        if self.tree.identify_region(event.x, event.y) != "heading":
+            return
+        column = self.tree.identify_column(event.x)  # '#1', '#2'… — номер среди видимых
+        shown = self.shown_columns()
+        index = int(column[1:]) - 1 if column[1:].isdigit() else -1
+        if 0 <= index < len(shown):
+            self.column_drag = dict(column=shown[index], x=event.x, moved=False)
+
+    def column_drag_move(self, event):
+        drag = self.column_drag
+        if not drag:
+            return
+        if not drag["moved"] and abs(event.x - drag["x"]) < 8:
+            return  # дрогнула рука при щелчке — это ещё не перетаскивание
+        drag["moved"] = True
+        self.tree.configure(cursor="fleur")
+        lefts, widths = self.column_edges()
+        place = drop_index(lefts, widths, self.visible_x(event.x))
+        x = lefts[place] if place < len(lefts) else lefts[-1] + widths[-1]
+        self.drop_line.place(x=max(x - 1, 0), y=0, relheight=1)
+        self.drop_line.lift()
+
+    def column_drag_end(self, event):
+        drag = self.column_drag
+        if not drag or not drag["moved"]:
+            self.column_drag = None
+            return
+        self.drop_line.place_forget()
+        self.tree.configure(cursor="")
+        lefts, widths = self.column_edges()
+        shown = self.shown_columns()
+        place = drop_index(lefts, widths, self.visible_x(event.x))
+        # место считаем без самого перетаскиваемого столбца
+        if place > shown.index(drag["column"]):
+            place -= 1
+        order = move_column(self.column_order, drag["column"], place, shown)
+        if order != self.column_order:
+            self.set_column_order(order)
+        # щелчок по заголовку (сортировка) срабатывает после отпускания — пусть он увидит
+        # «тянули», а потом флаг сбросится
+        self.root.after_idle(lambda: setattr(self, "column_drag", None))
+
+    def visible_x(self, x):
+        """Мышь за краем таблицы считаем у края: столбец не должен встать туда, где его не видно."""
+        return min(max(x, 0), self.tree.winfo_width())
+
+    def set_column_order(self, order):
+        self.column_order = order
+        shown = set(self.shown_columns())
+        self.tree["displaycolumns"] = [c for c in order if c in shown]
+        db.set_json_setting(self.prefs, "list_column_order",
+                            None if order == self.default_columns else order)
+
+    def show_heading_menu(self, event):
+        """Правая кнопка по заголовку таблицы: вернуть обычный порядок столбцов."""
+        (PopupMenu()
+         .command("Вернуть порядок столбцов", lambda: self.set_column_order(list(self.default_columns)),
+                  enabled=self.column_order != self.default_columns)
+         ).popup(self.root, event.x_root, event.y_root)
 
     def fit_columns(self, event):
         if self.columns_fitted or event.width < 300:
@@ -6363,7 +6492,7 @@ class TodoApp:
         self.mail_ids = db.mail_task_ids(self.conn)
         shared = bool(self.list_id and self.current_list()["shared"])
         # столбцы «Исполнитель» и «Автор» — только в общих списках (в личном всё ваше)
-        columns = [c for c in self.tree["columns"] if shared or c not in ("assignee", "author")]
+        columns = [c for c in self.column_order if shared or c not in ("assignee", "author")]
         self.tree["displaycolumns"] = columns
         if shared and self.only_mine.get():
             me = self.user_name()
@@ -6467,6 +6596,8 @@ class TodoApp:
         return filled + [r for r in rows if value(r) is None]
 
     def sort_by_column(self, column):
+        if self.column_drag and self.column_drag["moved"]:
+            return  # заголовок тянули, а не щёлкнули — сортировать не нужно
         if self.column_sort and self.column_sort[0] == column:
             self.column_sort = [column, not self.column_sort[1]]
         else:
@@ -6705,6 +6836,9 @@ class TodoApp:
     # --- меню по правой кнопке мыши ---
 
     def show_menu(self, event):
+        if self.tree.identify_region(event.x, event.y) == "heading":
+            self.show_heading_menu(event)
+            return
         row = self.tree.identify_row(event.y)
         if not row:
             return
