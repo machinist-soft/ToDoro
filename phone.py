@@ -425,6 +425,9 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "ToDoro"
     sys_version = ""
     protocol_version = "HTTP/1.0"  # одно соединение — один запрос: сервер однопоточный
+    # Сервер однопоточный: соединение, которое открыли и молчат, иначе задержало бы все
+    # запросы телефона, пока его не закроют. Через 10 с тишины такое соединение обрывается.
+    timeout = 10
 
     def log_message(self, format, *args):
         pass  # у значка в трее нет окна для журнала
@@ -456,6 +459,8 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             raise ApiError(400, "Неверная длина запроса") from None
+        if length < 0:
+            raise ApiError(400, "Неверная длина запроса")
         if length > limit:
             raise ApiError(413, "Слишком большой запрос")
         return self.rfile.read(length) if length else b""

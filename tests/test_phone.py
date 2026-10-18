@@ -4,6 +4,7 @@
 """
 import json
 import shutil
+import socket
 import sys
 import tempfile
 import threading
@@ -134,6 +135,15 @@ class PhoneServerTests(unittest.TestCase):
                                    {"title": "x", "due_at": "завтра"})[0], 400)
         self.assertEqual(self.call("GET", "/api/v1/lists/nope")[0], 404)
         self.assertEqual(self.call("POST", "/api/v1/lists/personal/tasks", raw=b"{")[0], 400)
+
+    def test_silent_connection_does_not_block(self):
+        """Кто-то подключился и молчит — сервер однопоточный, но телефону отвечает."""
+        phone.Handler.timeout, saved = 0.5, phone.Handler.timeout
+        self.addCleanup(setattr, phone.Handler, "timeout", saved)
+        idle = socket.create_connection(("127.0.0.1", self.server.server_address[1]))
+        self.addCleanup(idle.close)
+        status, answer = self.call("GET", "/api/v1/hello")
+        self.assertEqual((status, answer["app"]), (200, "ToDoro"))
 
     def test_shared_list(self):
         folder = self.dir / "share"
