@@ -266,6 +266,15 @@ class AppHelpersTests(TempDir):
         self.assertEqual(self.T.remind_label(90), "За 1 ч 30 мин")
         self.assertEqual(self.T.remind_label(3 * 24 * 60), "За 3 дн")
 
+    def test_risky_files(self):
+        """Программу не спрятать точкой или пробелом в конце имени: Windows их убирает."""
+        for name in ("отчёт.exe", "отчёт.EXE", "отчёт.exe.", "отчёт.exe . .", "диск.iso", "ссылка.url"):
+            self.assertTrue(self.T.is_risky_file(name), name)
+        for name in ("отчёт.pdf", "фото.png", "без расширения", "отчёт.pdf."):
+            self.assertFalse(self.T.is_risky_file(name), name)
+        self.assertEqual(self.T.file_name_for_disk("a:b.exe. "), "a_b.exe")
+        self.assertEqual(self.T.file_name_for_disk(" . "), "файл")
+
     def test_csv_roundtrip(self):
         conn = db.connect(self.dir / "a.db")
         tid = db.add_task(conn, "Сдать отчёт", created_by="Анна")

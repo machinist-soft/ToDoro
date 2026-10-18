@@ -460,7 +460,24 @@ def format_due(due_at):
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
 # Вложения, которые при открытии запускаются как программа, — перед открытием спрашиваем
 RISKY_TYPES = {".exe", ".com", ".bat", ".cmd", ".msi", ".msp", ".scr", ".pif", ".cpl", ".js", ".jse",
-               ".vbs", ".vbe", ".wsf", ".wsh", ".ps1", ".psm1", ".hta", ".lnk", ".reg", ".jar", ".appref-ms"}
+               ".vbs", ".vbe", ".wsf", ".wsh", ".ps1", ".psm1", ".hta", ".lnk", ".reg", ".jar", ".appref-ms",
+               ".ws", ".wsc", ".sct", ".vb", ".url", ".scf", ".inf", ".msc", ".chm", ".gadget",
+               ".application", ".appinstaller", ".msix", ".appx", ".diagcab", ".xll",
+               ".settingcontent-ms", ".library-ms", ".search-ms", ".py", ".pyw", ".pyz",
+               # образы дисков: Windows подключает их как диск, и программы внутри — без предупреждений
+               ".iso", ".img", ".vhd", ".vhdx"}
+
+
+def file_name_for_disk(name):
+    """Имя для временной копии вложения — такое, каким его на самом деле сохранит Windows:
+    без запрещённых знаков, без точек и пробелов в конце (Windows их молча убирает, и
+    «отчёт.exe.» стал бы «отчёт.exe»)."""
+    return re.sub(r'[\\/:*?"<>|]', "_", name or "").strip().rstrip(". ") or "файл"
+
+
+def is_risky_file(name):
+    """Вложение запустится как программа, если его открыть, — перед открытием спрашиваем."""
+    return Path(file_name_for_disk(name)).suffix.lower() in RISKY_TYPES
 
 
 def format_size(size):
@@ -6355,13 +6372,13 @@ class TodoApp:
             return
         if data is None:
             return
-        if Path(name).suffix.lower() in RISKY_TYPES and not ui.askyesno(
+        if is_risky_file(name) and not ui.askyesno(
                 "Запустить программу?",
                 f"«{name}» — программа или сценарий: при открытии он запустится на этом "
                 "компьютере.\n\nОткрывайте, только если доверяете тому, кто приложил файл. "
                 "Запустить?", icon="warning", default="no", parent=self.root):
             return
-        safe = re.sub(r'[\\/:*?"<>|]', "_", name).strip() or "файл"
+        safe = file_name_for_disk(name)
         folder = Path(tempfile.gettempdir()) / "ToDoro" / f"{self.list_id}-{attachment_id}"
         try:
             folder.mkdir(parents=True, exist_ok=True)
