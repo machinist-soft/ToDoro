@@ -4560,6 +4560,7 @@ class TodoApp:
         self.lost_list = None  # общий список, который был открыт, когда пропала связь
         self.reconnect_at = 0  # раньше этого времени (monotonic) не пытаемся переподключиться
         self.connecting = False  # общую папку из настроек сейчас открывают в фоне
+        self.connect_attempt = 0  # номер последней такой попытки (ответы прежних — не в счёт)
         # что видела фоновая проверка (team.Probe) в прошлый раз — чтобы заметить чужие изменения
         self.seen_seq, self.team_counter, self.list_counter = None, None, None
         self.own_credit, self.credit_until = 0, 0  # свои записи, ещё не замеченные проверкой
@@ -6629,13 +6630,20 @@ class TodoApp:
             done(None)
             return
         self.connecting = True
+        self.connect_attempt += 1
+        attempt = self.connect_attempt
         user = self.user_name()
 
         def finished(group, error):
-            self.connecting = False
-            if folder != db.get_setting(self.prefs, "shared_folder", "") or self.team is not None:
-                if group:  # пока подключались, папку в настройках сменили снова
+            if attempt != self.connect_attempt:  # пока подключались, настройки сохранили снова
+                if group:
                     group.close()
+                return
+            self.connecting = False
+            if self.team is not None or folder != db.get_setting(self.prefs, "shared_folder", ""):
+                if group:
+                    group.close()
+                self.banner.hide()
                 return
             if error:
                 self.team_error = str(error)
@@ -6899,6 +6907,8 @@ class TodoApp:
         name = NameDialog(self.root, "Переименовать список", "Название списка", item["name"]).show()
         if not name or name == item["name"]:
             return
+        if item["shared"] and self.team_missing():
+            return
         if item["shared"]:
             self.team.rename_list(item["id"], name)
         else:
@@ -6908,9 +6918,21 @@ class TodoApp:
         self.load_lists()
         self.show_list_name()
 
+    def team_missing(self):
+        """Общая папка сейчас не подключена (подключается в фоне или нет связи) — говорим об
+        этом и возвращаем True: переименовать или удалить общий список пока нельзя."""
+        if self.team is not None:
+            return False
+        if self.connecting:
+            text = "Общая папка ещё подключается. Попробуйте через минуту."
+        else:
+            text = "Нет связи с общей папкой — общий список сейчас нельзя изменить."
+        ui.showerror(APP_NAME, text, parent=self.root)
+        return True
+
     def delete_list(self):
         item = self.current_list()
-        if item["id"] == db.PERSONAL:
+        if item["id"] == db.PERSONAL or (item["shared"] and self.team_missing()):
             return
         count = db.count_tasks(self.conn)
         what = f"вместе с задачами ({count} шт.)" if count else "(задач в нём нет)"
