@@ -76,6 +76,12 @@ No server: each task list is its own SQLite file. The personal list is `%APPDATA
 
 ## Workflow
 
+- **Review loop.** After every finished task that changed files — before committing and
+  pushing — call the `reviewer` subagent (`.claude/agents/reviewer.md`) and tell it what the task
+  was and which changes to check. Fix its «Критично» and «Важно» findings and send the work back
+  for review. At most 3 rounds: if critical or important findings remain after the 3rd round,
+  stop and show them to the user (in Russian) instead of continuing. «Желательно» findings —
+  just mention them to the user. For `/release`: review before the tag and the GitHub Release.
 - Commit (Russian message) and push to `origin` (`machinist-soft/ToDoro`, public) after every change.
   Exception: fixes from `/audit` go to the `audit` branch and are merged into `main` only with
   the user's explicit permission (see `.claude/skills/audit/SKILL.md`).
