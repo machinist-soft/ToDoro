@@ -314,15 +314,31 @@ class SuggestPriorityTests(unittest.TestCase):
         self.assertEqual((result[0], result[1], result[3]), (True, False, True))
         result = smart.suggest_priority("Важно: встреча, ASAP", [])
         self.assertEqual((result[0], result[1], result[3]), (True, True, True))
-        self.assertIn("«срочно» и «важно»", result[2])
-        # точное «ASAP» — явно, «важная» рядом при этом не считается
+        self.assertEqual(result[2], "в названии есть «asap» и «важно»")  # найденные слова
+        # любые формы «срочн… / немедленн… / важн…» — тоже явно, в «почему» — найденное слово
         result = smart.suggest_priority("Важная встреча, ASAP", [])
-        self.assertEqual((result[0], result[1], result[3]), (True, False, True))
+        self.assertEqual(result, (True, True, "в названии есть «asap» и «важная»", True))
+        for text, flags, word in (("Срочный вклад", (True, False), "срочный"),
+                                  ("Немедленно выйти", (True, False), "немедленно"),
+                                  ("Важная встреча", (False, True), "важная"),
+                                  ("Важнейший звонок", (False, True), "важнейший")):
+            with self.subTest(text=text):
+                self.assertEqual(smart.suggest_priority(text, []),
+                                 flags + (f"в названии есть «{word}»", True))
+
+    def test_separate_not(self):
+        """«не срочно», «не важно» раздельно — тоже не приоритет."""
+        self.assertIsNone(smart.suggest_priority("не срочно позвонить", []))
+        self.assertIsNone(smart.suggest_priority("Позвонить, не важно когда", []))
+        self.assertEqual(smart.suggest_priority("не срочно, но важно", [])[:2], (False, True))
+
+    def test_not_urgent_not_important(self):
+        """«Несрочно», «неважно» — не признак приоритета."""
+        self.assertIsNone(smart.suggest_priority("Несрочно позвонить", []))
+        self.assertIsNone(smart.suggest_priority("неважно что", []))
 
     def test_word_forms_only_advice(self):
-        for text, flags in (("Срочный вклад", (True, False)), ("Немедленно выйти", (True, False)),
-                            ("Обязательные платежи", (False, True)), ("Важная встреча", (False, True)),
-                            ("Критичный баг", (False, True))):
+        for text, flags in (("Обязательные платежи", (False, True)), ("Критичный баг", (False, True))):
             with self.subTest(text=text):
                 result = smart.suggest_priority(text, [])
                 self.assertEqual(result, flags + ("так подсказывают слова в названии", False))
@@ -648,15 +664,29 @@ class AddTests(TempDir):
         self.assertEqual(db.get_task(app.conn, new)[5], "своё")
 
     def test_word_form_priority_only_advice(self):
-        """«Срочный вклад» — приоритет не ставим сами, только предлагаем «Отметить»."""
-        app = self.make_app("Срочный вклад открыть")
+        """«Обязательные платежи» — приоритет не ставим сами, только предлагаем «Отметить»."""
+        app = self.make_app("Обязательные платежи оплатить")
         app.add()
         task = self.last_task(app)
         self.assertEqual((task[6], task[7]), (0, 0))
         kind, text, button, mark = app.banner.shown[-1]
         self.assertEqual(button, "Отметить")
         mark()
-        app.quick_priority.assert_called_once_with(task[0], True, False)
+        app.quick_priority.assert_called_once_with(task[0], False, True)
+
+    def test_word_form_urgent_marked_at_once(self):
+        """«срочный тест 22» в быстром добавлении — «Срочно» отмечено сразу."""
+        app = self.make_app("срочный тест 22")
+        app.add()
+        task = self.last_task(app)
+        self.assertEqual((task[1], task[6], task[7]), ("срочный тест 22", 1, 0))
+        app.quick_priority.assert_not_called()
+
+    def test_not_urgent_word_not_marked(self):
+        app = self.make_app("Несрочно позвонить")
+        app.add()
+        task = self.last_task(app)
+        self.assertEqual((task[6], task[7]), (0, 0))
 
     def test_enter_with_suggestion_does_not_add(self):
         app = self.make_app("Позвонить")

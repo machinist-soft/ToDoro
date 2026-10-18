@@ -259,11 +259,10 @@ def describe_when(day, clock, today=None):
 
 # ---------- приоритет и шаги по похожим задачам ----------
 
-# Сказано прямо — ставим сразу; похожие слова («срочный вклад», «обязательные платежи») —
-# только предлагаем
-URGENT_EXACT, IMPORTANT_EXACT = {"срочно", "asap"}, {"важно"}
-URGENT_WORDS = ("срочн", "немедленн")
-IMPORTANT_WORDS = ("важн", "обязательн", "критичн")
+# Сказано прямо — ставим сразу; «обязательные платежи», «критичный баг» — только предлагаем
+URGENT_SAID = ("срочн", "немедленн", "asap")  # «срочно», «срочный», «срочная»…
+IMPORTANT_SAID = ("важн",)                    # «важно», «важная», «важнейший»
+IMPORTANT_WORDS = ("обязательн", "критичн")
 
 
 def similar(text, rows, least=0.5):
@@ -285,19 +284,19 @@ def similar(text, rows, least=0.5):
 
 
 def suggest_priority(text, rows):
-    """(срочно, важно, почему, сказано явно) или None. Слова «срочно», «важно» в названии —
-    сказано явно (True); «срочный», «обязательные»… — только совет; иначе — как чаще всего
-    отмечали похожие задачи (если хотя бы две из них и не «обычные»)."""
+    """(срочно, важно, почему, сказано явно) или None. «Срочно», «срочный», «важная»… в
+    названии — сказано явно (True); «обязательные», «критичный» — только совет; иначе — как
+    чаще всего отмечали похожие задачи (если хотя бы две из них и не «обычные»)."""
     low = words(text)
-    urgent = bool(URGENT_EXACT & set(low))
-    important = bool(IMPORTANT_EXACT & set(low))
-    if urgent or important:
-        found = [n for n, f in (("«срочно»", urgent), ("«важно»", important)) if f]
-        return urgent, important, "в названии есть " + " и ".join(found), True
-    urgent = any(w.startswith(URGENT_WORDS) for w in low)
-    important = any(w.startswith(IMPORTANT_WORDS) for w in low)
-    if urgent or important:
-        return urgent, important, "так подсказывают слова в названии", False
+    # «не срочно», «не важно» — наоборот
+    said = [next((w for i, w in enumerate(low) if w.startswith(prefixes)
+                  and (i == 0 or low[i - 1] != "не")), None)
+            for prefixes in (URGENT_SAID, IMPORTANT_SAID)]
+    if any(said):
+        found = [f"«{w}»" for w in said if w]
+        return bool(said[0]), bool(said[1]), "в названии есть " + " и ".join(found), True
+    if any(w.startswith(IMPORTANT_WORDS) for w in low):
+        return False, True, "так подсказывают слова в названии", False
     alike = similar(text, rows)
     if len(alike) < 2:
         return None

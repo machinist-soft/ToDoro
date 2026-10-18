@@ -260,21 +260,31 @@ class FormHintsTests(unittest.TestCase):
         self.assertEqual(self.prio(form), (True, False))
 
     def test_mark_implicit_then_explicit_important(self):
-        """Нажали «Отметить» на «срочный…», потом дописали «важно» — «Важно» отмечено."""
+        """Нажали «Отметить» на «критичный…» («Важно»), потом дописали «срочно» — отмечено."""
         form = self.form(task(), hints=True)
-        self.retitle(form, "срочный звонок")
+        self.retitle(form, "критичный баг")
         self.click(form, "Отметить")
-        self.assertEqual(self.prio(form), (True, False))
-        self.retitle(form, "срочный звонок важно")
+        self.assertEqual(self.prio(form), (False, True))
+        self.retitle(form, "критичный баг срочно")
         self.assertEqual(self.prio(form), (True, True))
-        self.assertIn(("Отметил «Важно» — так сказано в названии", "Снять"), self.rows(form))
+        self.assertIn(("Отметил «Срочно» — так сказано в названии", "Снять"), self.rows(form))
 
     def test_implicit_offer_hidden_when_explicit_word(self):
         """В заголовке есть явное слово — совета «Отметить» по словоформам нет."""
         form = self.form(task(), hints=True)
-        self.retitle(form, "срочный звонок важно")
+        self.retitle(form, "критичный баг срочно")
         self.assertFalse(any(link == "Отметить" for _, link in self.rows(form)), self.rows(form))
-        self.assertEqual(self.prio(form), (False, True))
+        self.assertEqual(self.prio(form), (True, False))
+
+    def test_word_form_marked_in_form(self):
+        """«срочный звонок» — форма слова тоже отмечается сразу; «несрочно» — нет."""
+        form = self.form(task(), hints=True)
+        self.retitle(form, "срочный звонок")
+        self.assertEqual(self.prio(form), (True, False))
+        self.assertIn(("Отметил «Срочно» — так сказано в названии", "Снять"), self.rows(form))
+        self.retitle(form, "несрочно позвонить, неважно когда")
+        self.assertEqual(self.prio(form), (False, False))
+        self.assertEqual(self.rows(form), [])
 
     def test_erased_word_unmarks(self):
         """Стёрли дописанное «срочно» — своя галочка снята, строки нет."""
@@ -322,11 +332,11 @@ class FormHintsTests(unittest.TestCase):
 
     def test_implicit_word_only_offered(self):
         form = self.form(task(), hints=True)
-        self.retitle(form, "срочный звонок")
+        self.retitle(form, "обязательные платежи")
         self.assertEqual(self.prio(form), (False, False))
-        self.assertIn(("«Срочно» — так подсказывают слова в названии", "Отметить"), self.rows(form))
+        self.assertIn(("«Важно» — так подсказывают слова в названии", "Отметить"), self.rows(form))
         self.click(form, "Отметить")
-        self.assertEqual(self.prio(form), (True, False))
+        self.assertEqual(self.prio(form), (False, True))
 
     def test_similar_tasks_only_offered(self):
         history = [row(1, "Отчёт в налоговую за год", urgent=1, important=1),
