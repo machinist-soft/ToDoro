@@ -90,6 +90,19 @@ class DatabaseTests(TempDir):
         self.assertEqual(len(db.shared_reminders(conn, "Борис")), 1)
 
 
+    def test_broken_reminder_does_not_break_others(self):
+        """Огромное число минут (из CSV, с телефона, из другой версии в общем списке) раньше
+        роняло проверку напоминаний — и напоминаний не было совсем."""
+        conn = db.connect(self.dir / "a.db")
+        broken = db.add_task(conn, "испорчена", created_by="Аня")
+        fine = db.add_task(conn, "нормальная", created_by="Аня")
+        db.update_task(conn, broken, "испорчена", "2026-01-01 10:00", 10**15)
+        db.update_task(conn, fine, "нормальная", "2026-01-01 10:00", 30)
+        now = datetime(2026, 1, 2)
+        self.assertEqual([t[0] for t in db.due_reminders(conn, now)], [fine])
+        self.assertEqual([t[1] for t in db.shared_reminders(conn, "Аня", now)], [fine])
+        self.assertEqual([t[0] for t in db.pending_tasks(conn, now=now)], [fine])
+
     def test_attachment_info_without_reading_files(self):
         """Содержимое файла — последний столбец (новые списки), а в старых списках сведения
         о вложении читаются один раз: иначе SQLite каждый раз читал бы весь файл."""
@@ -315,6 +328,11 @@ class AppHelpersTests(TempDir):
         self.assertEqual((t["title"], t["body"], t["due_at"], t["remind_before"], t["urgent"],
                           t["important"], t["created_by"], t["assignee"]),
                          ("Сдать отчёт", "строка 1\nстрока 2", "2030-01-02 18:00", 60, 1, 1, "Анна", "Борис"))
+
+    def test_csv_remind_limit(self):
+        self.assertEqual(self.T.parse_csv_remind("525600"), 525600)  # год — можно
+        with self.assertRaises(ValueError):
+            self.T.parse_csv_remind("79991234567")  # например, номер телефона не в том столбце
 
     def test_csv_from_russian_excel(self):
         """Русский Excel сохраняет CSV в кодировке Windows-1251; даты — как 5.1.2027 7:05."""

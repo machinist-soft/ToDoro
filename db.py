@@ -723,9 +723,28 @@ def delete_examples(conn):
     return count
 
 
+MAX_REMIND_MINUTES = 365 * 24 * 60  # напомнить можно не раньше чем за год до срока
+
+
+def remind_time(due_at, remind_before):
+    """Когда напомнить (срок минус remind_before минут) или None, если значения испорчены.
+    Одна испорченная задача (например, огромное число из CSV или из другой версии программы
+    в общем списке) не должна ломать напоминания обо всех остальных."""
+    try:
+        return datetime.fromisoformat(due_at) - timedelta(minutes=remind_before or 0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _due(rows, now):
+    for row in rows:
+        at = remind_time(row[2], row[3])
+        if at is not None and at <= now:
+            yield row
+
+
 def due_reminders(conn, now=None):
     """Невыполненные задачи, о которых пора напомнить: [(id, title, due_at), ...]."""
-    now = now or datetime.now()
     rows = conn.execute(
         """
         SELECT id, title, due_at, remind_before FROM tasks
@@ -734,11 +753,7 @@ def due_reminders(conn, now=None):
         ORDER BY due_at
         """
     ).fetchall()
-    return [
-        (task_id, title, due_at)
-        for task_id, title, due_at, remind_before in rows
-        if datetime.fromisoformat(due_at) - timedelta(minutes=remind_before) <= now
-    ]
+    return [(task_id, title, due_at) for task_id, title, due_at, _ in _due(rows, now or datetime.now())]
 
 
 def shared_reminders(conn, user, now=None):
@@ -746,7 +761,6 @@ def shared_reminders(conn, user, now=None):
     исполнителя нет).
     Флаг reminded в общем файле не трогаем (он один на всех) — кому уже напомнили, программа
     помнит у себя. Возвращает [(ключ, id, title, due_at), ...]; ключ меняется вместе со сроком."""
-    now = now or datetime.now()
     rows = conn.execute(
         """
         SELECT id, title, due_at, remind_before FROM tasks
@@ -754,18 +768,14 @@ def shared_reminders(conn, user, now=None):
           AND COALESCE(NULLIF(assignee, ''), created_by) = ?
         """, (user,),
     ).fetchall()
-    return [
-        (f"{task_id}|{due_at}|{remind_before}", task_id, title, due_at)
-        for task_id, title, due_at, remind_before in rows
-        if datetime.fromisoformat(due_at) - timedelta(minutes=remind_before) <= now
-    ]
+    return [(f"{task_id}|{due_at}|{remind_before}", task_id, title, due_at)
+            for task_id, title, due_at, remind_before in _due(rows, now or datetime.now())]
 
 
 def pending_tasks(conn, user=None, now=None):
     """Невыполненные задачи, у которых срок прошёл или уже пришло время напоминания:
     [(id, title, due_at), ...], ранние сроки — сверху. user — для общего списка: только задачи,
     где он исполнитель (или автор, если исполнителя нет)."""
-    now = now or datetime.now()
     sql = """SELECT id, title, due_at, remind_before FROM tasks
              WHERE done = 0 AND due_at IS NOT NULL"""
     args = ()
@@ -773,11 +783,7 @@ def pending_tasks(conn, user=None, now=None):
         sql += " AND COALESCE(NULLIF(assignee, ''), created_by) = ?"
         args = (user,)
     rows = conn.execute(sql + " ORDER BY due_at, id", args).fetchall()
-    return [
-        (task_id, title, due_at)
-        for task_id, title, due_at, remind_before in rows
-        if datetime.fromisoformat(due_at) - timedelta(minutes=remind_before or 0) <= now
-    ]
+    return [(task_id, title, due_at) for task_id, title, due_at, _ in _due(rows, now or datetime.now())]
 
 
 def mark_reminded(conn, task_id):

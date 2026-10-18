@@ -610,7 +610,7 @@ def parse_csv_remind(text):
             return minutes
     if not text:
         return None
-    if text.isdigit():
+    if text.isdigit() and int(text) <= db.MAX_REMIND_MINUTES:
         return int(text)
     raise ValueError(text)
 

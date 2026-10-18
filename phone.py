@@ -150,8 +150,8 @@ def check_due(value):
 def check_minutes(value):
     if value in (None, ""):
         return None
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ApiError(400, "remind_before — число минут (0 или больше) или null")
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= db.MAX_REMIND_MINUTES:
+        raise ApiError(400, "remind_before — число минут (от 0 до 525600, это год) или null")
     return value
 
 

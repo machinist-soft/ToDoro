@@ -149,6 +149,10 @@ class PhoneServerTests(unittest.TestCase):
         self.assertEqual(self.call("POST", "/api/v1/lists/personal/tasks",
                                    {"title": "x", "due_at": "завтра"})[0], 400)
         self.assertEqual(self.call("GET", "/api/v1/lists/nope")[0], 404)
+        # огромное число минут — отказ, и задача не создаётся наполовину
+        self.assertEqual(self.call("POST", "/api/v1/lists/personal/tasks",
+                                   {"title": "x", "remind_before": 10**30})[0], 400)
+        self.assertEqual(self.call("GET", "/api/v1/lists/personal")[1]["tasks"], [])
         self.assertEqual(self.call("POST", "/api/v1/lists/personal/tasks", raw=b"{")[0], 400)
 
     def test_silent_connection_does_not_block(self):
