@@ -243,12 +243,14 @@ python todoro.py
 ## Как устроена программа / Architecture
 
 Сервера нет: задачи лежат в файлах SQLite на вашем компьютере, общие списки — в сетевой папке.
-В интернет программа обращается только к GitHub — узнать, есть ли новая версия. Если подключить
+В интернет программа и приложение на телефоне обращаются только к GitHub — узнать, есть ли новая
+версия, и скачать её (у файла с телефона сверяется контрольная сумма). Если подключить
 телефон (☰ Меню → Подключить телефон), значок в трее отвечает ему по домашней сети или VPN.
 Телефон хранит копию задач у себя: без связи их можно смотреть и менять, а правки уйдут на
 компьютер, когда он снова будет доступен. Файлы задач на телефон не передаются — только их число.
 *No server: tasks live in SQLite files on your PC, shared lists in a network folder. The only
-internet request is the update check on GitHub. When a phone is connected, the tray icon answers
+internet requests, from the PC and from the phone, go to GitHub to check for and download a new
+version (the phone verifies the download's checksum). When a phone is connected, the tray icon answers
 it over the local network or VPN. The phone keeps its own copy of the tasks, so it works offline
 and sends the changes once the PC is reachable again. Task files are never sent to the phone.*
 
@@ -267,7 +269,9 @@ flowchart TB
         repo["Repo — копия задач<br/>и очередь правок"]
         sync["SyncWorker<br/>обмен в фоне"]
         remind["Reminders<br/>уведомления"]
+        updates["Updates · About<br/>новая версия, «О приложении»"]
         ui --> repo
+        ui --> updates
         sync --> repo
         repo --> remind
     end
@@ -298,6 +302,7 @@ flowchart TB
     snippy --> screen
     outlookpy --> outlook
     updaterpy --> github
+    updates -- "ToDoro.apk и ToDoro-android.json" --> github
 ```
 
 **Программа на компьютере / Desktop app**
@@ -332,7 +337,7 @@ flowchart TB
 
 | Папка / Folder | Что внутри / What is inside |
 |---|---|
-| `tests/` | автотесты: `test_core.py` — задачи и списки, `test_phone.py` — связь с телефоном / tests |
+| `tests/` | автотесты: `test_core.py` — задачи и списки, `test_phone.py` — связь с телефоном, `test_build_apk.py` — сборка APK и файла версии / tests |
 | `tools/` | сборка установщика и APK, рисование картинок и значков, скриншоты для README / build and asset scripts |
 | `installer/` | сценарий установщика Inno Setup / Inno Setup installer script |
 

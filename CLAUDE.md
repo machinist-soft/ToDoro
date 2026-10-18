@@ -49,15 +49,22 @@ No server: each task list is its own SQLite file. The personal list is `%APPDATA
 - `tray.py` — tray icon process (autostarts with Windows), global hotkeys Ctrl+Alt+T / Ctrl+Alt+S.
 - `phone.py` — HTTP+JSON server for the Android app, run inside the tray process; enabled only when a
   `phone_token` setting exists (bearer token delivered by QR code). Endpoint list is in its
-  docstring. It reuses `db.py`/`team.py`, so versions/authors/conflicts behave as in the window.
+  docstring; `/sync` also returns the desktop `APP_VERSION`. It reuses `db.py`/`team.py`, so
+  versions/authors/conflicts behave as in the window.
   Task files (attachments) are deliberately never sent to or accepted from the phone.
 - `outlook.py` (pywin32 COM), `snip.py` (screen-area capture), `updater.py` (GitHub Releases check
   and install), `help_text.py` (F1 help text), `examples.py` (sample tasks).
 - `android/app/src/main/java/com/machinist/todoro/` — `Api.kt` talks to `phone.py`; `Repo.kt`
   keeps an offline copy plus a queue of pending edits and resolves conflicts; `SyncWorker.kt`
-  syncs in the background; `Reminders.kt` posts notifications. Changing the `phone.py` API means
+  syncs in the background; `Reminders.kt` posts notifications; `About.kt` is the «О приложении и
+  обновления» screen (app version, desktop ToDoro version from `/sync`, links). `Updates.kt` checks
+  GitHub Releases (once a day and by button), reads `ToDoro-android.json` from the latest release,
+  downloads `ToDoro.apk` over https, verifies its sha256 against the asset digest and hands it to
+  the system installer. Changing the `phone.py` API means
   updating `Api.kt`/`Repo.kt` and `tests/test_phone.py` together. Android version is
-  `versionName`/`versionCode` in `android/app/build.gradle.kts` (separate from `APP_VERSION`).
+  `versionName`/`versionCode` in `android/app/build.gradle.kts` (separate from `APP_VERSION`);
+  `tools/build_apk.py` also writes `dist/ToDoro-android.json` with that version — attach it to every
+  release next to the APK (file name shared with `Updates.VERSION_FILE`), or phones won't see it.
 
 ## Rules learned the hard way
 

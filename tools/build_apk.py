@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ANDROID = ROOT / "android"
-VERSION_FILE = "ToDoro-android.json"  # то же имя — в Updates.kt (VERSION_URL)
+VERSION_FILE = "ToDoro-android.json"  # то же имя — в Updates.kt (VERSION_FILE)
 TOOLS = Path(r"D:\Claude\android-tools")
 
 
