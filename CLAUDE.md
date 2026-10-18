@@ -76,6 +76,13 @@ No server: each task list is its own SQLite file. The personal list is `%APPDATA
 
 ## Workflow
 
+- **Tests first.** After a new feature or a bug fix — before the review — call the `tester`
+  subagent (`.claude/agents/tester.md`): tell it what was added or fixed; it writes tests in
+  `tests/`, runs them and reports what it couldn't cover. If tests fail because of the program,
+  fix the program and call `tester` again — at most 3 rounds, then stop and show the failures
+  to the user (in Russian). Only when all tests pass, go to the review loop: the tests `tester`
+  added are part of the changes `reviewer` checks; pass it the «не покрыто» list too and
+  mention that list to the user.
 - **Review loop.** After every finished task that changed files — before committing and
   pushing — call the `reviewer` subagent (`.claude/agents/reviewer.md`) and tell it what the task
   was and which changes to check. Fix its «Критично» and «Важно» findings and send the work back
