@@ -1359,9 +1359,7 @@ class TaskForm(ttk.Frame):
     def use_when(self, when):
         due_at, remind = apply_when(when)
         due = datetime.fromisoformat(due_at)
-        self.title_entry.delete(0, "end")
-        self.title_entry.insert(0, when[0])
-        self.date.set(due.date())
+        self.date.set(due.date())  # название не трогаем — пусть остаётся, как написали
         self.date_changed()
         self.hour.set(due.strftime("%H"))
         self.minute.set(due.strftime("%M"))
@@ -6315,16 +6313,18 @@ class TodoApp:
         # Что поняли из названия, применяем, только если можем сказать об этом на полосе
         # (с кнопкой «Отменить»); иначе задача добавляется как написана
         when = smart.parse_when(title) if history is not None and not self.banner_busy() else None
+        # Название сохраняем, как написали (пользователь так захотел); слова о сроке не
+        # учитываем только при поиске похожих задач
         name = when[0] if when else title
         prio = smart.suggest_priority(name, history) if history is not None else None
         # «срочно/важно» сказали в названии
         told = prio if prio and prio[3] and not self.banner_busy() else None
-        task_id = db.add_task(self.conn, name, created_by=self.created_by())
+        task_id = db.add_task(self.conn, title, created_by=self.created_by())
         # Срок из названия и «срочно/важно» из его слов ставим сразу — их сказали явно;
         # приоритет и шаги похожих задач — только предлагаем в полосе над полем ввода
         if when or told:
             due_at, remind = apply_when(when) if when else (None, None)
-            db.update_task(self.conn, task_id, name, due_at, remind, bool(told and told[0]),
+            db.update_task(self.conn, task_id, title, due_at, remind, bool(told and told[0]),
                            bool(told and told[1]), by=self.created_by())
         self.entry.delete(0, "end")
         self.show_placeholder()
@@ -6353,7 +6353,7 @@ class TodoApp:
                 parts.append("срок " + smart.describe_when(when[1], when[2]) +
                              (", напомню за 15 минут" if when[2] else ""))
             if told:
-                parts.append("«" + PRIORITY_NAMES[priority_level(told[0], told[1])] + "»")
+                parts.append("приоритет «" + PRIORITY_NAMES[priority_level(told[0], told[1])] + "»")
             version = (db.task_meta(self.conn, task_id) or {}).get("version")
 
             def undo():

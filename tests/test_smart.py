@@ -461,7 +461,7 @@ class AddTests(TempDir):
         app.add()
         task = self.last_task(app)
         tomorrow = (date.today() + timedelta(1)).strftime("%Y-%m-%d")
-        self.assertEqual(task[1], "Срочно сдать отчёт")
+        self.assertEqual(task[1], "Срочно сдать отчёт завтра в 10:30")  # название — как написали
         self.assertEqual((task[4], task[5], task[6], task[7]), (tomorrow + " 10:30", 15, 1, 0))
         kind, text, button, undo = app.banner.shown[-1]
         self.assertEqual((kind, button), ("hint", "Отменить"))
@@ -471,12 +471,25 @@ class AddTests(TempDir):
         self.assertEqual(task[1], "Срочно сдать отчёт завтра в 10:30")
         self.assertEqual((task[4], task[5], task[6], task[7]), (None, None, 0, 0))
 
+    def test_banner_text_priority_only(self):
+        """Приоритет на полосе подписан словом «приоритет» — иначе «Срочно» похоже на название."""
+        app = self.make_app("Срочно позвонить")
+        app.add()
+        self.assertEqual(app.banner.shown[-1][1], "Понял из названия: приоритет «Срочно».")
+
+    def test_banner_text_when_and_priority(self):
+        app = self.make_app("Срочно позвонить завтра в 10:00")
+        app.add()
+        day = smart.describe_when(date.today() + timedelta(1), time(10, 0))
+        self.assertEqual(app.banner.shown[-1][1],
+                         f"Понял из названия: срок {day}, напомню за 15 минут; приоритет «Срочно».")
+
     def test_day_only_no_reminder(self):
         app = self.make_app("Оплатить счёт послезавтра")
         app.add()
         task = self.last_task(app)
         day = (date.today() + timedelta(2)).strftime("%Y-%m-%d")
-        self.assertEqual((task[1], task[4], task[5]), ("Оплатить счёт", day + " 09:00", None))
+        self.assertEqual((task[1], task[4], task[5]), ("Оплатить счёт послезавтра", day + " 09:00", None))
         self.assertNotIn("напомню", app.banner.shown[-1][1])
 
     def test_undo_skipped_if_task_changed(self):
@@ -588,7 +601,7 @@ class AddTests(TempDir):
                 app = self.make_app("Сдать отчёт завтра", banner_kind=kind, has_action=action)
                 self.assertFalse(app.banner_busy())
                 app.add()
-                self.assertEqual(self.last_task(app)[1], "Сдать отчёт")
+                self.assertEqual(self.last_task(app)[1], "Сдать отчёт завтра")  # название — как написали
                 self.assertEqual(app.banner.shown[-1][2], "Отменить")
 
     def test_plain_title_nothing_shown(self):
