@@ -282,6 +282,17 @@ class UpdaterTests(unittest.TestCase):
         self.assertFalse(updater.is_newer("2.0", "2.0"))
         self.assertFalse(updater.is_newer("", "1.0"))
 
+    def test_update_only_from_github_with_checksum(self):
+        good = {"asset_url": "https://github.com/machinist-soft/ToDoro/releases/download/v9/"
+                             "ToDoro-Setup-9.exe", "sha256": "ab" * 32}
+        updater.check_release(good)  # всё в порядке — без ошибки
+        for wrong in ({"asset_url": good["asset_url"].replace("https", "http")},
+                      {"asset_url": "https://github.com.evil.example/ToDoro-Setup-9.exe"},
+                      {"asset_url": "file:///C:/ToDoro-Setup-9.exe"},
+                      {"sha256": None}):
+            with self.assertRaises(updater.UpdateError):
+                updater.check_release({**good, **wrong})
+
     def test_feedback_url_has_version(self):
         url = updater.feedback_url("bug", "2.2")
         self.assertIn("template=bug_report.yml", url)

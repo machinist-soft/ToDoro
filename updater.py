@@ -188,11 +188,25 @@ def fetch_latest(timeout=10):
     )
 
 
+def check_release(release):
+    """Установщик скачиваем только по https с github.com и только если GitHub сообщил его
+    контрольную сумму: без неё скачанный файл нечем проверить, а он сразу запустится."""
+    url = urllib.parse.urlsplit(release.get("asset_url") or "")
+    if url.scheme != "https" or url.hostname != "github.com":
+        raise UpdateError("Адрес обновления — не на GitHub, поэтому обновление не скачано.\n"
+                          f"Скачайте установщик со страницы выпуска: {RELEASES_PAGE}")
+    if not release.get("sha256"):
+        raise UpdateError("GitHub не сообщил контрольную сумму установщика — без проверки "
+                          "ставить обновление нельзя.\n"
+                          f"Скачайте установщик со страницы выпуска: {RELEASES_PAGE}")
+
+
 def download(release, on_progress=None, timeout=30):
     """Скачивает установщик во временную папку и проверяет его. Возвращает путь к файлу.
     on_progress(получено_байт, всего_байт) вызывается по ходу скачивания (из этого же потока)."""
     if not release.get("asset_url"):
         raise UpdateError("К выпуску не приложен установщик.")
+    check_release(release)
     folder = Path(tempfile.gettempdir()) / "ToDoro-update"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / Path(release["asset_name"]).name
