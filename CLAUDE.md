@@ -77,6 +77,8 @@ No server: each task list is its own SQLite file. The personal list is `%APPDATA
 ## Workflow
 
 - Commit (Russian message) and push to `origin` (`machinist-soft/ToDoro`, public) after every change.
+  Exception: fixes from `/audit` go to the `audit` branch and are merged into `main` only with
+  the user's explicit permission (see `.claude/skills/audit/SKILL.md`).
   Don't put the owner's personal GitHub login or email in any text or link.
 - Every user-visible change gets a line under `## Не выпущено` at the top of `RELEASE_NOTES.md`
   (flat list, no nested bullets — the in-app update dialog can't render them).
