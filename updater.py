@@ -2,6 +2,8 @@
 
 Никаких данных пользователя никуда не отправляется — только запрос «какая версия последняя».
 Установщик проверяется по контрольной сумме SHA-256, которую GitHub указывает для файла выпуска.
+Если установщик (.exe) скачать не дали — например, его не пропускает фильтр корпоративной сети, —
+скачивается тот же установщик в архиве ToDoro-Setup-<версия>.zip, который тоже приложен к выпуску.
 """
 import hashlib
 import json
@@ -11,6 +13,7 @@ import sys
 import tempfile
 import urllib.parse
 import urllib.request
+import zipfile
 from pathlib import Path
 
 REPO = "machinist-soft/ToDoro"
@@ -22,6 +25,9 @@ RELEASES_LIST = f"https://github.com/{REPO}/releases"  # все выпуски �
 APK_NAME = "ToDoro.apk"
 APK_URL = f"https://github.com/{REPO}/releases/latest/download/{APK_NAME}"
 ISSUES_PAGE = f"https://github.com/{REPO}/issues"  # сообщения об ошибках и идеи
+# Адреса, которые администратор сети должен разрешить, чтобы обновление скачивалось
+DOWNLOAD_HOSTS = ("github.com", "api.github.com", "release-assets.githubusercontent.com",
+                  "objects.githubusercontent.com")
 
 
 def windows_name():
@@ -162,9 +168,15 @@ def _reason(error):
     return text if len(text) <= 300 else text[:300] + "…"
 
 
+def _sha256(asset):
+    digest = (asset or {}).get("digest") or ""
+    return digest.split(":", 1)[1].lower() if digest.startswith("sha256:") else None
+
+
 def fetch_latest(timeout=10):
-    """Последний выпуск на GitHub: dict(version, notes, url, asset_url, asset_name, size, sha256).
-    asset_* — None, если к выпуску не приложен установщик."""
+    """Последний выпуск на GitHub: dict(version, notes, url, asset_url, asset_name, size, sha256,
+    zip_url, zip_name, zip_size, zip_sha256). asset_* — None, если к выпуску не приложен
+    установщик, zip_* — если не приложен его архив (в старых выпусках его нет)."""
     headers = {"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"}
     try:
         with _urlopen(LATEST_URL, headers, timeout) as response:
@@ -174,9 +186,9 @@ def fetch_latest(timeout=10):
                           f"Подробности: {_reason(error)}") from error
     except ValueError as error:
         raise UpdateError("GitHub ответил что-то непонятное. Попробуйте позже.") from error
-    asset = next((a for a in data.get("assets", [])
-                  if re.match(r"ToDoro-Setup-.*\.exe$", a.get("name", ""))), None)
-    digest = (asset or {}).get("digest") or ""
+    assets = data.get("assets", [])
+    asset = next((a for a in assets if re.match(r"ToDoro-Setup-.*\.exe$", a.get("name", ""))), None)
+    archive = next((a for a in assets if re.match(r"ToDoro-Setup-.*\.zip$", a.get("name", ""))), None)
     return dict(
         version=data.get("tag_name", "").lstrip("v"),
         notes=(data.get("body") or "").strip(),
@@ -184,62 +196,152 @@ def fetch_latest(timeout=10):
         asset_url=asset and asset.get("browser_download_url"),
         asset_name=asset and asset.get("name"),
         size=asset and asset.get("size"),
-        sha256=digest.split(":", 1)[1].lower() if digest.startswith("sha256:") else None,
+        sha256=_sha256(asset),
+        zip_url=archive and archive.get("browser_download_url"),
+        zip_name=archive and archive.get("name"),
+        zip_size=archive and archive.get("size"),
+        zip_sha256=_sha256(archive),
     )
 
 
-def check_release(release):
+def check_release(release, prefix="asset"):
     """Установщик скачиваем только по https с github.com и только если GitHub сообщил его
-    контрольную сумму: без неё скачанный файл нечем проверить, а он сразу запустится."""
-    url = urllib.parse.urlsplit(release.get("asset_url") or "")
+    контрольную сумму: без неё скачанный файл нечем проверить, а он сразу запустится.
+    prefix="zip" — то же для архива с установщиком (поля zip_url и zip_sha256)."""
+    url = urllib.parse.urlsplit(release.get(f"{prefix}_url") or "")
     if url.scheme != "https" or url.hostname != "github.com":
         raise UpdateError("Адрес обновления — не на GitHub, поэтому обновление не скачано.\n"
                           f"Скачайте установщик со страницы выпуска: {RELEASES_PAGE}")
-    if not release.get("sha256"):
+    if not release.get("sha256" if prefix == "asset" else "zip_sha256"):
         raise UpdateError("GitHub не сообщил контрольную сумму установщика — без проверки "
                           "ставить обновление нельзя.\n"
                           f"Скачайте установщик со страницы выпуска: {RELEASES_PAGE}")
 
 
+class DownloadError(UpdateError):
+    """Файл выпуска не скачался: сеть оборвала соединение, сервер ответил ошибкой и т. п.
+    details — техническая причина для строки «Подробности»."""
+
+    def __init__(self, message, details=""):
+        super().__init__(message)
+        self.details = details
+
+
+class BlockedError(DownloadError):
+    """Вместо файла пришло что-то другое — обычно страница фильтра сети «загрузка запрещена»."""
+
+
+def blocked_message(details=""):
+    """Что делать, если обновление не дали скачать (ни как .exe, ни как .zip)."""
+    text = ("Не удалось скачать обновление. Если интернет работает — похоже, его не пропускает "
+            "фильтр сети (например, корпоративный FortiGate).\n"
+            f"Скачайте установщик в другой сети со страницы выпуска: {RELEASES_PAGE}\n"
+            "или попросите администратора разрешить адреса: " + ", ".join(DOWNLOAD_HOSTS) + ".")
+    return text + (f"\nПодробности: {details}" if details else "")
+
+
+def _fetch(url, path, size, sha256, magic, on_progress, timeout):
+    """Скачивает один файл выпуска в path и сверяет размер и контрольную сумму.
+    magic — первые байты настоящего файла («MZ» у .exe, «PK» у .zip): если начало другое,
+    вместо файла пришла страница (обычно — фильтр сети), и дальше качать бессмысленно."""
+    sha = hashlib.sha256()
+    received = 0
+    head = b""  # первые байты файла (первая порция может оказаться короче magic)
+    try:
+        with _urlopen(url, {"User-Agent": USER_AGENT}, timeout) as response, open(path, "wb") as f:
+            total = int(response.headers.get("Content-Length") or size or 0)
+            while chunk := response.read(256 * 1024):
+                head = (head + chunk[:len(magic)])[:len(magic)]
+                if not magic.startswith(head):
+                    reason = "вместо файла пришла другая страница (обычно — от фильтра сети)"
+                    raise BlockedError(blocked_message(reason), reason)
+                f.write(chunk)
+                sha.update(chunk)
+                received += len(chunk)
+                if on_progress:
+                    on_progress(received, total)
+    except BlockedError:
+        path.unlink(missing_ok=True)
+        raise
+    except OSError as error:
+        path.unlink(missing_ok=True)
+        raise DownloadError("Не удалось скачать обновление. Проверьте подключение к интернету.\n"
+                            f"Подробности: {_reason(error)}", _reason(error)) from error
+    if size and received != size:
+        path.unlink(missing_ok=True)
+        raise UpdateError("Обновление скачалось не полностью. Попробуйте ещё раз.")
+    if sha.hexdigest() != sha256:
+        path.unlink(missing_ok=True)
+        raise UpdateError("Скачанный файл повреждён (не совпала контрольная сумма). Попробуйте ещё раз.")
+
+
+def _extract_installer(archive, folder, name, sha256):
+    """Достаёт установщик name из скачанного архива и сверяет его собственную контрольную сумму
+    (ту же, что у .exe в выпуске); сам архив после этого удаляется."""
+    target = folder / name
+    sha = hashlib.sha256()
+    try:
+        with zipfile.ZipFile(archive) as z, z.open(name) as source, open(target, "wb") as f:
+            while chunk := source.read(256 * 1024):
+                f.write(chunk)
+                sha.update(chunk)
+    except (OSError, KeyError, zipfile.BadZipFile) as error:
+        target.unlink(missing_ok=True)
+        raise UpdateError("Не удалось распаковать скачанный архив с обновлением. "
+                          f"Попробуйте ещё раз.\nПодробности: {_reason(error)}") from error
+    finally:
+        archive.unlink(missing_ok=True)
+    if sha.hexdigest() != sha256:
+        target.unlink(missing_ok=True)
+        raise UpdateError("Установщик в архиве не совпал с установщиком выпуска (контрольная сумма). "
+                          f"Скачайте его со страницы выпуска: {RELEASES_PAGE}")
+    return target
+
+
 def download(release, on_progress=None, timeout=30):
     """Скачивает установщик во временную папку и проверяет его. Возвращает путь к файлу.
+    Если .exe скачать не вышло, а к выпуску приложен архив .zip, — скачивает архив (тоже с
+    проверкой контрольной суммы) и достаёт установщик из него.
     on_progress(получено_байт, всего_байт) вызывается по ходу скачивания (из этого же потока)."""
     if not release.get("asset_url"):
         raise UpdateError("К выпуску не приложен установщик.")
     check_release(release)
     folder = Path(tempfile.gettempdir()) / "ToDoro-update"
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / Path(release["asset_name"]).name
+    name = Path(release["asset_name"]).name
+    path = folder / name
     remove_old_downloads(folder, keep=path)
-    sha = hashlib.sha256()
-    received = 0
     try:
-        with _urlopen(release["asset_url"], {"User-Agent": USER_AGENT}, timeout) as response, \
-                open(path, "wb") as f:
-            total = int(response.headers.get("Content-Length") or release.get("size") or 0)
-            while chunk := response.read(256 * 1024):
-                f.write(chunk)
-                sha.update(chunk)
-                received += len(chunk)
-                if on_progress:
-                    on_progress(received, total)
-    except OSError as error:
-        raise UpdateError("Не удалось скачать обновление. Проверьте подключение к интернету.\n"
-                          f"Подробности: {_reason(error)}") from error
-    if release.get("size") and received != release["size"]:
-        path.unlink(missing_ok=True)
-        raise UpdateError("Обновление скачалось не полностью. Попробуйте ещё раз.")
-    if release.get("sha256") and sha.hexdigest() != release["sha256"]:
-        path.unlink(missing_ok=True)
-        raise UpdateError("Скачанный файл повреждён (не совпала контрольная сумма). Попробуйте ещё раз.")
-    return path
+        _fetch(release["asset_url"], path, release.get("size"), release["sha256"], b"MZ",
+               on_progress, timeout)
+        return path
+    except UpdateError as error:
+        if not release.get("zip_url"):
+            raise
+        exe_error = error
+    archive = folder / Path(release.get("zip_name") or "").name
+    try:
+        check_release(release, "zip")
+    except UpdateError as error:
+        if isinstance(exe_error, BlockedError):  # про фильтр сети важнее, чем про архив
+            raise exe_error from error
+        raise
+    try:
+        _fetch(release["zip_url"], archive, release.get("zip_size"), release["zip_sha256"], b"PK",
+               on_progress, timeout)
+    except DownloadError as error:
+        if isinstance(exe_error, DownloadError):  # не скачалось ни так, ни так
+            details = f".exe — {exe_error.details}; .zip — {error.details}"
+            raise BlockedError(blocked_message(details), details) from error
+        raise
+    return _extract_installer(archive, folder, name, release["sha256"])
 
 
 def remove_old_downloads(folder, keep=None):
-    """Удаляет установщики, скачанные раньше: после установки они больше не нужны.
+    """Удаляет установщики (и их архивы), скачанные раньше: после установки они больше не нужны.
     Занятый файл (установщик ещё работает) пропускаем — уберём в следующий раз."""
     try:
-        items = list(Path(folder).glob("*.exe"))
+        items = [*Path(folder).glob("*.exe"), *Path(folder).glob("*.zip")]
     except OSError:
         return
     for item in items:

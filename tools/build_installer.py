@@ -1,4 +1,5 @@
-"""Собирает установщик ToDoro: dist/ToDoro-Setup-<версия>.exe
+"""Собирает установщик ToDoro: dist/ToDoro-Setup-<версия>.exe и тот же установщик в архиве
+dist/ToDoro-Setup-<версия>.zip (в некоторых корпоративных сетях .exe скачать нельзя, а .zip — можно)
 
 1. PyInstaller делает папку build/dist/ToDoro с ToDoro.exe — внутри уже есть Python,
    поэтому на другом компьютере ничего дополнительно ставить не нужно.
@@ -11,6 +12,7 @@ import os
 import re
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -46,6 +48,14 @@ def find_iscc():
     sys.exit("Не найден Inno Setup 6 (ISCC.exe). Установите его: https://jrsoftware.org/isdl.php")
 
 
+def make_zip(installer):
+    """Кладёт установщик в архив рядом с ним: ToDoro-Setup-<версия>.zip."""
+    archive = installer.with_suffix(".zip")
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+        z.write(installer, installer.name)
+    return archive
+
+
 def main():
     version = app_version()
     print(f"== ToDoro {version}: собираю ToDoro.exe ==")
@@ -68,7 +78,9 @@ def main():
     print("== собираю установщик ==")
     subprocess.run([str(find_iscc()), f"/DAppVersion={version}",
                     str(ROOT / "installer" / "ToDoro.iss")], check=True)
-    print(f"\nГотово: {ROOT / 'dist' / f'ToDoro-Setup-{version}.exe'}")
+    installer = ROOT / "dist" / f"ToDoro-Setup-{version}.exe"
+    archive = make_zip(installer)
+    print(f"\nГотово: {installer}\n        {archive}")
 
 
 if __name__ == "__main__":

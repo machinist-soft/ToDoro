@@ -540,7 +540,7 @@ class RemoveOldDownloadsTests(TempDir):
 
     def test_download_removes_old_installer(self):
         """download(): старый установщик в ToDoro-update удалён, новый скачан и проверен."""
-        data = b"new installer" * 1000
+        data = b"MZ new installer" * 1000  # .exe начинается с «MZ»
         folder = self.dir / "ToDoro-update"
         folder.mkdir()
         old = folder / "ToDoro-Setup-2.15.exe"

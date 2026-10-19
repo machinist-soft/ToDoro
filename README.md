@@ -214,9 +214,11 @@ drops, the app keeps working and reconnects by itself.*
 
 Скачайте `ToDoro-Setup-*.exe` в разделе [Releases](https://github.com/machinist-soft/ToDoro/releases/latest)
 и запустите — права администратора не нужны. Дальше программа сама предложит обновиться, когда
-выйдет новая версия.
+выйдет новая версия. Если в рабочей сети нельзя скачивать `.exe`, возьмите `ToDoro-Setup-*.zip` —
+внутри тот же установщик (программа при обновлении пробует архив сама).
 *Download the installer from Releases and run it — no admin rights needed. The app offers updates
-by itself.*
+by itself. If your office network blocks `.exe` downloads, take `ToDoro-Setup-*.zip` — the same
+installer in an archive (the app falls back to it by itself when updating).*
 
 ![Окно обновления / Update dialog](docs/screenshots/update.png)
 

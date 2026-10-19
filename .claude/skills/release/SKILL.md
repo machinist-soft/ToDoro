@@ -101,7 +101,8 @@ description: Выпуск новой версии ToDoro — номер верс
 ## 6. Установщик
 
 - `python tools/build_installer.py` (несколько минут, вывод — в лог в scratchpad) →
-  `dist\ToDoro-Setup-<версия>.exe`.
+  `dist\ToDoro-Setup-<версия>.exe` и `dist\ToDoro-Setup-<версия>.zip` (тот же установщик в архиве:
+  в некоторых корпоративных сетях .exe скачать не дают — программа тогда скачивает ZIP).
 - Установщик на этом компьютере НЕ запускай с настоящим `%APPDATA%` (заменит ярлык
   разработки на рабочем столе). Если нужна проверка — только с `APPDATA`, направленным в scratchpad.
 
@@ -146,10 +147,10 @@ description: Выпуск новой версии ToDoro — номер верс
    Ссылки — на полный SHA коммита из шага 7 (не на `main`), чтобы картинки выпуска не
    менялись потом. Показывай снимки новых функций выпуска + `list.png` / `board.png` /
    `dark.png` по смыслу. Проверь, что каждая ссылка отдаёт 200 (`curl -s -o /dev/null -w "%{http_code}"`).
-2. `gh release create v<версия> dist/ToDoro-Setup-<версия>.exe dist/ToDoro.apk dist/ToDoro-android.json --title "ToDoro <версия>" --notes-file <файл> --target main`
+2. `gh release create v<версия> dist/ToDoro-Setup-<версия>.exe dist/ToDoro-Setup-<версия>.zip dist/ToDoro.apk dist/ToDoro-android.json --title "ToDoro <версия>" --notes-file <файл> --target main`
 3. Проверки:
-   - `gh release view v<версия> --json assets,isDraft` — установщик, `ToDoro.apk` и
-     `ToDoro-android.json` приложены, у `ToDoro.apk` есть `digest` (sha256), не черновик;
+   - `gh release view v<версия> --json assets,isDraft` — установщик, его ZIP, `ToDoro.apk` и
+     `ToDoro-android.json` приложены, у установщика, ZIP и `ToDoro.apk` есть `digest` (sha256), не черновик;
    - `curl -s --ssl-no-revoke -o /dev/null -w "%{http_code}" -L https://github.com/machinist-soft/ToDoro/releases/latest/download/ToDoro.apk`
      → 200 (по этой ссылке телефон скачивает приложение из QR-кода);
    - `curl -s --ssl-no-revoke https://api.github.com/repos/machinist-soft/ToDoro/releases/latest`
@@ -163,7 +164,7 @@ description: Выпуск новой версии ToDoro — номер верс
   `pythonw` с заголовком `*ToDoro*` — когда активна справка, заголовок «Справка — ToDoro») и
   запусти ярлык `%USERPROFILE%\Desktop\ToDoro.lnk`. Проверь, что осталась одна копия программы.
 - Уборка (только после того, как проверки шага 8 прошли — файлы уже на GitHub):
-  - в `dist\` удали установщики и APK прошлых версий — оставь только `ToDoro-Setup-<версия>.exe`,
+  - в `dist\` удали установщики и APK прошлых версий — оставь только `ToDoro-Setup-<версия>.exe`, `ToDoro-Setup-<версия>.zip`,
     `ToDoro-<versionName>.apk`, `ToDoro.apk` и `ToDoro-android.json` этого выпуска;
   - удали временные папки, которые остались от этого выпуска: `%TEMP%\todoro-*` (если скрипт
     не смог их убрать) и файлы в scratchpad, сделанные для выпуска (тексты, логи, картинки).

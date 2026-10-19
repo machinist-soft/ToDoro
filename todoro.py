@@ -4227,6 +4227,11 @@ class UpdateDialog(tk.Toplevel):
                 for button in (self.ok_button, self.later_button):
                     button.state(["!disabled"])
                 self.progress.pack_forget()
+                if isinstance(error, updater.BlockedError):
+                    self.status.configure(text="Обновление не скачалось — возможно, его не пропускает фильтр сети.",
+                                          fg=DANGER)
+                    self.explain_blocked(error)
+                    return
                 message = str(error) if isinstance(error, updater.UpdateError) else f"Ошибка: {error}"
                 self.status.configure(text=message, fg=DANGER)
                 return
@@ -4243,6 +4248,21 @@ class UpdateDialog(tk.Toplevel):
         self.downloading = True
         tick()
         in_background(self, lambda: updater.download(self.release, progress), finished)
+
+    def explain_blocked(self, error):
+        """Обновление не дал скачать фильтр сети: что делать — и адреса для администратора."""
+        choice = AlertDialog(
+            self, "Обновление не скачалось", str(error), "warning",
+            [("Скопировать адреса", "copy", "TButton"),
+             ("Открыть страницу выпуска", "page", "Accent.TButton"),
+             ("Закрыть", None, "TButton")], "page", None).show()
+        if choice == "copy":
+            self.clipboard_clear()
+            self.clipboard_append("\n".join(updater.DOWNLOAD_HOSTS))
+            self.status.configure(text="Адреса для администратора скопированы — вставьте их в письмо.",
+                                  fg=MUTED)
+        elif choice == "page":
+            webbrowser.open(self.release["url"])
 
 
 class CatbusRun(tk.Toplevel):
