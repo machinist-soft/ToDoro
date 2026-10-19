@@ -50,10 +50,12 @@ class FormHintsTests(unittest.TestCase):
         self.root.update()
 
     def form(self, data, hints="changed", history=()):
-        def offscreen(window, *args, **kwargs):
+        def offscreen(window, *args, show=False, **kwargs):  # TaskDialog ставит себя через place_window
             window.geometry(OFFSCREEN)
+            if show:
+                window.deiconify()
 
-        with mock.patch.object(self.T, "center_on_screen", offscreen), \
+        with mock.patch.object(self.T, "place_window", offscreen), \
                 mock.patch.object(self.T, "bring_to_front"):
             dialog = self.T.TaskDialog(self.root, data, STATUSES, history=list(history),
                                        hints=hints)
@@ -360,10 +362,12 @@ class FormHintsTests(unittest.TestCase):
         self.assertFalse(form.hints_on)
 
     def test_no_history_hints_off(self):
-        def offscreen(window, *args, **kwargs):
+        def offscreen(window, *args, show=False, **kwargs):  # TaskDialog ставит себя через place_window
             window.geometry(OFFSCREEN)
+            if show:
+                window.deiconify()
 
-        with mock.patch.object(self.T, "center_on_screen", offscreen), \
+        with mock.patch.object(self.T, "place_window", offscreen), \
                 mock.patch.object(self.T, "bring_to_front"):
             dialog = self.T.TaskDialog(self.root, task("срочно"), STATUSES, hints=True)
         self.dialogs.append(dialog)

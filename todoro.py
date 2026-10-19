@@ -456,6 +456,35 @@ def center_on_screen(window, width=None, height=None):
     place_window(window, x, y, width, height, show=hidden)
 
 
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+
+def work_area(window):
+    """Часть экрана без панели задач Windows: (x, y, ширина, высота) — того монитора, где стоит
+    окно (ещё не показанное окно — основного)."""
+    try:
+        user32 = ctypes.windll.user32
+        rect = None
+        if window.winfo_ismapped():
+            user32.MonitorFromWindow.restype = wintypes.HMONITOR
+            hwnd = wintypes.HWND(user32.GetParent(window.winfo_id()))
+            monitor = user32.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+            info = MONITORINFO(cbSize=ctypes.sizeof(MONITORINFO))
+            if monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                rect = info.rcWork
+        if rect is None:
+            rect = wintypes.RECT()
+            if not user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):  # SPI_GETWORKAREA
+                rect = None
+        if rect is not None and rect.right > rect.left and rect.bottom > rect.top:
+            return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
+    except (AttributeError, OSError, ctypes.ArgumentError):
+        pass
+    return 0, 0, window.winfo_screenwidth(), window.winfo_screenheight()
+
+
 def format_due(due_at):
     """'2026-10-16 09:00' -> '16.10.2026 09:00'."""
     return datetime.fromisoformat(due_at).strftime("%d.%m.%Y %H:%M") if due_at else ""
@@ -1516,6 +1545,7 @@ class TaskForm(ttk.Frame):
         self.hints_job = None
         for child in self.hints.winfo_children():
             child.destroy()
+        self.hints.configure(height=1)  # иначе пустая рамка сохраняет прежнюю высоту (особенность Tk)
         title = self.title_entry.get().strip()
         if not title:
             return
@@ -1694,19 +1724,102 @@ class TaskDialog(tk.Toplevel):
             ttk.Label(self, text=note, style="Muted.TLabel", wraplength=520, justify="left").pack(
                 fill="x", padx=20, pady=(16, 0))
             self.form.configure(padding=(20, 10, 20, 18))
+        self.image, self.preview, self.preview_label = image, None, None
+        self.desc_lines = self.DESC_LINES
+        self.fit_job = None
         if image is not None:
-            from PIL import ImageTk
-            preview = image.copy()
-            preview.thumbnail((520, 180))
-            self.preview = ImageTk.PhotoImage(preview, master=self)  # иначе Tk картинку «забудет»
-            tk.Label(self, image=self.preview, bg=BORDER, bd=0, padx=1, pady=1).pack(
-                anchor="w", padx=20, pady=(10, 0))
+            self.full_preview = min(self.PREVIEW_HEIGHT, round(image.height * min(
+                1, self.PREVIEW_WIDTH / max(image.width, 1))))
+            self.preview_label = tk.Label(self, bg=BORDER, bd=0, padx=1, pady=1)
+            self.preview_label.pack(anchor="w", padx=20, pady=(10, 0))
+            self.show_preview(self.full_preview)
         self.form.pack(fill="both")
-        center_on_screen(self)
+        # Размер окна не задаём: оно само вытягивается, когда в форме появляется строка
+        # (например, «Отметил „Срочно“…» под заголовком), а keep_on_screen не даёт ему уйти
+        # за край экрана — иначе кнопки «Сохранить» и «Отмена» обрезаются (сообщение #1)
+        hidden = hide_new_window(self)
+        self.keep_on_screen(place=False)
+        left, top, width, height = work_area(self)
+        x = left + max((width - self.winfo_reqwidth()) // 2, 0)
+        y = top + max((height - self.winfo_reqheight() - self.TITLE_BAR) // 2, 0)
+        place_window(self, x, y, show=hidden)
+        self.form.bind("<Configure>", lambda e: self.fit_later(), add="+")
         if standalone:
             bring_to_front(self)
         self.form.focus_title()
         self.grab_set()
+
+    PREVIEW_WIDTH, PREVIEW_HEIGHT, MIN_PREVIEW = 520, 180, 40  # картинка снимка над формой
+    PREVIEW_PAD = 12                    # отступ над картинкой и её рамка
+    DESC_LINES, MIN_DESC_LINES = 6, 2   # высота поля «Описание», строк
+    TITLE_BAR, MARGIN = 32, 8           # заголовок окна (до показа) и запас снизу, пикселей
+
+    def show_preview(self, height):
+        """Уменьшенная копия снимка высотой не больше height. Сам снимок к задаче
+        прикладывается целиком — уменьшается только картинка в окне."""
+        from PIL import ImageTk
+        preview = self.image.copy()
+        preview.thumbnail((self.PREVIEW_WIDTH, height))
+        self.preview = ImageTk.PhotoImage(preview, master=self)  # иначе Tk картинку «забудет»
+        self.preview_label.configure(image=self.preview)
+
+    def preview_space(self):
+        """Сколько по высоте сейчас занимает картинка снимка вместе с отступом (0 — убрана)."""
+        return self.preview.height() + self.PREVIEW_PAD if self.preview_label.winfo_manager() else 0
+
+    def fit_later(self):
+        if self.fit_job is None:
+            self.fit_job = self.after_idle(self.keep_on_screen)
+
+    def keep_on_screen(self, place=True):
+        """Окно не должно выходить за край экрана: если не влезает по высоте — сначала
+        уменьшаем картинку снимка, потом поле «Описание» (появится место — возвращаем как было);
+        если низ уходит за панель задач — сдвигаем окно вверх, но не выше верха экрана."""
+        self.fit_job = None
+        if not self.winfo_exists():
+            return
+        self.update_idletasks()
+        _, top, _, height = work_area(self)
+        title_bar = self.winfo_rooty() - self.winfo_y() if self.winfo_ismapped() else 0
+        title_bar = title_bar if title_bar > 0 else self.TITLE_BAR
+        room = height - title_bar - self.MARGIN    # сколько окну можно занять по высоте
+        extra = self.winfo_reqheight() - room      # на сколько не влезает (меньше 0 — есть запас)
+        if extra < 0:  # место появилось — сначала возвращаем строки описания, потом картинку
+            extra = self.fit_description(extra)
+        if self.preview is not None:  # картинка — не меньше MIN_PREVIEW
+            now = self.preview_space()
+            want = max(min(self.full_preview, now - extra - self.PREVIEW_PAD),
+                       min(self.MIN_PREVIEW, self.full_preview))
+            if not now or want != self.preview.height():
+                self.show_preview(want)
+                if not now:
+                    self.preview_label.pack(anchor="w", padx=20, pady=(10, 0), before=self.form)
+            extra -= now - self.preview_space()
+        extra = self.fit_description(extra)
+        if extra > 0 and self.preview is not None:  # и так не влезает — убираем картинку совсем
+            extra -= self.preview_space()
+            self.preview_label.pack_forget()
+            self.fit_description(extra)  # освободилось место — описанию, сколько можно
+        if not place:
+            return
+        self.update_idletasks()
+        y = self.winfo_y()
+        bottom = top + height - self.MARGIN - title_bar - self.winfo_reqheight()
+        new_y = max(min(y, bottom), top)
+        if new_y != y:
+            self.geometry(f"+{self.winfo_x()}+{new_y}")
+
+    def fit_description(self, extra):
+        """Поле «Описание» короче (extra > 0) или снова длиннее (extra < 0), но в пределах
+        MIN_DESC_LINES…DESC_LINES строк. Возвращает, на сколько окно ещё не влезает."""
+        line = tkfont.Font(font=FONT).metrics("linespace")
+        lines = max(min(self.DESC_LINES, self.desc_lines - math.ceil(extra / line)),
+                    self.MIN_DESC_LINES)
+        extra -= (self.desc_lines - lines) * line
+        if lines != self.desc_lines:
+            self.desc_lines = lines
+            self.form.desc.configure(height=lines)
+        return extra
 
     def saved(self, result):
         self.result = result

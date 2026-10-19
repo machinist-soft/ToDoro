@@ -385,10 +385,12 @@ class TaskFormSuggestTests(unittest.TestCase):
         top.destroy()
 
     def test_task_dialog(self):
-        def offscreen(window, *args, **kwargs):
+        def offscreen(window, *args, show=False, **kwargs):  # TaskDialog ставит себя через place_window
             window.geometry(OFFSCREEN)
+            if show:
+                window.deiconify()
 
-        with mock.patch.object(self.T, "center_on_screen", offscreen), \
+        with mock.patch.object(self.T, "place_window", offscreen), \
                 mock.patch.object(self.T, "bring_to_front"):
             dialog = self.T.TaskDialog(self.root, task(), STATUSES, history=ROWS, hints=True)
         try:
