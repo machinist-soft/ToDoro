@@ -3094,8 +3094,35 @@ class SidePanel(tk.Frame):
                    command=self.form.save).pack(side="right", padx=(0, 8))
         cancel.lift()  # Tab: сначала «Сохранить», потом «Отмена»
         area.bind_wheel()
+        self.fit_description(area)
         self.switch("edit", self.editor)
         self.form.focus_title()
+
+    DESC_MIN_LINES = 5  # меньше поле «Описание» не делаем: остальное — прокруткой формы
+
+    def fit_description(self, area):
+        """Поле «Описание» занимает всё свободное место панели до кнопок «Сохранить / Отмена»:
+        высота подбирается при каждом изменении размера панели и содержимого формы (например,
+        появились советы под заголовком). Места нет — остаётся DESC_MIN_LINES строк."""
+        form, line = self.form, tkfont.Font(font=FONT).metrics("linespace")
+        job = [None]
+
+        def fit():
+            job[0] = None
+            if self.form is not form or not area.winfo_exists():
+                return  # форму уже закрыли или открыли другую
+            free = area.canvas.winfo_height() - area.inner.winfo_reqheight()
+            lines = int(form.desc.cget("height"))
+            wanted = max(self.DESC_MIN_LINES, lines + free // line)
+            if wanted != lines:
+                form.desc.configure(height=wanted)
+
+        def later(event=None):
+            if job[0] is None:  # одна подгонка на пачку событий
+                job[0] = self.after_idle(fit)
+
+        area.canvas.bind("<Configure>", later, add="+")
+        area.inner.bind("<Configure>", later, add="+")
 
 
 MENU_FONT = ("Segoe UI", 10)
