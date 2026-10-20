@@ -19,8 +19,9 @@ import todoro  # noqa: E402
 from todoro import drop_index, merge_column_order, move_column  # noqa: E402
 
 DEFAULT = ["num", "status", "marks", "title", "priority", "due", "remind",
-           "assignee", "author", "created"]
-PERSONAL = [c for c in DEFAULT if c not in ("assignee", "author")]
+           "assignee", "author", "unit", "created"]
+# в личном списке нет «Исполнителя» и «Инициатора», а «Бизнес-единицы» нет, пока справочник пуст
+PERSONAL = [c for c in DEFAULT if c not in ("assignee", "author", "unit")]
 
 
 class MergeColumnOrderTests(unittest.TestCase):

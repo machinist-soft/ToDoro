@@ -46,6 +46,8 @@
 - **Задачи на телефоне Android**: личные и общие списки в приложении ToDoro — отметить, добавить,
   изменить, обсудить в комментариях; работает и без связи, напоминает о сроках, обновляется прямо с телефона. Установка и подключение — по QR-коду
   (☰ Меню → Подключить телефон); телефон берёт задачи у компьютера по домашней сети или VPN.
+- **Бизнес-единицы**: необязательное поле задачи со справочником (подразделения, направления) —
+  свой справочник у каждого списка, столбец в списке, сортировка и поиск.
 - **Командная работа**: инициатор (можно поменять) и исполнитель задачи, «Мои задачи», уведомление «Вам назначены
   задачи», «кто и когда изменил», защита от затирания чужих правок.
 - **Живой Тоторо-помощник** подсказывает, что просрочено и что важнее всего: моргает, радуется,
@@ -69,7 +71,8 @@ priority and checklist suggestions from similar tasks · a reminders window with
 overdue task, one click opens a task · file attachments, pasted
 screenshots and comments in every task · list, kanban board with
 custom columns and Eisenhower matrix (drag a card to another quadrant to change its priority),
-filters, search, column sorting and drag-to-reorder columns · several lists, personal and shared with a team via a network
+filters, search, column sorting and drag-to-reorder columns · an optional business unit per task,
+picked from each list’s own directory · several lists, personal and shared with a team via a network
 folder (VPN works) · an Android app: personal and shared lists on your phone, comments, works offline,
 due-date reminders, updates itself from the phone, installed and paired by QR code · initiator (editable) and assignee, “My tasks”, “assigned to you” notices, last editor,
 protection against overwriting others’ edits · a living Totoro helper and the Catbus · a guided

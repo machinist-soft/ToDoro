@@ -256,7 +256,8 @@ class InitiatorAppTests(TempDir):
     def fake_app(self, conn, shared=True, user="Анна"):
         """Минимум TodoApp, нужный apply_edit/form_data/people/resolve_conflict."""
         T = self.T
-        app = SimpleNamespace(conn=conn, list_id="team" if shared else None, refreshed=[])
+        app = SimpleNamespace(conn=conn, list_id="team" if shared else None, refreshed=[],
+                              unit_names={})
         app.created_by = lambda: user if shared else None
         app.members = lambda: ["Анна", "Борис"] if shared else None
         app.current_list = lambda: {"shared": shared, "name": "Команда"}
@@ -292,7 +293,8 @@ class InitiatorAppTests(TempDir):
         plain = db.add_task(conn, "звонок", created_by="Борис")
         nobody = db.add_task(conn, "ничья")
         columns = self.T.CSV_COLUMNS
-        self.assertEqual(columns[columns.index("Создана"):], ["Создана", "Автор", "Инициатор", "Исполнитель"])
+        self.assertEqual(columns[columns.index("Создана"):columns.index("Исполнитель") + 1],
+                         ["Создана", "Автор", "Инициатор", "Исполнитель"])
         author, initiator = columns.index("Автор"), columns.index("Инициатор")
         rows = {r[0]: r for r in self.T.export_rows(conn)}
         self.assertTrue(all(len(r) == len(columns) for r in rows.values()))

@@ -15,7 +15,7 @@ import todoro  # noqa: E402
 
 def fake_app(counts=None, mail=(), column_sort=None):
     fake = SimpleNamespace(extra_counts=counts or {}, mail_ids=set(mail),
-                           column_sort=column_sort, authors={}, assignees={},
+                           column_sort=column_sort, authors={}, assignees={}, unit_names={},
                            sort_key=lambda row: row[0])
     fake.marks_order = lambda task_id: todoro.TodoApp.marks_order(fake, task_id)
     return fake

@@ -50,6 +50,7 @@ NEW_COLUMNS = [
     ("mail_id", "TEXT"),                            # письмо Outlook, из которого создана задача
     ("mail_from", "TEXT"),                          # его отправитель — адресат письма по задаче
     ("initiator", "TEXT"),                          # инициатор (в общих списках); NULL — автор
+    ("unit_id", "INTEGER"),                         # бизнес-единица (таблица units); NULL — не указана
 ]
 
 # Инициатор задачи: указанный вручную, а если не указан — автор (тот, кто создал)
@@ -193,6 +194,11 @@ def connect(path=None, timeout=5, shared=False):
             created_at TEXT    NOT NULL
         );
         CREATE INDEX IF NOT EXISTS comments_task ON comments (task_id);
+        CREATE TABLE IF NOT EXISTS units (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            name     TEXT    NOT NULL,
+            position INTEGER NOT NULL
+        );
         """
     )
     # Задачам без статуса (из старых версий) назначаем: выполненным — первую «выполненную»
@@ -281,6 +287,83 @@ def delete_status(conn, status_id, move_to, by=None):
 
 def count_in_status(conn, status_id):
     return conn.execute("SELECT COUNT(*) FROM tasks WHERE status_id = ?", (status_id,)).fetchone()[0]
+
+
+# ---------- справочник бизнес-единиц (свой в каждом списке, как статусы) ----------
+
+def list_units(conn):
+    """[(id, name), ...] в порядке справочника."""
+    return conn.execute("SELECT id, name FROM units ORDER BY position, id").fetchall()
+
+
+def unit_key(name):
+    """Название для сравнения: без учёта регистра и лишних пробелов."""
+    return " ".join((name or "").split()).casefold()
+
+
+def unit_by_name(conn, name):
+    """id единицы с таким названием (без учёта регистра и лишних пробелов) или None."""
+    key = unit_key(name)
+    return next((uid for uid, n in list_units(conn) if unit_key(n) == key), None) if key else None
+
+
+def add_unit(conn, name):
+    with conn:
+        pos = conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM units").fetchone()[0]
+        return conn.execute("INSERT INTO units (name, position) VALUES (?, ?)",
+                            (name.strip(), pos)).lastrowid
+
+
+def rename_unit(conn, unit_id, name):
+    with conn:
+        conn.execute("UPDATE units SET name = ? WHERE id = ?", (name.strip(), unit_id))
+
+
+def move_unit(conn, unit_id, step):
+    """Сдвигает единицу вверх (step=-1) или вниз (step=1) по справочнику."""
+    ids = [r[0] for r in list_units(conn)]
+    i = ids.index(unit_id)
+    j = i + step
+    if 0 <= j < len(ids):
+        ids[i], ids[j] = ids[j], ids[i]
+        with conn:
+            conn.executemany("UPDATE units SET position = ? WHERE id = ?",
+                             [(pos, uid) for pos, uid in enumerate(ids)])
+
+
+def count_in_unit(conn, unit_id):
+    return conn.execute("SELECT COUNT(*) FROM tasks WHERE unit_id = ?", (unit_id,)).fetchone()[0]
+
+
+def delete_unit(conn, unit_id, move_to=None, by=None):
+    """Удаляет единицу из справочника; её задачам ставится move_to (None — «не указана»)."""
+    with conn:
+        conn.execute(f"UPDATE tasks SET unit_id = ?, {TOUCH_SQL} WHERE unit_id = ?", (move_to, by, unit_id))
+        conn.execute("DELETE FROM units WHERE id = ?", (unit_id,))
+
+
+def copy_units(src, dst):
+    """Добавляет в справочник dst единицы из src, которых в нём ещё нет (по названию).
+    Возвращает, сколько добавлено."""
+    have = {unit_key(name) for _, name in list_units(dst)}
+    added = 0
+    for _, name in list_units(src):
+        if unit_key(name) not in have:
+            add_unit(dst, name)
+            have.add(unit_key(name))
+            added += 1
+    return added
+
+
+def set_task_unit(conn, task_id, unit_id, by=None):
+    """Бизнес-единица задачи (None — не указана)."""
+    with conn:
+        conn.execute(f"UPDATE tasks SET unit_id = ?, {TOUCH_SQL} WHERE id = ?", (unit_id, by, task_id))
+
+
+def task_units(conn):
+    """{id задачи: id единицы} — только у задач, где единица указана."""
+    return dict(conn.execute("SELECT id, unit_id FROM tasks WHERE unit_id IS NOT NULL"))
 
 
 # Время выполнения: ставится, когда задача становится выполненной, и стирается,
@@ -461,11 +544,12 @@ def set_initiator(conn, task_id, initiator, by=None):
 def task_meta(conn, task_id):
     """Кто создал, инициатор, исполнитель, кто и когда изменил, номер версии — или None, если
     задачи нет."""
-    row = conn.execute(f"SELECT created_by, {INITIATOR_SQL}, assignee, updated_by, updated_at, version "
-                       "FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    row = conn.execute(f"SELECT created_by, {INITIATOR_SQL}, assignee, updated_by, updated_at, version, "
+                       "unit_id FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if row is None:
         return None
-    return dict(zip(("author", "initiator", "assignee", "updated_by", "updated_at", "version"), row))
+    return dict(zip(("author", "initiator", "assignee", "updated_by", "updated_at", "version", "unit_id"),
+                    row))
 
 
 def assigned_to(conn, user):
@@ -549,18 +633,26 @@ def import_tasks(conn, tasks, created_by=None):
     """Добавляет задачи из файла (см. prepare_import в todoro.py). Номера им даются новые.
     created_at=None — создана сейчас."""
     is_done = {s[0]: s[3] for s in list_statuses(conn)}
+    # бизнес-единица — по названию; новые названия добавляются в справочник списка
+    unit_ids = {}
+    for t in tasks:
+        name = (t.get("unit") or "").strip()
+        if name and unit_key(name) not in unit_ids:
+            unit_ids[unit_key(name)] = unit_by_name(conn, name) or add_unit(conn, name)
     with conn:
         conn.executemany(
             """
             INSERT INTO tasks (title, body, status_id, done, due_at, remind_before, reminded,
-                               urgent, important, created_at, created_by, assignee, initiator)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?)
+                               urgent, important, created_at, created_by, assignee, initiator,
+                               unit_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?, ?)
             """,
             [(t["title"], t["body"], t["status_id"], is_done[t["status_id"]], t["due_at"],
               t["remind_before"], int(t["reminded"]), int(t["urgent"]), int(t["important"]),
               t["created_at"], t.get("created_by") or created_by, t.get("assignee"),
               # инициатор, совпадающий с автором, отдельно не храним — им и так считается автор
-              t.get("initiator") if t.get("initiator") != (t.get("created_by") or created_by) else None)
+              t.get("initiator") if t.get("initiator") != (t.get("created_by") or created_by) else None,
+              unit_ids.get(unit_key(t.get("unit"))))
              for t in tasks],
         )
 
@@ -597,27 +689,30 @@ def move_task_to(src, task_id, dst):
     row = src.execute(
         """SELECT t.title, t.body, t.done, t.created_at, t.due_at, t.remind_before, t.reminded,
                   t.urgent, t.important, t.done_at, s.name, t.created_by, t.assignee,
-                  t.mail_id, t.mail_from, t.initiator
-           FROM tasks t LEFT JOIN statuses s ON s.id = t.status_id WHERE t.id = ?""",
+                  t.mail_id, t.mail_from, t.initiator, u.name
+           FROM tasks t LEFT JOIN statuses s ON s.id = t.status_id
+                        LEFT JOIN units u ON u.id = t.unit_id WHERE t.id = ?""",
         (task_id,),
     ).fetchone()
     (title, body, done, created, due_at, remind_before, reminded, urgent, important, done_at, status,
-     created_by, assignee, mail_id, mail_from_, initiator) = row
+     created_by, assignee, mail_id, mail_from_, initiator, unit) = row
     same = [sid for sid, name, _, is_done in list_statuses(dst)
             if name.strip().lower() == (status or "").strip().lower() and is_done == done]
     status_id = same[0] if same else first_status(dst, done)
     if status_id is None:  # нет колонки нужного вида — первая любая
         status_id = list_statuses(dst)[0][0]
     is_done = dst.execute("SELECT is_done FROM statuses WHERE id = ?", (status_id,)).fetchone()[0]
+    # бизнес-единица — по названию; если в справочнике списка её нет, добавляем, чтобы не потерять
+    unit_id = (unit_by_name(dst, unit) or add_unit(dst, unit)) if unit and unit.strip() else None
     with dst:
         new_id = dst.execute(
             """INSERT INTO tasks (title, body, done, created_at, due_at, remind_before, reminded,
                                   urgent, important, done_at, status_id, created_by, assignee,
-                                  mail_id, mail_from, initiator)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  mail_id, mail_from, initiator, unit_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (title, body, is_done, created, due_at, remind_before, reminded, urgent, important,
              done_at if is_done else None, status_id, created_by, assignee, mail_id, mail_from_,
-             initiator),
+             initiator, unit_id),
         ).lastrowid
         # вложения и комментарии переезжают вместе с задачей
         dst.executemany(

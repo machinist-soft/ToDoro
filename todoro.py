@@ -784,7 +784,7 @@ def short_text(text, limit=60):
 
 
 def build_email(number, title, status, priority, due, remind, created, urgent, body="", author="",
-                assignee=""):
+                assignee="", unit=""):
     """Тема и текст письма по задаче: в теме — заголовок, в тексте — описание и все поля."""
     subject = f"Задача из {APP_NAME}: {short_text(title)}"
     if urgent:
@@ -801,6 +801,7 @@ def build_email(number, title, status, priority, due, remind, created, urgent, b
         f"Создана: {created}",
         *([f"Инициатор: {author}"] if author else []),
         *([f"Исполнитель: {assignee}"] if assignee else []),
+        *([f"Бизнес-единица: {unit}"] if unit else []),
         "",
         "—",
         f"Отправлено из {APP_NAME}",
@@ -852,7 +853,7 @@ def clean_temp_files(folder=None, max_age=TEMP_MAX_AGE):
 # (в ней сохраняет CSV русский Excel).
 
 CSV_COLUMNS = ["№", "Заголовок", "Описание", "Статус", "Приоритет", "Срок", "Напомнить", "Создана",
-               "Автор", "Инициатор", "Исполнитель"]
+               "Автор", "Инициатор", "Исполнитель", "Бизнес-единица"]
 CSV_TEMPLATE_COLUMNS = ["Заголовок", "Описание", "Статус", "Приоритет", "Срок", "Напомнить"]
 CSV_ALIASES = {  # заголовок столбца в файле (строчными) -> поле
     "№": "num", "номер": "num",
@@ -865,7 +866,9 @@ CSV_ALIASES = {  # заголовок столбца в файле (строчн
     "создана": "created",
     "инициатор": "initiator", "автор": "author",
     "исполнитель": "assignee",
+    "бизнес-единица": "unit", "бизнес единица": "unit",
 }
+NO_UNIT = "— не указана —"  # бизнес-единица задачи не выбрана
 PRIORITY_FLAGS = {"срочно и важно": (1, 1), "важно": (0, 1), "срочно": (1, 0),
                   "обычный": (0, 0), "обычная": (0, 0), "": (0, 0)}
 DATE_RE = re.compile(r"(\d{1,2})\.(\d{1,2})\.(\d{4})(?:[ T]+(\d{1,2}):(\d{2})(?::\d{2})?)?$")
@@ -914,6 +917,8 @@ def export_rows(conn):
     # и автор (кто создал), и инициатор: при загрузке файла обратно автор сохранится, и
     # напоминания по задачам без исполнителя не уйдут другому человеку
     authors = dict(conn.execute("SELECT id, created_by FROM tasks WHERE created_by IS NOT NULL"))
+    units = dict(db.list_units(conn))
+    task_unit = db.task_units(conn)
     rows = []
     for task_id, title, _done, created, due_at, remind_before, urgent, important, body, status_id \
             in db.list_tasks(conn):
@@ -923,7 +928,8 @@ def export_rows(conn):
         rows.append([task_id, title, body, statuses.get(status_id, ""),
                      PRIORITY_NAMES[priority_level(urgent, important)] or "Обычный",
                      format_due(due_at), remind, created, authors.get(task_id, ""),
-                     initiators.get(task_id, ""), assignees.get(task_id, "")])
+                     initiators.get(task_id, ""), assignees.get(task_id, ""),
+                     units.get(task_unit.get(task_id), "")])
     return rows
 
 
@@ -969,6 +975,7 @@ def prepare_import(conn, records):
     statuses = db.list_statuses(conn)
     by_name = {name.strip().lower(): sid for sid, name, _, _ in statuses}
     tasks, notes = [], []
+    new_units = set()  # единицы, которых нет в справочнике (замечание — один раз на единицу)
     for line_no, v in records:
         title = v.get("title", "")
         if not title:
@@ -996,6 +1003,10 @@ def prepare_import(conn, records):
                 remind = parse_csv_remind(v.get("remind", ""))
             except ValueError:
                 notes.append(f"строка {line_no}: напоминание «{v['remind']}» непонятно — без напоминания")
+        unit = " ".join(v.get("unit", "").split())
+        if unit and db.unit_by_name(conn, unit) is None and unit.casefold() not in new_units:
+            new_units.add(unit.casefold())
+            notes.append(f"строка {line_no}: бизнес-единицы «{unit}» нет в справочнике — она будет добавлена")
         try:
             created = parse_csv_date(v.get("created", ""))
         except ValueError:
@@ -1011,6 +1022,7 @@ def prepare_import(conn, records):
             created_at=created.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if created else None,
             created_by=v.get("author") or None,
             initiator=v.get("initiator") or None,
+            unit=unit or None,
             assignee=v.get("assignee") or None,
         ))
     return tasks, notes
@@ -1458,11 +1470,12 @@ class TaskForm(ttk.Frame):
     """
 
     def __init__(self, parent, task, statuses, on_save, on_cancel, compact=False, members=None,
-                 history=None, hints=False):
+                 history=None, hints=False, units=None):
         """history — прошлые задачи списка (строки db.list_tasks) для умных подсказок, None —
         подсказки выключены. hints — показывать под заголовком советы (срок из названия,
         приоритет и шаги похожих задач): True — для новой задачи, "changed" — для правки готовой
-        (советы только по тому, что дописали в заголовок)."""
+        (советы только по тому, что дописали в заголовок).
+        units — справочник бизнес-единиц списка [(id, название)]; пустой — поля в форме нет."""
         super().__init__(parent, style="Card.TFrame" if compact else "TFrame")
         self.on_save, self.on_cancel = on_save, on_cancel
         self.history = history
@@ -1515,6 +1528,18 @@ class TaskForm(ttk.Frame):
         self.status.pack(fill="x" if compact else None, anchor="w")
         current = next((s[1] for s in statuses if s[0] == task["status_id"]), statuses[0][1])
         self.status.set(current)
+
+        # Бизнес-единица — из справочника списка (☰ Меню → Бизнес-единицы); необязательна
+        self.unit_id = task.get("unit_id")  # остаётся как была, если поля нет
+        self.unit, self.unit_ids = None, {}
+        if units:
+            label("Бизнес-единица")
+            self.unit_ids = {name: uid for uid, name in units or []}
+            names = [NO_UNIT] + list(self.unit_ids)
+            self.unit = ttk.Combobox(self, values=names, state="readonly", width=1 if compact else 24,
+                                     font=FONT)
+            self.unit.pack(fill="x" if compact else None, anchor="w")
+            self.unit.set(next((n for n, uid in self.unit_ids.items() if uid == self.unit_id), NO_UNIT))
 
         self.assignee = self.initiator = None
         if members is not None:
@@ -1768,11 +1793,12 @@ class TaskForm(ttk.Frame):
         if self.assignee is not None and self.assignee.get() != "— не назначен —":
             assignee = self.assignee.get()
         initiator = (self.initiator.get().strip() or None) if self.initiator is not None else None
+        unit_id = self.unit_ids.get(self.unit.get()) if self.unit is not None else self.unit_id
         return dict(title=self.title_entry.get().strip(), body=self.desc.get("1.0", "end-1c").strip(),
                     status_id=status_id, due_at=due_at,
                     remind_before=self.remind_options.get(self.remind.get()),
                     urgent=self.urgent.get(), important=self.important.get(), assignee=assignee,
-                    initiator=initiator)
+                    initiator=initiator, unit_id=unit_id)
 
     def dirty(self):
         """Есть ли несохранённые изменения."""
@@ -1793,7 +1819,7 @@ class TaskDialog(tk.Toplevel):
     """Запасное окно с формой задачи — когда правая панель скрыта (узкое окно)."""
 
     def __init__(self, parent, task, statuses, members=None, title="Задача", note="",
-                 standalone=False, image=None, history=None, hints=False):
+                 standalone=False, image=None, history=None, hints=False, units=None):
         """standalone — отдельное окно (своя кнопка на панели задач): главное окно ToDoro скрыто
         или позади, а форма должна появиться поверх Outlook.
         image — картинка Pillow (снимок экрана), её уменьшенная копия показывается над формой."""
@@ -1805,7 +1831,7 @@ class TaskDialog(tk.Toplevel):
         if not standalone:
             self.transient(parent)
         self.form = TaskForm(self, task, statuses, on_save=self.saved, on_cancel=self.destroy,
-                             members=members, history=history, hints=hints)
+                             members=members, history=history, hints=hints, units=units)
         self.form.configure(padding=(20, 18, 20, 18))
         if note:  # например, «Из письма Outlook; будут приложены: …»
             ttk.Label(self, text=note, style="Muted.TLabel", wraplength=520, justify="left").pack(
@@ -2693,7 +2719,8 @@ class TaskCard(tk.Frame):
         for row, (key, label) in enumerate((("important", "Важность"), ("urgent", "Срочность"),
                                             ("due", "Срок"), ("remind", "Напомнить"),
                                             ("created", "Создана"), ("author", "Инициатор"),
-                                            ("assignee", "Исполнитель"), ("updated", "Изменена"))):
+                                            ("assignee", "Исполнитель"), ("unit", "Бизнес-единица"),
+                                            ("updated", "Изменена"))):
             caption = tk.Label(self.fields, text=label, bg=SURFACE, fg=MUTED, font=FONT_SMALL)
             caption.grid(row=row, column=0, sticky="w", pady=1)
             value = tk.Label(self.fields, bg=SURFACE, fg=TEXT, font=FONT_SMALL)
@@ -2936,11 +2963,11 @@ class TaskCard(tk.Frame):
 
     def show(self, number, title, body, status, status_color, overdue, done, priority_level_,
              priority_name, due, remind, created, author="", assignee="", updated="",
-             urgent=False, important=False, from_mail=False):
+             urgent=False, important=False, from_mail=False, unit=""):
         self.load_extras(number)
         shown = (number, title, body, status, status_color, overdue, done, priority_level_,
                  priority_name, due, remind, created, author, assignee, updated, urgent, important,
-                 from_mail)
+                 from_mail, unit)
         if shown == getattr(self, "shown", None):
             return  # ничего не изменилось — не трогаем, чтобы не сбросить прокрутку описания
         self.shown = shown
@@ -2978,7 +3005,8 @@ class TaskCard(tk.Frame):
         self.values["remind"].configure(text=remind or "Нет")
         self.values["created"].configure(text=created)
         # инициатор, исполнитель и «кто изменил» есть только в общих списках — в личных строк нет
-        for key, value in (("author", author), ("assignee", assignee), ("updated", updated)):
+        # бизнес-единица — только если указана
+        for key, value in (("author", author), ("assignee", assignee), ("unit", unit), ("updated", updated)):
             self.values[key].configure(text=value)
             for widget in (self.values[key], self.captions[key]):
                 widget.grid() if value else widget.grid_remove()
@@ -3149,7 +3177,8 @@ class SidePanel(tk.Frame):
         self.card.show(**task)
         self.switch("task", self.card)
 
-    def show_form(self, task, statuses, on_save, on_cancel, members=None, history=None, hints=False):
+    def show_form(self, task, statuses, on_save, on_cancel, members=None, history=None, hints=False,
+                  units=None):
         """Форма изменения задачи прямо в панели."""
         if self.editor is not None:
             self.editor.destroy()
@@ -3172,7 +3201,7 @@ class SidePanel(tk.Frame):
         close.bind("<Button-1>", lambda e: on_cancel())
         collapse_button(head, self.on_collapse).pack(side="right", padx=(0, 10))
         self.form = TaskForm(area.inner, task, statuses, on_save, on_cancel, compact=True,
-                             members=members, history=history, hints=hints)
+                             members=members, history=history, hints=hints, units=units)
         self.form.pack(fill="x", padx=18, pady=(0, 16))
         cancel = ttk.Button(buttons, text="Отмена", style="Soft.TButton", cursor="hand2",
                             command=on_cancel)
@@ -3686,6 +3715,7 @@ CARD_FIELDS = {
     "created": "Дата создания",
     "author": "Инициатор (в общих списках)",
     "assignee": "Исполнитель (в общих списках)",
+    "unit": "Бизнес-единица",
 }
 DEFAULT_CARD_FIELDS = ["number", "priority", "body", "due", "author", "assignee"]
 
@@ -3922,7 +3952,8 @@ class SettingsDialog(tk.Toplevel):
             tk.Label(inner, text="Свести продажи по регионам\nи добавить графики…", bg=SURFACE,
                      fg=MUTED, font=FONT_SMALL, justify="left").pack(anchor="w", pady=(4, 0))
         extra = [text for key, text in (("due", "Срок 17.10 18:00"), ("remind", "Напомнить за 1 час"),
-                                        ("created", "Создана 16.10"), ("author", "Инициатор Мария"))
+                                        ("created", "Создана 16.10"), ("unit", "Розница"),
+                                        ("author", "Инициатор Мария"))
                  if key in on]
         if "assignee" in on:
             extra.insert(0, "Исполнитель Олег")
@@ -4146,6 +4177,196 @@ def open_team(folder, user):
         group.close()
         raise
     return group
+
+
+class UnitDeleteDialog(ModernDialog):
+    """Удаление бизнес-единицы, которая уже стоит у задач: что поставить этим задачам."""
+
+    def __init__(self, parent, name, count, others):
+        super().__init__(parent, "Удалить бизнес-единицу", "Удалить бизнес-единицу", "Удалить")
+        tk.Label(self.content, text=f"«{name}» указана у задач: {count}. Что поставить им вместо неё?",
+                 bg=SURFACE, fg=TEXT, font=FONT_SMALL, justify="left", wraplength=380).pack(anchor="w")
+        self.choices = {NO_UNIT: None, **{n: uid for uid, n in others}}
+        self.choice = ttk.Combobox(self.content, values=list(self.choices), state="readonly", width=34,
+                                   font=FONT)
+        self.choice.set(NO_UNIT)
+        self.choice.pack(fill="x", pady=(10, 0))
+
+    def ok(self):
+        self.result = ("ok", self.choices[self.choice.get()])
+        self.destroy()
+
+
+class UnitsDialog(tk.Toplevel):
+    """Справочник бизнес-единиц списка: добавить, переименовать, удалить, поменять порядок,
+    взять из другого списка. Изменения записываются сразу. units_from(id списка) — соединение
+    с другим списком (может бросить sqlite3.Error или OSError, если список недоступен)."""
+
+    def __init__(self, parent, conn, list_name, by, other_lists, units_from):
+        super().__init__(parent)
+        self.conn, self.by, self.other_lists, self.units_from = conn, by, other_lists, units_from
+        self.title("Бизнес-единицы")
+        self.configure(bg=SURFACE)
+        self.resizable(False, False)
+        self.transient(parent)
+        body = tk.Frame(self, bg=SURFACE, padx=26, pady=20)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, text="Бизнес-единицы", bg=SURFACE, fg=TEXT,
+                 font=("Segoe UI Semibold", 14)).pack(anchor="w")
+        tk.Label(body, text=f"Справочник списка «{list_name}». Бизнес-единицу задачи выбирают\n"
+                            "в форме задачи; поле необязательное.",
+                 bg=SURFACE, fg=MUTED, font=FONT_SMALL, justify="left").pack(anchor="w", pady=(2, 12))
+        row = tk.Frame(body, bg=SURFACE)
+        row.pack(fill="both", expand=True)
+        box = tk.Frame(row, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
+        box.pack(side="left", fill="both", expand=True)
+        self.listbox = tk.Listbox(box, font=FONT, width=30, height=10, bg=SURFACE, fg=TEXT,
+                                  selectbackground=ACCENT, selectforeground="white", relief="flat",
+                                  borderwidth=0, highlightthickness=0, activestyle="none",
+                                  exportselection=False)
+        scroll = ttk.Scrollbar(box, orient="vertical", command=self.listbox.yview)
+        self.listbox.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.listbox.pack(side="left", fill="both", expand=True, padx=4, pady=4)
+        self.listbox.bind("<Double-Button-1>", lambda e: self.safely(self.rename)())
+        self.listbox.bind("<<ListboxSelect>>", lambda e: self.update_buttons())
+        self.listbox.bind("<Delete>", lambda e: self.safely(self.delete)())
+        actions = tk.Frame(row, bg=SURFACE)
+        actions.pack(side="left", fill="y", padx=(12, 0))
+        self.buttons = {}
+        for key, text, command in (("add", "Добавить…", self.add), ("rename", "Переименовать…", self.rename),
+                                   ("delete", "Удалить…", self.delete), ("up", "↑  Выше", lambda: self.move(-1)),
+                                   ("down", "↓  Ниже", lambda: self.move(1))):
+            command = self.safely(command)
+            button = ttk.Button(actions, text=text, style="Soft.TButton", command=command, width=18)
+            button.pack(fill="x", pady=(0, 6))
+            self.buttons[key] = button
+        self.buttons["copy"] = ttk.Button(actions, text="Взять из списка…", style="Soft.TButton",
+                                          command=self.copy_menu, width=18)
+        self.buttons["copy"].pack(fill="x", pady=(12, 0))
+        if not other_lists:
+            self.buttons["copy"].state(["disabled"])
+        bottom = tk.Frame(body, bg=SURFACE)
+        bottom.pack(fill="x", pady=(18, 0))
+        ttk.Button(bottom, text="Закрыть", style="Accent.TButton", command=self.destroy).pack(side="right")
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.load()
+
+    def show(self):
+        center_on_screen(self)
+        self.grab_set()
+        self.focus_force()
+        self.listbox.focus_set()
+        self.wait_window()
+
+    def safely(self, action):
+        """Файл списка стал недоступен (общая папка, VPN) — сообщаем и закрываем окно,
+        а не оставляем кнопки, которые молча перестали работать."""
+        def run():
+            try:
+                action()
+            except sqlite3.Error as error:
+                ui.showwarning("Бизнес-единицы", "Не удалось изменить справочник — файл списка "
+                               f"сейчас недоступен.\n\nПодробности: {error}", parent=self)
+                self.destroy()
+        return run
+
+    def load(self, select_id=None):
+        self.units = db.list_units(self.conn)
+        self.listbox.delete(0, "end")
+        for _, name in self.units:
+            self.listbox.insert("end", name)
+        index = next((i for i, (uid, _) in enumerate(self.units) if uid == select_id), None)
+        if index is not None:
+            self.listbox.selection_set(index)
+            self.listbox.see(index)
+        self.update_buttons()
+
+    def selected(self):
+        chosen = self.listbox.curselection()
+        return self.units[chosen[0]] if chosen else None
+
+    def update_buttons(self):
+        chosen = self.listbox.curselection()
+        for key in ("rename", "delete", "up", "down"):
+            self.buttons[key].state(["!disabled"] if chosen else ["disabled"])
+        if chosen:
+            if chosen[0] == 0:
+                self.buttons["up"].state(["disabled"])
+            if chosen[0] == len(self.units) - 1:
+                self.buttons["down"].state(["disabled"])
+
+    def ask_name(self, title, value="", unit_id=None):
+        """Название новой или переименованной единицы; повтор названия не допускаем."""
+        while True:
+            name = NameDialog(self, title, title, value=value, ok_text="Сохранить").show()
+            if not name:
+                return None
+            if db.unit_key(name) == db.unit_key(NO_UNIT):
+                ui.showwarning(title, f"Название «{NO_UNIT}» занято: так в форме обозначается задача "
+                                      "без бизнес-единицы.", parent=self)
+                continue
+            same = db.unit_by_name(self.conn, name)
+            if same is None or same == unit_id:
+                return name
+            ui.showwarning(title, f"Бизнес-единица «{name}» уже есть в справочнике.", parent=self)
+            value = name
+
+    def add(self):
+        name = self.ask_name("Новая бизнес-единица")
+        if name:
+            self.load(select_id=db.add_unit(self.conn, name))
+
+    def rename(self):
+        unit = self.selected()
+        if unit is None:
+            return
+        name = self.ask_name("Переименовать бизнес-единицу", unit[1], unit[0])
+        if name and name != unit[1]:
+            db.rename_unit(self.conn, unit[0], name)
+            self.load(select_id=unit[0])
+
+    def delete(self):
+        unit = self.selected()
+        if unit is None:
+            return
+        count = db.count_in_unit(self.conn, unit[0])
+        if count:
+            answer = UnitDeleteDialog(self, unit[1], count,
+                                      [u for u in self.units if u[0] != unit[0]]).show()
+            if not answer:
+                return
+            move_to = answer[1]
+        elif ui.askyesno("Удалить бизнес-единицу", f"Удалить «{unit[1]}» из справочника?", parent=self):
+            move_to = None
+        else:
+            return
+        db.delete_unit(self.conn, unit[0], move_to, by=self.by)
+        self.load()
+
+    def move(self, step):
+        unit = self.selected()
+        if unit is not None:
+            db.move_unit(self.conn, unit[0], step)
+            self.load(select_id=unit[0])
+
+    def copy_menu(self):
+        menu = PopupMenu()
+        for list_id, name in self.other_lists:
+            menu.command(name, lambda i=list_id, n=name: self.copy_from(i, n))
+        button = self.buttons["copy"]
+        menu.popup(self, button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
+
+    def copy_from(self, list_id, name):
+        """Добавляет единицы из справочника другого списка (те, которых здесь ещё нет)."""
+        try:
+            added = db.copy_units(self.units_from(list_id), self.conn)
+        except (sqlite3.Error, OSError) as error:
+            ui.showwarning("Бизнес-единицы", f"Не удалось прочитать список «{name}»:\n{error}", parent=self)
+            return
+        self.load()
+        ui.showinfo("Бизнес-единицы", f"Добавлено из списка «{name}»: {added}." if added
+                    else f"Все бизнес-единицы списка «{name}» здесь уже есть.", parent=self)
 
 
 class PhoneDialog(tk.Toplevel):
@@ -5012,6 +5233,8 @@ class KanbanBoard(tk.Frame):
             extra.append("Создана " + created[:5])
         if "assignee" in fields and self.app.assignees.get(task_id):
             extra.insert(0, "Исполнитель " + self.app.assignees[task_id])
+        if "unit" in fields and self.app.unit_names.get(task_id):
+            extra.append(self.app.unit_names[task_id])
         if "author" in fields and self.app.authors.get(task_id):
             extra.append("Инициатор " + self.app.authors[task_id])
         if extra:
@@ -5428,7 +5651,8 @@ class TodoApp:
         self.list_id = db.get_setting(self.prefs, "current_list", db.PERSONAL)
         self.all_rows = []   # все задачи открытого списка (читаются в refresh)
         self.done_today = 0
-        self.authors = {}    # id задачи -> кто создал (в общих списках)
+        self.authors = {}    # id задачи -> инициатор (в общих списках)
+        self.units, self.unit_names = {}, {}  # справочник бизнес-единиц; id задачи -> её единица
         self.extra_counts = {}  # id задачи -> (файлов, комментариев)
         self.mail_ids = set()   # задачи, созданные из писем Outlook (значок 📧)
         self.assignees = {}  # id задачи -> исполнитель (в общих списках)
@@ -5615,6 +5839,7 @@ class TodoApp:
             # возвращал бы ей всё свободное место и её ширину нельзя было бы изменить.
             "assignee": ("ИСПОЛНИТЕЛЬ", 120, False),  # виден только в общих списках
             "author": ("ИНИЦИАТОР", 124, False),          # тоже
+            "unit": ("БИЗНЕС-ЕДИНИЦА", 150, False),       # виден, если справочник списка не пуст
             "created": ("СОЗДАНА", 125, True),
         }
         # Первый, узкий столбец (#0) — цветная метка приоритета.
@@ -6064,6 +6289,7 @@ class TodoApp:
                 .command("Задача из письма Outlook", self.from_outlook, accel=OUTLOOK_HOTKEY_NAME)
                 .command("Задача со снимка экрана", self.from_screen, accel=SNIP_HOTKEY_NAME)
                 .command("Добавить колонку на доску…", self.add_lane)
+                .command("Бизнес-единицы…", self.show_units)
                 .command("Подключить телефон…", self.show_phone)
                 .command("Развернуть правую панель" if self.side_collapsed else "Свернуть правую панель",
                          self.toggle_side_panel, accel="Ctrl+B", enabled=self.side_room)
@@ -6296,7 +6522,8 @@ class TodoApp:
         meta = db.task_meta(self.conn, task_id)
         return dict(title=title, due_at=due_at, remind_before=remind_before, urgent=urgent,
                     important=important, body=body, status_id=self.task_info(task_id)["status_id"],
-                    assignee=meta["assignee"], initiator=meta["initiator"], version=meta["version"])
+                    assignee=meta["assignee"], initiator=meta["initiator"], unit_id=meta["unit_id"],
+                    version=meta["version"])
 
     def apply_edit(self, task_id, result, refresh=True, version=None):
         """Сохраняет правку. version — номер версии на момент открытия формы (в общих списках):
@@ -6306,8 +6533,13 @@ class TodoApp:
                               result["remind_before"], result["urgent"], result["important"],
                               result["body"], by=by, version=version):
             return False
+        meta = db.task_meta(self.conn, task_id) or {}
+        if "unit_id" in result and result["unit_id"] != meta.get("unit_id"):
+            unit_id = result["unit_id"]
+            if unit_id is not None and unit_id not in dict(db.list_units(self.conn)):
+                unit_id = None  # пока форма была открыта, единицу удалили из справочника
+            db.set_task_unit(self.conn, task_id, unit_id, by=by)
         if self.members() is not None:
-            meta = db.task_meta(self.conn, task_id) or {}
             if result.get("assignee") != meta.get("assignee"):
                 db.set_assignee(self.conn, task_id, result.get("assignee"), by=by)
             # пустое поле — инициатором снова считается автор
@@ -6346,7 +6578,8 @@ class TodoApp:
 
     CHANGED_NAMES = {"title": "заголовок", "body": "описание", "status_id": "статус",
                      "due_at": "срок", "remind_before": "напоминание", "urgent": "«срочно»",
-                     "important": "«важно»", "assignee": "исполнителя", "initiator": "инициатора"}
+                     "important": "«важно»", "assignee": "исполнителя", "initiator": "инициатора",
+                     "unit_id": "бизнес-единицу"}
 
     def resolve_conflict(self, task_id, mine, initial, can_return):
         """Задачу, которую вы правили, тем временем изменил другой участник.
@@ -6417,7 +6650,7 @@ class TodoApp:
             when = datetime.fromisoformat(meta["updated_at"]).strftime("%d.%m %H:%M")
             updated = f"{when}, {meta['updated_by']}"
         return dict(author=meta.get("initiator") or "", assignee=meta.get("assignee") or "",
-                    updated=updated, shared=shared)
+                    updated=updated, shared=shared, unit=self.unit_names.get(task_id, ""))
 
     def update_side(self):
         """Выбрана задача — показываем её карточку, иначе — Тоторо.
@@ -6439,7 +6672,7 @@ class TodoApp:
             due=info["due"], remind=info["remind"], created=info["created"], author=info["author"],
             assignee=info["assignee"] or ("Не назначен" if info["shared"] else ""),
             updated=info["updated"], urgent=bool(info["urgent"]), important=bool(info["important"]),
-            from_mail=task_id in self.mail_ids,
+            from_mail=task_id in self.mail_ids, unit=info["unit"],
         )
 
     def update_buddy(self):
@@ -6750,7 +6983,7 @@ class TodoApp:
         или исполнителе (без учёта окончаний)."""
         task_id, title, *_, body, _ = row
         haystack = " ".join((f"#{task_id}", title, body, self.authors.get(task_id, ""),
-                             self.assignees.get(task_id, ""))).lower()
+                             self.assignees.get(task_id, ""), self.unit_names.get(task_id, ""))).lower()
         return all(stem in haystack for stem in search_stems(self.search_query))
 
     def placeholder_shown(self):
@@ -6824,11 +7057,16 @@ class TodoApp:
         rows = self.all_rows = db.list_tasks(self.conn)
         self.done_today = db.count_done_today(self.conn)
         self.authors, self.assignees = db.task_people(self.conn)
+        self.units = dict(db.list_units(self.conn))  # id -> название бизнес-единицы
+        self.unit_names = {tid: self.units[uid] for tid, uid in db.task_units(self.conn).items()
+                           if uid in self.units}  # id задачи -> название её единицы
         self.extra_counts = db.extras_counts(self.conn)  # id задачи -> (файлов, комментариев)
         self.mail_ids = db.mail_task_ids(self.conn)
         shared = bool(self.list_id and self.current_list()["shared"])
         # столбцы «Исполнитель» и «Инициатор» — только в общих списках (в личном всё ваше)
         columns = [c for c in self.column_order if shared or c not in ("assignee", "author")]
+        if not self.units and not self.unit_names:  # справочник пуст — столбец не нужен
+            columns.remove("unit")
         self.tree["displaycolumns"] = columns
         if shared and self.only_mine.get():
             me = self.user_name()
@@ -6865,7 +7103,7 @@ class TodoApp:
                 values=(f"#{task_id}", status_label(name, done), self.list_marks(task_id), title,
                         PRIORITY_NAMES[level],
                         format_due(due_at), remind, self.assignees.get(task_id, ""),
-                        self.authors.get(task_id, ""), created),
+                        self.authors.get(task_id, ""), self.unit_names.get(task_id, ""), created),
                 tags=("done",) if done else ("normal",),
             )
             if due_at and not done:
@@ -6919,6 +7157,7 @@ class TodoApp:
                 "created": task_id,  # номера растут по порядку создания
                 "author": (self.authors.get(task_id) or "").casefold() or None,
                 "assignee": (self.assignees.get(task_id) or "").casefold() or None,
+                "unit": (self.unit_names.get(task_id) or "").casefold() or None,
                 "status": position.get(status_id, len(position)),
                 "title": title.casefold(),
                 "marks": self.marks_order(task_id),
@@ -7119,12 +7358,12 @@ class TodoApp:
             self.side.show_form(data, statuses,
                                 on_save=lambda result: self.save_edit(task_id, result),
                                 on_cancel=self.cancel_edit, members=self.members(),
-                                history=self.smart_rows(), hints="changed")
+                                history=self.smart_rows(), hints="changed", units=db.list_units(self.conn))
             return
         # Окно узкое и панель скрыта — открываем форму в отдельном окне
         data = self.form_data(task_id)
         dialog = TaskDialog(self.root, data, statuses, members=self.members(),
-                            history=self.smart_rows(), hints="changed")
+                            history=self.smart_rows(), hints="changed", units=db.list_units(self.conn))
         self.root.wait_window(dialog)
         if dialog.result:
             version = data["version"] if self.created_by() else None
@@ -7298,7 +7537,8 @@ class TodoApp:
         info = self.task_info(task[0])
         subject, body = build_email(task[0], info["title"], info["status_name"], info["priority"],
                                     info["due"], info["remind"], info["created"],
-                                    info["urgent"], info["body"], info["author"], info["assignee"])
+                                    info["urgent"], info["body"], info["author"], info["assignee"],
+                                    info["unit"])
         to = db.mail_from(self.conn, task[0])  # задача из письма — отвечаем его отправителю
         # Основной способ — черновик письма в файле .eml: Outlook открывает его как новое
         # письмо, и длина текста не ограничена (в отличие от ссылки mailto:).
@@ -7845,6 +8085,21 @@ class TodoApp:
             lost = next((i["name"] for i in self.unreachable_lists() if i["id"] == self.lost_list), None)
             self.show_offline_banner(lost, again=True)
 
+    def show_units(self):
+        """☰ Меню → Бизнес-единицы: справочник текущего списка."""
+        self.finish_editing()
+        others = [(i["id"], i["name"]) for i in self.lists if i["id"] != self.list_id]
+        UnitsDialog(self.root, self.conn, self.current_list()["name"], self.created_by(), others,
+                    self.units_list_conn).show()
+        self.refresh(select_id=self.current_id())
+
+    def units_list_conn(self, list_id):
+        """Соединение с другим списком — взять из него бизнес-единицы."""
+        item = next(i for i in self.lists if i["id"] == list_id)
+        if item["shared"] and not self.share_online():
+            raise OSError("общая папка сейчас недоступна")
+        return self.list_conn(list_id)
+
     def list_conn(self, list_id):
         """Соединение с файлом списка (открывается один раз и потом переиспользуется)."""
         if list_id not in self.list_conns:
@@ -8316,7 +8571,8 @@ class TodoApp:
             note += " Будут приложены: " + ", ".join(name for name, _ in mail["files"])
         dialog = TaskDialog(self.root, self.mail_task(mail), db.list_statuses(self.conn),
                             members=self.members(), title="Новая задача из письма", note=note,
-                            standalone=quiet, history=self.smart_rows(), hints=True)
+                            standalone=quiet, history=self.smart_rows(), hints=True,
+                            units=db.list_units(self.conn))
         self.root.wait_window(dialog)
         if dialog.result:
             self.show_new_tasks([self.create_from_mail(mail, dialog.result)])
@@ -8381,7 +8637,7 @@ class TodoApp:
         dialog = TaskDialog(self.root, task, statuses, members=members,
                             title="Новая задача со снимка экрана", note=note,
                             standalone=quiet or self.hidden, image=image,
-                            history=self.smart_rows(), hints=True)
+                            history=self.smart_rows(), hints=True, units=db.list_units(self.conn))
         self.root.wait_window(dialog)
         if dialog.result:
             task_id = db.add_task(self.conn, dialog.result["title"],
