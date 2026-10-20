@@ -247,9 +247,80 @@ DRAFTS_DIR = Path(tempfile.gettempdir()) / APP_NAME
 TEMP_MAX_AGE = 7 * 24 * 3600  # секунд: неделя — копию файла могут держать открытой несколько дней
 
 
+APP_CHECK_MS = 200  # как часто открытый выпадающий список проверяет, активна ли ещё ToDoro
+_watched_popups = set()  # окна (имена в Tk), за которыми сейчас следит close_when_inactive
+
+
+def app_is_active():
+    """Активное окно Windows — одно из окон ToDoro (этого процесса)? Если активного окна нет
+    (Windows как раз переключает окна) — считаем, что да, чтобы ничего не закрыть зря."""
+    if os.name != "nt":
+        return True
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return True
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return pid.value == os.getpid()
+    except (AttributeError, OSError):
+        return True
+
+
+def close_when_inactive(widget, close, path=None):
+    """Пока всплывающее окно открыто, следит, активна ли ToDoro: переключились в другую
+    программу (щелчок в Excel, Alt+Tab) — вызывает close(). Нужно потому, что такие окна
+    закрываются по потере фокуса, а на Windows фокус они получают не всегда — и тогда окно
+    оставалось висеть поверх чужих программ (issue #4).
+    path — имя окна в Tk, если окно создал сам Tk (у Python для него нет объекта): тогда
+    widget — любое живое окно программы, через него и спрашиваем."""
+    path = path or str(widget)
+    if path in _watched_popups:
+        return  # список закрыли и снова открыли быстрее проверки — прежняя слежка ещё идёт
+    # Проверку ставим через главное окно: команда, заведённая через само всплывающее окно,
+    # исчезает вместе с ним, и ожидающая проверка падала бы с «invalid command name»
+    root = widget._root()
+    _watched_popups.add(path)
+
+    def check():
+        try:
+            if not int(root.tk.eval(f"expr {{[winfo exists {path}] && [winfo ismapped {path}]}}")):
+                _watched_popups.discard(path)
+                return  # уже закрыто — слежка кончается сама
+        except tk.TclError:
+            _watched_popups.discard(path)
+            return
+        if app_is_active():
+            root.after(APP_CHECK_MS, check)
+        else:
+            _watched_popups.discard(path)
+            close()
+    root.after(APP_CHECK_MS, check)
+
+
+
+def watch_combobox_popdowns(root):
+    """Выпадающие списки ttk.Combobox (статус, напоминание, часы…) во всех окнах закрываются,
+    когда ToDoro перестаёт быть активной программой. Значение при этом не меняется."""
+    def mapped(event):
+        popdown = str(event.widget)  # окно списка создаёт сам Tk: «<поле>.popdown»
+        combobox = popdown.rsplit(".", 1)[0]
+
+        def unpost():
+            try:
+                root.tk.call("ttk::combobox::Unpost", combobox)
+            except tk.TclError:
+                pass
+
+        close_when_inactive(root, unpost, popdown)
+    root.bind_class("ComboboxPopdown", "<Map>", mapped, add="+")
+
+
 def setup_style(root):
     """Внешний вид всех элементов: плоские кнопки, светлый фон, акцентный синий."""
     root.configure(bg=BG)
+    watch_combobox_popdowns(root)
     root.option_add("*TCombobox*Listbox.font", FONT)
     root.option_add("*TCombobox*Listbox.background", SURFACE)
     root.option_add("*TCombobox*Listbox.foreground", TEXT)
@@ -1125,6 +1196,7 @@ class DatePicker(ttk.Frame):
         self.popup.bind("<MouseWheel>", lambda e: self.shift_month(-1 if e.delta > 0 else 1))
         self.draw_month()
         self.popup.focus_force()
+        close_when_inactive(self.popup, self.close_popup)
 
     def close_popup(self):
         if self.popup:
@@ -3214,6 +3286,7 @@ class _MenuWindow(tk.Toplevel):
                                 ("<Right>", self.key_right), ("<Left>", self.key_left)):
                 self.bind(key, lambda e, a=action: a())
             self.focus_force()
+            close_when_inactive(self, self.close)  # подменю закрываются вместе с ним
 
     def make_row(self, frame, item):
         enabled = item["enabled"]
@@ -4413,7 +4486,7 @@ class UpdateDialog(tk.Toplevel):
                 self.progress["value"] = 100 * shown["done"] / shown["total"]
                 self.status.configure(text=f"Скачиваю обновление… {shown['done'] // 1048576} из "
                                       f"{shown['total'] // 1048576} МБ")
-            self.after(150, tick)
+            self.master.after(150, tick)  # через главное окно: это окно могут закрыть
 
         def finished(path, error):
             if cancel.is_set() or not self.winfo_exists():

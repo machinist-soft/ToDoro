@@ -578,7 +578,8 @@ class UpdateDialogDownloadTests(unittest.TestCase):
             def __init__(self):
                 self.release = release(url="https://github.com/r/v9.9")
                 self.self_update = True
-                self.master = mock.Mock(name="master")
+                # главное окно: его after собирает отложенные вызовы (тик скачивания)
+                self.master = SimpleNamespace(after=mock.Mock(name="master.after"))
                 self.ok_button = mock.Mock(name="ok")
                 self.later_button = mock.Mock(name="later")
                 self.progress = mock.MagicMock(name="progress")
@@ -754,9 +755,53 @@ class UpdateDialogDownloadTests(unittest.TestCase):
         self.dialog.on_close_app.assert_not_called()
 
     def scheduled_tick(self):
-        call = self.dialog.after.call_args
+        """Последний отложенный тик — он планируется через главное окно, не через это."""
+        call = self.dialog.master.after.call_args
         self.assertEqual(call.args[0], 150)
+        for args in self.dialog.after.call_args_list:
+            self.assertNotEqual(args.args[0], 150, "тик не должен планироваться через само окно")
         return call.args[1]
+
+    def kill_widgets(self):
+        """Как у настоящего закрытого окна: любое обращение к его частям — TclError."""
+        error = self.T.tk.TclError("invalid command name")
+        d = self.dialog
+        for widget in (d.status, d.ok_button, d.later_button):
+            for name in ("configure", "state", "pack_forget"):
+                getattr(widget, name).side_effect = error
+        d.progress.__setitem__.side_effect = error
+        d.progress.pack_forget.side_effect = error
+        d.after.side_effect = error
+        d.protocol.side_effect = error
+
+    def test_tick_after_close_during_download_is_harmless(self):
+        """Окно закрыли крестиком посреди скачивания — отложенный тик ничего не делает и не падает."""
+        work, done = self.start()
+        work()
+        progress = self.download.call_args.args[1]
+        tick = self.scheduled_tick()
+        self.dialog.close_during_download()
+        self.kill_widgets()
+        progress(5 * 1048576, 10 * 1048576)
+        planned = self.dialog.master.after.call_count
+        for extra in (0, self.dialog.STALL_S + 5):  # и обычный тик, и «давно нет данных»
+            self.clock.now += extra
+            tick()  # не должно быть TclError
+        self.assertEqual(self.dialog.master.after.call_count, planned, "тик больше не планируется")
+        done(Path("C:/x/setup.exe"), None)
+        self.run_installer.assert_not_called()
+
+    def test_tick_after_window_destroyed_otherwise(self):
+        """Окно уничтожено не через крестик (закрылась программа), отмена не ставилась —
+        тик всё равно молча останавливается."""
+        self.start()
+        tick = self.scheduled_tick()
+        self.dialog.alive = False
+        self.kill_widgets()
+        planned = self.dialog.master.after.call_count
+        self.clock.now += self.dialog.STALL_S + 5
+        tick()
+        self.assertEqual(self.dialog.master.after.call_count, planned)
 
     def test_stall_cancels_with_error(self):
         """STALL_S секунд не пришло ни байта — скачивание останавливается с понятным сообщением."""
@@ -774,14 +819,14 @@ class UpdateDialogDownloadTests(unittest.TestCase):
         self.assertFalse(self.dialog.cancel_event.is_set())
         tick = self.scheduled_tick()
         self.clock.now += self.dialog.STALL_S  # тишина дольше STALL_S
-        after_calls = self.dialog.after.call_count
+        after_calls = self.dialog.master.after.call_count
         tick()
         self.assertTrue(self.dialog.cancel_event.is_set())
         self.assertFalse(self.dialog.downloading)
         self.assert_restored()
         self.assertIn("не скачивается", self.last_status()["text"])
         self.assertEqual(self.last_status()["fg"], self.T.DANGER)
-        self.assertEqual(self.dialog.after.call_count, after_calls, "тик больше не планируется")
+        self.assertEqual(self.dialog.master.after.call_count, after_calls, "тик больше не планируется")
         done(Path("C:/x/setup.exe"), None)
         self.run_installer.assert_not_called()
 
