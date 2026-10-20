@@ -349,6 +349,11 @@ class AppHelpersTests(TempDir):
         self.assertEqual((t["title"], t["body"], t["due_at"], t["remind_before"], t["urgent"],
                           t["important"], t["created_by"], t["assignee"]),
                          ("Сдать отчёт", "строка 1\nстрока 2", "2030-01-02 18:00", 60, 1, 1, "Анна", "Борис"))
+        # инициатор, совпадающий с автором, после загрузки отдельно не хранится
+        db.import_tasks(conn, tasks, created_by="Борис")
+        new_id = conn.execute("SELECT MAX(id) FROM tasks").fetchone()[0]
+        self.assertEqual(conn.execute("SELECT created_by, initiator FROM tasks WHERE id = ?",
+                                      (new_id,)).fetchone(), ("Анна", None))
 
     def test_csv_remind_limit(self):
         self.assertEqual(self.T.parse_csv_remind("525600"), 525600)  # год — можно

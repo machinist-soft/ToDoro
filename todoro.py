@@ -397,7 +397,8 @@ def setup_style(root):
               fieldbackground=[("readonly", SURFACE)])
     style.configure("Placeholder.TEntry", foreground=DONE)
     style.configure("TCombobox", fieldbackground=SURFACE, background=SURFACE, foreground=TEXT,
-                    lightcolor=SURFACE, darkcolor=SURFACE, arrowcolor=MUTED, padding=(6, 4))
+                    lightcolor=SURFACE, darkcolor=SURFACE, arrowcolor=MUTED, padding=(6, 4),
+                    insertcolor=TEXT)  # курсор в списке, куда можно вписать своё (инициатор)
     style.map("TCombobox",
               fieldbackground=[("disabled", BG), ("readonly", SURFACE)],
               foreground=[("disabled", DONE)],
@@ -755,7 +756,7 @@ def drop_index(lefts, widths, x):
 
 def move_column(order, column, place, shown):
     """Новый порядок столбцов: column встаёт на место place среди видимых столбцов shown
-    (скрытые столбцы — например «Автор» в личном списке — остаются рядом с прежними соседями)."""
+    (скрытые столбцы — например «Инициатор» в личном списке — остаются рядом с прежними соседями)."""
     shown = [c for c in shown if c != column]
     target = shown[place] if place < len(shown) else None
     order = [c for c in order if c != column]
@@ -797,7 +798,8 @@ def build_email(number, title, status, priority, due, remind, created, urgent, b
         f"Приоритет: {priority} — {level_hint}" if priority else "Приоритет: обычный",
         f"Срок: {due or 'не задан'}",
         f"Напоминание: {remind or 'нет'}",
-        f"Создана: {created}" + (f" (автор: {author})" if author else ""),
+        f"Создана: {created}",
+        *([f"Инициатор: {author}"] if author else []),
         *([f"Исполнитель: {assignee}"] if assignee else []),
         "",
         "—",
@@ -850,7 +852,7 @@ def clean_temp_files(folder=None, max_age=TEMP_MAX_AGE):
 # (в ней сохраняет CSV русский Excel).
 
 CSV_COLUMNS = ["№", "Заголовок", "Описание", "Статус", "Приоритет", "Срок", "Напомнить", "Создана",
-               "Автор", "Исполнитель"]
+               "Автор", "Инициатор", "Исполнитель"]
 CSV_TEMPLATE_COLUMNS = ["Заголовок", "Описание", "Статус", "Приоритет", "Срок", "Напомнить"]
 CSV_ALIASES = {  # заголовок столбца в файле (строчными) -> поле
     "№": "num", "номер": "num",
@@ -861,7 +863,7 @@ CSV_ALIASES = {  # заголовок столбца в файле (строчн
     "срок": "due",
     "напомнить": "remind", "напоминание": "remind",
     "создана": "created",
-    "автор": "author",
+    "инициатор": "initiator", "автор": "author",
     "исполнитель": "assignee",
 }
 PRIORITY_FLAGS = {"срочно и важно": (1, 1), "важно": (0, 1), "срочно": (1, 0),
@@ -908,7 +910,10 @@ def write_csv(path, header, rows):
 def export_rows(conn):
     """Все задачи в виде строк CSV (в порядке номеров)."""
     statuses = {sid: name for sid, name, _, _ in db.list_statuses(conn)}
-    authors, assignees = db.task_people(conn)
+    initiators, assignees = db.task_people(conn)
+    # и автор (кто создал), и инициатор: при загрузке файла обратно автор сохранится, и
+    # напоминания по задачам без исполнителя не уйдут другому человеку
+    authors = dict(conn.execute("SELECT id, created_by FROM tasks WHERE created_by IS NOT NULL"))
     rows = []
     for task_id, title, _done, created, due_at, remind_before, urgent, important, body, status_id \
             in db.list_tasks(conn):
@@ -918,7 +923,7 @@ def export_rows(conn):
         rows.append([task_id, title, body, statuses.get(status_id, ""),
                      PRIORITY_NAMES[priority_level(urgent, important)] or "Обычный",
                      format_due(due_at), remind, created, authors.get(task_id, ""),
-                     assignees.get(task_id, "")])
+                     initiators.get(task_id, ""), assignees.get(task_id, "")])
     return rows
 
 
@@ -1005,6 +1010,7 @@ def prepare_import(conn, records):
             # дата создания хранится в базе по UTC
             created_at=created.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if created else None,
             created_by=v.get("author") or None,
+            initiator=v.get("initiator") or None,
             assignee=v.get("assignee") or None,
         ))
     return tasks, notes
@@ -1510,8 +1516,15 @@ class TaskForm(ttk.Frame):
         current = next((s[1] for s in statuses if s[0] == task["status_id"]), statuses[0][1])
         self.status.set(current)
 
-        self.assignee = None
+        self.assignee = self.initiator = None
         if members is not None:
+            # Инициатор — по умолчанию автор задачи; можно выбрать участника или вписать любое имя
+            # (например, руководителя, который ToDoro не пользуется)
+            label("Инициатор")
+            known = sorted(set(members) | ({task.get("initiator")} - {None, ""}), key=str.casefold)
+            self.initiator = ttk.Combobox(self, values=known, width=1 if compact else 24, font=FONT)
+            self.initiator.pack(fill="x" if compact else None, anchor="w")
+            self.initiator.insert(0, task.get("initiator") or "")
             label("Исполнитель")
             names = sorted(set(members) | ({task.get("assignee")} - {None, ""}), key=str.casefold)
             self.assignee = ttk.Combobox(self, values=["— не назначен —"] + names, state="readonly",
@@ -1754,10 +1767,12 @@ class TaskForm(ttk.Frame):
         assignee = None
         if self.assignee is not None and self.assignee.get() != "— не назначен —":
             assignee = self.assignee.get()
+        initiator = (self.initiator.get().strip() or None) if self.initiator is not None else None
         return dict(title=self.title_entry.get().strip(), body=self.desc.get("1.0", "end-1c").strip(),
                     status_id=status_id, due_at=due_at,
                     remind_before=self.remind_options.get(self.remind.get()),
-                    urgent=self.urgent.get(), important=self.important.get(), assignee=assignee)
+                    urgent=self.urgent.get(), important=self.important.get(), assignee=assignee,
+                    initiator=initiator)
 
     def dirty(self):
         """Есть ли несохранённые изменения."""
@@ -2677,7 +2692,7 @@ class TaskCard(tk.Frame):
         self.captions = {}
         for row, (key, label) in enumerate((("important", "Важность"), ("urgent", "Срочность"),
                                             ("due", "Срок"), ("remind", "Напомнить"),
-                                            ("created", "Создана"), ("author", "Автор"),
+                                            ("created", "Создана"), ("author", "Инициатор"),
                                             ("assignee", "Исполнитель"), ("updated", "Изменена"))):
             caption = tk.Label(self.fields, text=label, bg=SURFACE, fg=MUTED, font=FONT_SMALL)
             caption.grid(row=row, column=0, sticky="w", pady=1)
@@ -2962,7 +2977,7 @@ class TaskCard(tk.Frame):
         self.values["due"].configure(text=due or "Не задан", fg=DANGER if overdue else TEXT)
         self.values["remind"].configure(text=remind or "Нет")
         self.values["created"].configure(text=created)
-        # автор, исполнитель и «кто изменил» есть только в общих списках — в личных строк нет
+        # инициатор, исполнитель и «кто изменил» есть только в общих списках — в личных строк нет
         for key, value in (("author", author), ("assignee", assignee), ("updated", updated)):
             self.values[key].configure(text=value)
             for widget in (self.values[key], self.captions[key]):
@@ -3669,7 +3684,7 @@ CARD_FIELDS = {
     "due": "Срок",
     "remind": "Напоминание",
     "created": "Дата создания",
-    "author": "Автор (в общих списках)",
+    "author": "Инициатор (в общих списках)",
     "assignee": "Исполнитель (в общих списках)",
 }
 DEFAULT_CARD_FIELDS = ["number", "priority", "body", "due", "author", "assignee"]
@@ -3907,7 +3922,7 @@ class SettingsDialog(tk.Toplevel):
             tk.Label(inner, text="Свести продажи по регионам\nи добавить графики…", bg=SURFACE,
                      fg=MUTED, font=FONT_SMALL, justify="left").pack(anchor="w", pady=(4, 0))
         extra = [text for key, text in (("due", "Срок 17.10 18:00"), ("remind", "Напомнить за 1 час"),
-                                        ("created", "Создана 16.10"), ("author", "Автор Мария"))
+                                        ("created", "Создана 16.10"), ("author", "Инициатор Мария"))
                  if key in on]
         if "assignee" in on:
             extra.insert(0, "Исполнитель Олег")
@@ -4998,10 +5013,10 @@ class KanbanBoard(tk.Frame):
         if "assignee" in fields and self.app.assignees.get(task_id):
             extra.insert(0, "Исполнитель " + self.app.assignees[task_id])
         if "author" in fields and self.app.authors.get(task_id):
-            extra.append("Автор " + self.app.authors[task_id])
+            extra.append("Инициатор " + self.app.authors[task_id])
         if extra:
             # неразрывные пробелы внутри пары: строка переносится только между «· …», а не
-            # так, что «Автор» остаётся в конце строки, а имя уезжает на следующую
+            # так, что «Инициатор» остаётся в конце строки, а имя уезжает на следующую
             tk.Label(content, text=" · ".join(part.replace(" ", " ") for part in extra), bg=SURFACE, fg=MUTED, font=FONT_SMALL,
                      anchor="w", justify="left", wraplength=self.card_width - 60).pack(fill="x", pady=(2, 0))
         # 📎 и 💬 — отдельной строкой: её можно обновить, не перерисовывая доску
@@ -5522,7 +5537,7 @@ class TodoApp:
                         style="Segment.TCheckbutton", command=self.refresh,
                         cursor="hand2").pack(side="left")
         self.filters_frame = filters
-        # Поиск задач по тексту (Ctrl+F): заголовок, описание, номер, автор, исполнитель
+        # Поиск задач по тексту (Ctrl+F): заголовок, описание, номер, инициатор, исполнитель
         self.search_query = ""
         self.search_after = None
         search = tk.Frame(toolbar, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER,
@@ -5599,7 +5614,7 @@ class TodoApp:
             # Растягивается последний столбец: если бы растягивалась «Задача», Tk сразу
             # возвращал бы ей всё свободное место и её ширину нельзя было бы изменить.
             "assignee": ("ИСПОЛНИТЕЛЬ", 120, False),  # виден только в общих списках
-            "author": ("АВТОР", 110, False),          # тоже
+            "author": ("ИНИЦИАТОР", 124, False),          # тоже
             "created": ("СОЗДАНА", 125, True),
         }
         # Первый, узкий столбец (#0) — цветная метка приоритета.
@@ -6281,7 +6296,7 @@ class TodoApp:
         meta = db.task_meta(self.conn, task_id)
         return dict(title=title, due_at=due_at, remind_before=remind_before, urgent=urgent,
                     important=important, body=body, status_id=self.task_info(task_id)["status_id"],
-                    assignee=meta["assignee"], version=meta["version"])
+                    assignee=meta["assignee"], initiator=meta["initiator"], version=meta["version"])
 
     def apply_edit(self, task_id, result, refresh=True, version=None):
         """Сохраняет правку. version — номер версии на момент открытия формы (в общих списках):
@@ -6291,8 +6306,15 @@ class TodoApp:
                               result["remind_before"], result["urgent"], result["important"],
                               result["body"], by=by, version=version):
             return False
-        if self.members() is not None and result.get("assignee") != (db.task_meta(self.conn, task_id) or {}).get("assignee"):
-            db.set_assignee(self.conn, task_id, result.get("assignee"), by=by)
+        if self.members() is not None:
+            meta = db.task_meta(self.conn, task_id) or {}
+            if result.get("assignee") != meta.get("assignee"):
+                db.set_assignee(self.conn, task_id, result.get("assignee"), by=by)
+            # пустое поле — инициатором снова считается автор
+            if (result.get("initiator") or meta.get("author")) != meta.get("initiator"):
+                initiator = result.get("initiator")
+                db.set_initiator(self.conn, task_id, None if initiator == meta.get("author") else initiator,
+                                 by=by)
         if result["status_id"] != self.task_info(task_id)["status_id"]:
             if db.set_task_status(self.conn, task_id, result["status_id"], by=by):
                 self.celebrate(task_id)
@@ -6324,7 +6346,7 @@ class TodoApp:
 
     CHANGED_NAMES = {"title": "заголовок", "body": "описание", "status_id": "статус",
                      "due_at": "срок", "remind_before": "напоминание", "urgent": "«срочно»",
-                     "important": "«важно»", "assignee": "исполнителя"}
+                     "important": "«важно»", "assignee": "исполнителя", "initiator": "инициатора"}
 
     def resolve_conflict(self, task_id, mine, initial, can_return):
         """Задачу, которую вы правили, тем временем изменил другой участник.
@@ -6386,14 +6408,15 @@ class TodoApp:
                     **self.people(task_id))
 
     def people(self, task_id):
-        """Автор, исполнитель и «кто когда изменил» — для карточки и письма."""
+        """Инициатор (по умолчанию — автор), исполнитель и «кто когда изменил» — для карточки и
+        письма."""
         meta = db.task_meta(self.conn, task_id) or {}
         shared = bool(self.list_id and self.current_list()["shared"])
         updated = ""
         if shared and meta.get("updated_by"):
             when = datetime.fromisoformat(meta["updated_at"]).strftime("%d.%m %H:%M")
             updated = f"{when}, {meta['updated_by']}"
-        return dict(author=meta.get("author") or "", assignee=meta.get("assignee") or "",
+        return dict(author=meta.get("initiator") or "", assignee=meta.get("assignee") or "",
                     updated=updated, shared=shared)
 
     def update_side(self):
@@ -6723,7 +6746,7 @@ class TodoApp:
             self.refresh(select_id=self.current_id())
 
     def found(self, row):
-        """Подходит ли задача под поиск: все слова — в номере, заголовке, описании, авторе
+        """Подходит ли задача под поиск: все слова — в номере, заголовке, описании, инициаторе
         или исполнителе (без учёта окончаний)."""
         task_id, title, *_, body, _ = row
         haystack = " ".join((f"#{task_id}", title, body, self.authors.get(task_id, ""),
@@ -6804,7 +6827,7 @@ class TodoApp:
         self.extra_counts = db.extras_counts(self.conn)  # id задачи -> (файлов, комментариев)
         self.mail_ids = db.mail_task_ids(self.conn)
         shared = bool(self.list_id and self.current_list()["shared"])
-        # столбцы «Исполнитель» и «Автор» — только в общих списках (в личном всё ваше)
+        # столбцы «Исполнитель» и «Инициатор» — только в общих списках (в личном всё ваше)
         columns = [c for c in self.column_order if shared or c not in ("assignee", "author")]
         self.tree["displaycolumns"] = columns
         if shared and self.only_mine.get():
@@ -8238,7 +8261,8 @@ class TodoApp:
         return dict(title=mail["title"], body=mail["body"], due_at=mail["due_at"], remind_before=None,
                     urgent=False, important=mail["important"],
                     status_id=db.list_statuses(self.conn)[0][0],
-                    assignee=self.user_name() if members is not None else None, version=None)
+                    assignee=self.user_name() if members is not None else None,
+                    initiator=self.user_name() if members is not None else None, version=None)
 
     def from_outlook(self, quiet=False):
         """Задача из письма, выделенного в Outlook. Кнопка «Из письма» — форма поверх окна ToDoro;
@@ -8350,7 +8374,8 @@ class TodoApp:
         statuses = db.list_statuses(self.conn)
         task = dict(title="", body="", due_at=None, remind_before=None, urgent=False,
                     important=False, status_id=statuses[0][0],
-                    assignee=self.user_name() if members is not None else None, version=None)
+                    assignee=self.user_name() if members is not None else None,
+                    initiator=self.user_name() if members is not None else None, version=None)
         note = (f"Со снимка экрана, в список «{self.current_list()['name']}». "
                 f"Снимок {image.width} × {image.height} будет приложен к задаче.")
         dialog = TaskDialog(self.root, task, statuses, members=members,

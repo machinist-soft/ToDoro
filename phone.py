@@ -117,15 +117,15 @@ class ApiError(Exception):
         self.status, self.message, self.extra = status, message, extra or {}
 
 
-TASK_SQL = """
+TASK_SQL = f"""
     SELECT id, title, body, done, status_id, urgent, important, due_at, remind_before,
            strftime('%Y-%m-%d %H:%M:%S', created_at, 'localtime'), created_by, assignee,
-           updated_by, updated_at, version, done_at, mail_from
+           updated_by, updated_at, version, done_at, mail_from, {db.INITIATOR_SQL}
     FROM tasks
 """
 TASK_FIELDS = ("id", "title", "body", "done", "status_id", "urgent", "important", "due_at",
                "remind_before", "created_at", "author", "assignee", "updated_by", "updated_at",
-               "version", "done_at", "mail_from")
+               "version", "done_at", "mail_from", "initiator")
 BOOL_FIELDS = ("done", "urgent", "important")
 
 

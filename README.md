@@ -8,7 +8,7 @@
 [Что нового / What's new](RELEASE_NOTES.md) ·
 [Сообщить об ошибке / Report a bug](https://github.com/machinist-soft/ToDoro/issues/new?template=bug_report.yml)
 
-![Общий список команды: исполнители, авторы и Тоторо-помощник / Team list with assignees, authors and the Totoro helper](docs/screenshots/list.png)
+![Общий список команды: исполнители, инициаторы и Тоторо-помощник / Team list with assignees, initiators and the Totoro helper](docs/screenshots/list.png)
 
 > **Фан-проект / Fan project**
 >
@@ -46,7 +46,7 @@
 - **Задачи на телефоне Android**: личные и общие списки в приложении ToDoro — отметить, добавить,
   изменить, обсудить в комментариях; работает и без связи, напоминает о сроках, обновляется прямо с телефона. Установка и подключение — по QR-коду
   (☰ Меню → Подключить телефон); телефон берёт задачи у компьютера по домашней сети или VPN.
-- **Командная работа**: автор и исполнитель задачи, «Мои задачи», уведомление «Вам назначены
+- **Командная работа**: инициатор (можно поменять) и исполнитель задачи, «Мои задачи», уведомление «Вам назначены
   задачи», «кто и когда изменил», защита от затирания чужих правок.
 - **Живой Тоторо-помощник** подсказывает, что просрочено и что важнее всего: моргает, радуется,
   волнуется и засыпает, когда всё сделано; **Котобус** увозит выполненные задачи.
@@ -71,7 +71,7 @@ screenshots and comments in every task · list, kanban board with
 custom columns and Eisenhower matrix (drag a card to another quadrant to change its priority),
 filters, search, column sorting and drag-to-reorder columns · several lists, personal and shared with a team via a network
 folder (VPN works) · an Android app: personal and shared lists on your phone, comments, works offline,
-due-date reminders, updates itself from the phone, installed and paired by QR code · author and assignee, “My tasks”, “assigned to you” notices, last editor,
+due-date reminders, updates itself from the phone, installed and paired by QR code · initiator (editable) and assignee, “My tasks”, “assigned to you” notices, last editor,
 protection against overwriting others’ edits · a living Totoro helper and the Catbus · a guided
 tour on first launch · create a task from an Outlook e-mail (Ctrl+Alt+T): subject, text,
 attachments and the message itself, replies go to the sender; a tray icon started with Windows
@@ -85,8 +85,8 @@ CSV export / import, e-mail a task, built-in help · one-click updates and an in
 
 ### Канбан-доска / Kanban board
 
-Колонки-статусы со своими цветами; на карточках — срок, исполнитель и автор.
-*Colored status columns; cards show the due date, assignee and author.*
+Колонки-статусы со своими цветами; на карточках — срок, исполнитель и инициатор.
+*Colored status columns; cards show the due date, assignee and initiator.*
 
 ![Канбан-доска / Kanban board](docs/screenshots/board.png)
 
@@ -151,8 +151,8 @@ CSV export / import, e-mail a task, built-in help · one-click updates and an in
 
 ### Карточка и изменение задачи / Task card and editing
 
-В правой панели — всё о задаче: описание, важность и срочность, срок, напоминание, автор, исполнитель, кто изменил.
-Изменяется задача тут же — с выбором исполнителя из участников.
+В правой панели — всё о задаче: описание, важность и срочность, срок, напоминание, инициатор, исполнитель, кто изменил.
+Изменяется задача тут же — с выбором исполнителя из участников и инициатора (участник или любое имя).
 Нужно больше места для задач — сверните панель в узкую полоску кнопкой «»» или **Ctrl+B**.
 *The side panel shows everything about a task; edit it right there and pick an assignee.
 Need more room? Collapse the panel to a thin strip with the » button or Ctrl+B.*

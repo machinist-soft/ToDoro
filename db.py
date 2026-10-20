@@ -49,7 +49,11 @@ NEW_COLUMNS = [
                                                     # что задачу поменял кто-то другой
     ("mail_id", "TEXT"),                            # письмо Outlook, из которого создана задача
     ("mail_from", "TEXT"),                          # его отправитель — адресат письма по задаче
+    ("initiator", "TEXT"),                          # инициатор (в общих списках); NULL — автор
 ]
+
+# Инициатор задачи: указанный вручную, а если не указан — автор (тот, кто создал)
+INITIATOR_SQL = "COALESCE(NULLIF(initiator, ''), created_by)"
 
 # Статусы по умолчанию: (название, цвет, «задачи здесь выполнены»)
 DEFAULT_STATUSES = [
@@ -447,13 +451,21 @@ def set_assignee(conn, task_id, assignee, by=None):
         conn.execute(f"UPDATE tasks SET assignee = ?, {TOUCH_SQL} WHERE id = ?", (assignee, by, task_id))
 
 
+def set_initiator(conn, task_id, initiator, by=None):
+    """Указать инициатора задачи (None или пусто — инициатором снова считается автор)."""
+    with conn:
+        conn.execute(f"UPDATE tasks SET initiator = ?, {TOUCH_SQL} WHERE id = ?",
+                     ((initiator or "").strip() or None, by, task_id))
+
+
 def task_meta(conn, task_id):
-    """Кто создал, исполнитель, кто и когда изменил, номер версии — или None, если задачи нет."""
-    row = conn.execute("SELECT created_by, assignee, updated_by, updated_at, version FROM tasks "
-                       "WHERE id = ?", (task_id,)).fetchone()
+    """Кто создал, инициатор, исполнитель, кто и когда изменил, номер версии — или None, если
+    задачи нет."""
+    row = conn.execute(f"SELECT created_by, {INITIATOR_SQL}, assignee, updated_by, updated_at, version "
+                       "FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if row is None:
         return None
-    return dict(zip(("author", "assignee", "updated_by", "updated_at", "version"), row))
+    return dict(zip(("author", "initiator", "assignee", "updated_by", "updated_at", "version"), row))
 
 
 def assigned_to(conn, user):
@@ -541,12 +553,15 @@ def import_tasks(conn, tasks, created_by=None):
         conn.executemany(
             """
             INSERT INTO tasks (title, body, status_id, done, due_at, remind_before, reminded,
-                               urgent, important, created_at, created_by, assignee)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?)
+                               urgent, important, created_at, created_by, assignee, initiator)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?)
             """,
             [(t["title"], t["body"], t["status_id"], is_done[t["status_id"]], t["due_at"],
               t["remind_before"], int(t["reminded"]), int(t["urgent"]), int(t["important"]),
-              t["created_at"], t.get("created_by") or created_by, t.get("assignee")) for t in tasks],
+              t["created_at"], t.get("created_by") or created_by, t.get("assignee"),
+              # инициатор, совпадающий с автором, отдельно не храним — им и так считается автор
+              t.get("initiator") if t.get("initiator") != (t.get("created_by") or created_by) else None)
+             for t in tasks],
         )
 
 
@@ -582,12 +597,12 @@ def move_task_to(src, task_id, dst):
     row = src.execute(
         """SELECT t.title, t.body, t.done, t.created_at, t.due_at, t.remind_before, t.reminded,
                   t.urgent, t.important, t.done_at, s.name, t.created_by, t.assignee,
-                  t.mail_id, t.mail_from
+                  t.mail_id, t.mail_from, t.initiator
            FROM tasks t LEFT JOIN statuses s ON s.id = t.status_id WHERE t.id = ?""",
         (task_id,),
     ).fetchone()
     (title, body, done, created, due_at, remind_before, reminded, urgent, important, done_at, status,
-     created_by, assignee, mail_id, mail_from_) = row
+     created_by, assignee, mail_id, mail_from_, initiator) = row
     same = [sid for sid, name, _, is_done in list_statuses(dst)
             if name.strip().lower() == (status or "").strip().lower() and is_done == done]
     status_id = same[0] if same else first_status(dst, done)
@@ -598,10 +613,11 @@ def move_task_to(src, task_id, dst):
         new_id = dst.execute(
             """INSERT INTO tasks (title, body, done, created_at, due_at, remind_before, reminded,
                                   urgent, important, done_at, status_id, created_by, assignee,
-                                  mail_id, mail_from)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  mail_id, mail_from, initiator)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (title, body, is_done, created, due_at, remind_before, reminded, urgent, important,
-             done_at if is_done else None, status_id, created_by, assignee, mail_id, mail_from_),
+             done_at if is_done else None, status_id, created_by, assignee, mail_id, mail_from_,
+             initiator),
         ).lastrowid
         # вложения и комментарии переезжают вместе с задачей
         dst.executemany(
@@ -699,11 +715,13 @@ def mail_task_ids(conn):
 
 
 def task_people(conn):
-    """({id: автор}, {id: исполнитель}) — одним запросом, только где они известны."""
+    """({id: инициатор}, {id: исполнитель}) — одним запросом, только где они известны.
+    Инициатор — указанный вручную, иначе автор задачи."""
     authors, assignees = {}, {}
     for task_id, author, assignee in conn.execute(
-            "SELECT id, created_by, assignee FROM tasks "
-            "WHERE created_by IS NOT NULL OR (assignee IS NOT NULL AND assignee <> '')"):
+            f"SELECT id, {INITIATOR_SQL}, assignee FROM tasks "
+            "WHERE created_by IS NOT NULL OR (initiator IS NOT NULL AND initiator <> '') "
+            "OR (assignee IS NOT NULL AND assignee <> '')"):
         if author:
             authors[task_id] = author
         if assignee:
