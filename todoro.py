@@ -4236,8 +4236,52 @@ class PhoneDialog(tk.Toplevel):
             self.fix_button.pack(side="right")
 
 
+class CheckingDialog(tk.Toplevel):
+    """Маленькое окно «Проверяю обновления…» с бегущей полосой и кнопкой «Отмена»."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.cancelled = False
+        self.title("Обновление ToDoro")
+        self.configure(bg=SURFACE)
+        self.resizable(False, False)
+        self.transient(parent)
+        body = tk.Frame(self, bg=SURFACE, padx=26, pady=20)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, text="Проверяю, есть ли новая версия…", bg=SURFACE, fg=TEXT,
+                 font=FONT_BOLD).pack(anchor="w")
+        tk.Label(body, text="В медленной сети это может занять до минуты.", bg=SURFACE, fg=MUTED,
+                 font=FONT_SMALL).pack(anchor="w", pady=(2, 10))
+        self.bar = ttk.Progressbar(body, mode="indeterminate", length=320)
+        self.bar.pack(fill="x")
+        self.bar.start(15)
+        ttk.Button(body, text="Отмена", style="Soft.TButton", command=self.cancel).pack(
+            anchor="e", pady=(14, 0))
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.bind("<Escape>", lambda e: self.cancel())
+        center_on_screen(self)
+        self.focus_force()
+        try:
+            self.grab_set()  # пока ждём ответа, второй раз проверку не запустить
+        except tk.TclError:
+            pass
+
+    def cancel(self):
+        self.cancelled = True
+        self.close()
+
+    def close(self):
+        if self.winfo_exists():
+            self.bar.stop()
+            self.destroy()
+
+
 class UpdateDialog(tk.Toplevel):
     """«Вышла новая версия»: что нового и кнопка «Обновить» (скачать и установить)."""
+
+    # Столько секунд без единого байта — скачивание «подвисло», останавливаем. С запасом: неудачная
+    # попытка скачать .exe (напрямую 30 с, через Windows ещё 30 с) не должна помешать перейти к .zip
+    STALL_S = 90
 
     def __init__(self, parent, release, on_close_app):
         super().__init__(parent)
@@ -4303,7 +4347,8 @@ class UpdateDialog(tk.Toplevel):
         self.later_button.pack(side="right")
         self.ok_button.pack(side="right", padx=(0, 8))
         self.later_button.lift()  # Tab: сначала «Обновить», потом «Позже»
-        self.bind("<Escape>", lambda e: self.destroy() if self.later_button.instate(["!disabled"]) else None)
+        # Esc — то же, что «Позже», а во время скачивания — «Отмена»
+        self.bind("<Escape>", lambda e: self.later_button.invoke() if self.later_button.instate(["!disabled"]) else None)
         self.bind("<Return>", lambda e: self.update_now() if self.ok_button.instate(["!disabled"]) else None)
         center_on_screen(self)
         self.focus_force()
@@ -4313,19 +4358,29 @@ class UpdateDialog(tk.Toplevel):
             webbrowser.open(self.release["url"])
             self.destroy()
             return
-        for button in (self.ok_button, self.later_button):
-            button.state(["disabled"])
-        self.protocol("WM_DELETE_WINDOW", lambda: None)  # не закрывать посреди скачивания
+        # Пока качается, «Позже» становится «Отменой», а окно можно закрыть: если сеть «подвисла»,
+        # пользователь не должен оставаться перед окном, которое ничего не делает
+        self.ok_button.state(["disabled"])
+        self.later_button.configure(text="Отмена", command=self.cancel_download)
+        self.protocol("WM_DELETE_WINDOW", self.close_during_download)
+        self.progress.configure(value=0)
         self.progress.pack(fill="x", side="top", pady=(4, 0))
-        self.status.configure(text="Скачиваю обновление…")
-        shown = {"done": 0, "total": 0}
+        self.status.configure(text="Скачиваю обновление…", fg=MUTED)
+        # Своя «отмена» у каждой попытки: прошлая, если её поток ещё ждёт сеть, на новую не влияет
+        cancel = self.cancel_event = threading.Event()
+        shown = {"done": 0, "total": 0, "moved": time_module.monotonic()}
 
         def progress(done, total):
-            shown.update(done=done, total=total)
+            shown.update(done=done, total=total, moved=time_module.monotonic())
 
         def tick():
             # скачивание закончилось — не затираем сообщение об ошибке или «Устанавливаю…»
-            if not self.winfo_exists() or not self.downloading:
+            if not self.winfo_exists() or not self.downloading or cancel.is_set():
+                return
+            if time_module.monotonic() - shown["moved"] > self.STALL_S:
+                self.cancel_download("Обновление не скачивается: полторы минуты не приходит ни "
+                                     "одного байта. Проверьте интернет и попробуйте ещё раз — или "
+                                     "скачайте установщик со страницы выпуска.")
                 return
             if shown["total"]:
                 self.progress["value"] = 100 * shown["done"] / shown["total"]
@@ -4334,12 +4389,11 @@ class UpdateDialog(tk.Toplevel):
             self.after(150, tick)
 
         def finished(path, error):
+            if cancel.is_set() or not self.winfo_exists():
+                return  # попытку отменили — окно уже вернулось в обычный вид или закрыто
             self.downloading = False
             if error:
-                self.protocol("WM_DELETE_WINDOW", self.destroy)
-                for button in (self.ok_button, self.later_button):
-                    button.state(["!disabled"])
-                self.progress.pack_forget()
+                self.restore_buttons()
                 if isinstance(error, updater.BlockedError):
                     self.status.configure(text="Обновление не скачалось — возможно, его не пропускает фильтр сети.",
                                           fg=DANGER)
@@ -4348,19 +4402,45 @@ class UpdateDialog(tk.Toplevel):
                 message = str(error) if isinstance(error, updater.UpdateError) else f"Ошибка: {error}"
                 self.status.configure(text=message, fg=DANGER)
                 return
+            self.later_button.state(["disabled"])  # установщик уже не отменить
+            self.protocol("WM_DELETE_WINDOW", lambda: None)
             self.status.configure(text="Устанавливаю… ToDoro закроется и откроется снова.")
             self.update_idletasks()
             tray.stop()  # иначе установщик не сможет заменить ToDoro.exe, занятый значком в трее
             try:
                 updater.run_installer(path)
             except OSError as error:
+                self.restore_buttons()  # не оставлять окно, которое нельзя закрыть
                 self.status.configure(text=f"Не удалось запустить установщик: {error}", fg=DANGER)
                 return
             self.after(500, self.on_close_app)
 
         self.downloading = True
         tick()
-        in_background(self, lambda: updater.download(self.release, progress), finished)
+        # Ждём поток через главное окно: это окно могут закрыть, пока файл ещё качается
+        in_background(self.master, lambda: updater.download(self.release, progress,
+                                                            cancelled=cancel.is_set), finished)
+
+    def restore_buttons(self):
+        """Окно снова в обычном виде: «Обновить» и «Позже» доступны, полосы прогресса нет."""
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.ok_button.state(["!disabled"])
+        self.later_button.state(["!disabled"])
+        self.later_button.configure(text="Позже", command=self.destroy)
+        self.progress.pack_forget()
+
+    def cancel_download(self, message="Скачивание отменено."):
+        """«Отмена» во время скачивания (или файл перестал приходить): поток в фоне бросит
+        работу при первой возможности, а окно сразу снова готово — «Обновить» или «Позже»."""
+        self.cancel_event.set()
+        self.downloading = False
+        self.restore_buttons()
+        self.status.configure(text=message, fg=MUTED if message == "Скачивание отменено." else DANGER)
+
+    def close_during_download(self):
+        self.cancel_event.set()
+        self.downloading = False
+        self.destroy()
 
     def explain_blocked(self, error):
         """Обновление не дал скачать фильтр сети: что делать — и адреса для администратора."""
@@ -8006,7 +8086,14 @@ class TodoApp:
         in_background(self.root, updater.fetch_latest, done)
 
     def check_update_now(self):
+        """Пункт меню «Проверить обновления…»: сразу показывает окошко «Проверяю…» с «Отменой» —
+        в медленной сети ответа GitHub можно ждать долго, и без окошка кажется, что всё зависло."""
+        waiting = CheckingDialog(self.root)
+
         def done(release, error):
+            if waiting.cancelled:
+                return  # пользователь передумал ждать — ответ уже не нужен
+            waiting.close()
             if error:
                 ui.showwarning(APP_NAME, str(error), parent=self.root)
             elif updater.is_newer(release["version"], APP_VERSION):

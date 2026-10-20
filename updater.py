@@ -7,12 +7,15 @@
 """
 import hashlib
 import json
+import os
 import re
+import ssl
 import subprocess
 import sys
 import tempfile
 import urllib.parse
 import urllib.request
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -148,10 +151,21 @@ class _WinInetResponse:
         self.close()
 
 
+def _ssl_context():
+    """Обычная проверка сертификата (доверенные центры, в том числе из Windows), но без «строгого»
+    режима новых Python: сертификаты, которые ставит фильтр корпоративной сети (FortiGate и т. п.),
+    часто без поля Authority Key Identifier, и строгий режим их отвергает, хотя Windows и браузер
+    им доверяют. Подлинность установщика всё равно проверяется по контрольной сумме."""
+    context = ssl.create_default_context()
+    context.verify_flags &= ~getattr(ssl, "VERIFY_X509_STRICT", 0)
+    return context
+
+
 def _urlopen(url, headers, timeout):
     """Открывает адрес напрямую, а если не вышло (на Windows) — через сетевую часть Windows."""
     try:
-        return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout)
+        return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout,
+                                      context=_ssl_context())
     except OSError as direct_error:
         if sys.platform != "win32":
             raise
@@ -173,7 +187,7 @@ def _sha256(asset):
     return digest.split(":", 1)[1].lower() if digest.startswith("sha256:") else None
 
 
-def fetch_latest(timeout=10):
+def fetch_latest(timeout=20):
     """Последний выпуск на GitHub: dict(version, notes, url, asset_url, asset_name, size, sha256,
     zip_url, zip_name, zip_size, zip_sha256). asset_* — None, если к выпуску не приложен
     установщик, zip_* — если не приложен его архив (в старых выпусках его нет)."""
@@ -231,6 +245,19 @@ class BlockedError(DownloadError):
     """Вместо файла пришло что-то другое — обычно страница фильтра сети «загрузка запрещена»."""
 
 
+class Cancelled(Exception):
+    """Скачивание остановлено: пользователь нажал «Отмена» или файл перестал приходить.
+    Не UpdateError — после отмены не пробуем скачать архив .zip и ничего не показываем."""
+
+
+def _remove(path):
+    """Удаляет недокачанный файл; занятый (его ещё пишет прошлая попытка) — оставляем."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def blocked_message(details=""):
     """Что делать, если обновление не дали скачать (ни как .exe, ни как .zip)."""
     text = ("Не удалось скачать обновление. Если интернет работает — похоже, его не пропускает "
@@ -240,17 +267,31 @@ def blocked_message(details=""):
     return text + (f"\nПодробности: {details}" if details else "")
 
 
-def _fetch(url, path, size, sha256, magic, on_progress, timeout):
+def _fetch(url, path, size, sha256, magic, on_progress, timeout, cancelled=None):
     """Скачивает один файл выпуска в path и сверяет размер и контрольную сумму.
     magic — первые байты настоящего файла («MZ» у .exe, «PK» у .zip): если начало другое,
-    вместо файла пришла страница (обычно — фильтр сети), и дальше качать бессмысленно."""
+    вместо файла пришла страница (обычно — фильтр сети), и дальше качать бессмысленно.
+    cancelled() — «пора остановиться?»: проверяется перед каждой порцией, тогда — Cancelled.
+    Качает во временный файл со своим именем и только после проверок переименовывает его в path:
+    отменённая попытка, чей поток ещё ждёт сеть, не испортит и не удалит файл следующей."""
+    part = path.with_name(f"{path.name}.{uuid.uuid4().hex[:8]}.part")
     sha = hashlib.sha256()
     received = 0
     head = b""  # первые байты файла (первая порция может оказаться короче magic)
     try:
-        with _urlopen(url, {"User-Agent": USER_AGENT}, timeout) as response, open(path, "wb") as f:
+        if cancelled and cancelled():
+            raise Cancelled()
+        # «Жив»: новая попытка (например, архив после неудачи с .exe) и установленное соединение
+        # сбрасывают в окне отсчёт «давно не приходило ни байта»
+        if on_progress:
+            on_progress(0, size or 0)
+        with _urlopen(url, {"User-Agent": USER_AGENT}, timeout) as response, open(part, "wb") as f:
             total = int(response.headers.get("Content-Length") or size or 0)
+            if on_progress:
+                on_progress(0, total)
             while chunk := response.read(256 * 1024):
+                if cancelled and cancelled():
+                    raise Cancelled()
                 head = (head + chunk[:len(magic)])[:len(magic)]
                 if not magic.startswith(head):
                     reason = "вместо файла пришла другая страница (обычно — от фильтра сети)"
@@ -260,19 +301,27 @@ def _fetch(url, path, size, sha256, magic, on_progress, timeout):
                 received += len(chunk)
                 if on_progress:
                     on_progress(received, total)
-    except BlockedError:
-        path.unlink(missing_ok=True)
+    except (BlockedError, Cancelled):
+        _remove(part)
         raise
     except OSError as error:
-        path.unlink(missing_ok=True)
+        _remove(part)
+        if cancelled and cancelled():  # соединение оборвалось уже после «Отмены»
+            raise Cancelled() from error
         raise DownloadError("Не удалось скачать обновление. Проверьте подключение к интернету.\n"
                             f"Подробности: {_reason(error)}", _reason(error)) from error
     if size and received != size:
-        path.unlink(missing_ok=True)
+        _remove(part)
         raise UpdateError("Обновление скачалось не полностью. Попробуйте ещё раз.")
     if sha.hexdigest() != sha256:
-        path.unlink(missing_ok=True)
+        _remove(part)
         raise UpdateError("Скачанный файл повреждён (не совпала контрольная сумма). Попробуйте ещё раз.")
+    try:
+        os.replace(part, path)
+    except OSError as error:
+        _remove(part)
+        raise UpdateError("Не удалось сохранить скачанное обновление. Попробуйте ещё раз.\n"
+                          f"Подробности: {_reason(error)}") from error
 
 
 def _extract_installer(archive, folder, name, sha256):
@@ -298,11 +347,12 @@ def _extract_installer(archive, folder, name, sha256):
     return target
 
 
-def download(release, on_progress=None, timeout=30):
+def download(release, on_progress=None, timeout=30, cancelled=None):
     """Скачивает установщик во временную папку и проверяет его. Возвращает путь к файлу.
     Если .exe скачать не вышло, а к выпуску приложен архив .zip, — скачивает архив (тоже с
     проверкой контрольной суммы) и достаёт установщик из него.
-    on_progress(получено_байт, всего_байт) вызывается по ходу скачивания (из этого же потока)."""
+    on_progress(получено_байт, всего_байт) вызывается по ходу скачивания (из этого же потока);
+    cancelled() — «пользователь нажал „Отмена“?»: тогда скачивание прерывается с Cancelled."""
     if not release.get("asset_url"):
         raise UpdateError("К выпуску не приложен установщик.")
     check_release(release)
@@ -313,7 +363,7 @@ def download(release, on_progress=None, timeout=30):
     remove_old_downloads(folder, keep=path)
     try:
         _fetch(release["asset_url"], path, release.get("size"), release["sha256"], b"MZ",
-               on_progress, timeout)
+               on_progress, timeout, cancelled)
         return path
     except UpdateError as error:
         if not release.get("zip_url"):
@@ -328,7 +378,7 @@ def download(release, on_progress=None, timeout=30):
         raise
     try:
         _fetch(release["zip_url"], archive, release.get("zip_size"), release["zip_sha256"], b"PK",
-               on_progress, timeout)
+               on_progress, timeout, cancelled)
     except DownloadError as error:
         if isinstance(exe_error, DownloadError):  # не скачалось ни так, ни так
             details = f".exe — {exe_error.details}; .zip — {error.details}"
@@ -341,7 +391,7 @@ def remove_old_downloads(folder, keep=None):
     """Удаляет установщики (и их архивы), скачанные раньше: после установки они больше не нужны.
     Занятый файл (установщик ещё работает) пропускаем — уберём в следующий раз."""
     try:
-        items = [*Path(folder).glob("*.exe"), *Path(folder).glob("*.zip")]
+        items = [*Path(folder).glob("*.exe"), *Path(folder).glob("*.zip"), *Path(folder).glob("*.part")]
     except OSError:
         return
     for item in items:
