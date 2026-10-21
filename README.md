@@ -77,7 +77,7 @@ priority and checklist suggestions from similar tasks · a reminders window with
 overdue task, one click opens a task · file attachments, pasted
 screenshots and comments in every task · list, kanban board with
 custom columns and Eisenhower matrix (drag a card to another quadrant to change its priority),
-a month calendar with upcoming repeats,
+a month calendar with upcoming repeats (drag a task to another day to move its due date),
 filters, search, column sorting and drag-to-reorder columns · an optional business unit per task,
 picked from each list’s own directory · several lists, personal and shared with a team via a network
 folder (VPN works) · an Android app: personal and shared lists on your phone, comments, works offline,

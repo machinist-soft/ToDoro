@@ -408,14 +408,14 @@ def shoot_smart():
 
 
 def shoot_tour():
-    """5в. Ознакомительный тур: шаг «Список, доска и матрица»."""
+    """5в. Ознакомительный тур: шаг «Список, доска, матрица и календарь»."""
     app.start_tour()
     tour = app.tour
     for window in (tour.tip, tour.frame):
         if window:
             window.attributes("-topmost", True)  # главное окно на время съёмки — поверх всех
     tour.hide_next.set(False)  # на снимке — как при первом запуске: галочка не стоит
-    tour.index = next(i for i, step in enumerate(tour.steps) if step[1] == "Список, доска и матрица")
+    tour.index = next(i for i, step in enumerate(tour.steps) if step[1].startswith("Список, доска"))
     tour.show_step()
     grab("tour.png")
     tour.hide_next.set(True)  # не меняем настройку: в базе для снимков тур и так выключен
