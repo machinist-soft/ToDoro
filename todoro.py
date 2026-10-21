@@ -592,6 +592,21 @@ def is_risky_file(name):
     return Path(file_name_for_disk(name)).suffix.lower() in RISKY_TYPES
 
 
+def small_picture(data, size=56):
+    """Уменьшенная копия картинки (PIL) для превью или None — нет данных, нет Pillow, не картинка.
+    Можно звать из фонового потока (Tk здесь не трогается)."""
+    if not data:
+        return None
+    try:
+        from io import BytesIO
+        from PIL import Image
+        image = Image.open(BytesIO(data))
+        image.thumbnail((size, size))
+        return image
+    except Exception:  # noqa: BLE001 — испорченный файл, слишком большая картинка или нет Pillow
+        return None
+
+
 def format_size(size):
     for unit in ("байт", "КБ", "МБ"):
         if size < 1024 or unit == "МБ":
@@ -2843,7 +2858,8 @@ class TaskCard(tk.Frame):
             row=0, column=2, sticky="we", padx=(3, 0))
         self.files_area = ScrollArea(page, SURFACE)
         self.files_area.pack(fill="both", expand=True)
-        self.thumbs = {}  # id вложения -> картинка-превью (иначе Tk её «забудет»)
+        self.thumbs = {}  # (файл списка, id вложения) -> картинка-превью (иначе Tk её «забудет»)
+        self.file_previews = {}
         self.type_icons = {}  # расширение -> значок типа файла из Проводника (или None)
         self.file_labels = []
         self.files_area.inner.bind("<Configure>", lambda e: [
@@ -2913,7 +2929,10 @@ class TaskCard(tk.Frame):
         inner = self.files_area.inner
         for child in inner.winfo_children():
             child.destroy()
-        self.thumbs = {k: v for k, v in self.thumbs.items() if k in {f[0] for f in files}}
+        ids = {f[0] for f in files}
+        self.thumbs = {k: v for k, v in self.thumbs.items() if k[1] in ids}
+        self.file_previews = {}  # (файл списка, id вложения) -> место превью — для фонового чтения
+        source = self.extras.preview_source() if files else None
         self.file_labels = []
         if not files:
             tk.Label(inner, text="Файлов нет.\nДобавьте документ или картинку — или вставьте\n"
@@ -2923,7 +2942,7 @@ class TaskCard(tk.Frame):
         for attachment_id, name, size, added_by, added_at in files:
             row = tk.Frame(inner, bg=SURFACE, cursor="hand2")
             row.pack(fill="x", pady=(0, 6))
-            thumb = self.thumbnail(attachment_id, name) or self.type_icon(name)
+            thumb = self.thumbnail(attachment_id, name, source) or self.type_icon(name)
             if thumb:
                 preview = tk.Label(row, image=thumb, bg=SURFACE, width=56, height=56)
             else:
@@ -2931,6 +2950,8 @@ class TaskCard(tk.Frame):
                 preview = tk.Label(row, text=ext, bg=BG, fg=MUTED, font=FONT_SMALL_BOLD,
                                    width=5, height=2)
             preview.pack(side="left", padx=(0, 10))
+            if source is not None:
+                self.file_previews[(source[0], attachment_id)] = preview
             text = tk.Frame(row, bg=SURFACE)
             text.pack(side="left", fill="x", expand=True)
             label = tk.Label(text, text=name, bg=SURFACE, fg=TEXT, font=FONT_SMALL, anchor="w",
@@ -2948,22 +2969,40 @@ class TaskCard(tk.Frame):
         self.files_area.bind_wheel()
         self.files_area.canvas.yview_moveto(0)
 
-    def thumbnail(self, attachment_id, name):
-        """Маленькая копия картинки для списка файлов (или None — не картинка)."""
-        if attachment_id in self.thumbs:
-            return self.thumbs[attachment_id]
-        thumb = None
-        if Path(name).suffix.lower() in IMAGE_TYPES:
-            try:
-                from io import BytesIO
-                from PIL import Image, ImageTk
-                image = Image.open(BytesIO(self.extras.file_data(attachment_id)))
-                image.thumbnail((56, 56))
-                thumb = ImageTk.PhotoImage(image)
-            except Exception:  # noqa: BLE001 — нет Pillow или файл не картинка: покажем без превью
-                thumb = None
-        self.thumbs[attachment_id] = thumb
-        return thumb
+    def thumbnail(self, attachment_id, name, source):
+        """Превью картинки для списка файлов, если оно уже готово; иначе None (пока — значок типа
+        файла). Картинка читается и уменьшается в фоне: в общем списке через VPN большой файл
+        читается секундами, и окно бы «зависло». Готовое превью встаёт на место само.
+        source — откуда читать (extras.preview_source()); None — общая папка сейчас недоступна,
+        попробуем при следующей отрисовке."""
+        if source is None or Path(name).suffix.lower() not in IMAGE_TYPES:
+            return None
+        key = (source[0], attachment_id)  # id вложений в разных списках совпадают
+        if key not in self.thumbs:
+            self.thumbs[key] = None  # уже читается (или не вышло) — второй раз не запускаем
+            path, timeout = source
+            in_background(self._root(),
+                          lambda: small_picture(db.read_attachment(path, attachment_id, timeout)),
+                          lambda image, error: self.thumbnail_ready(key, image, error))
+        return self.thumbs[key]
+
+    def thumbnail_ready(self, key, image, error=None):
+        """Фоновое чтение закончилось: ставим превью на место значка (если файл ещё на экране).
+        error — чтение сорвалось (файл занят, оборвалась связь): попробуем при следующей отрисовке."""
+        if error is not None:
+            self.thumbs.pop(key, None)
+            return
+        if image is None or not self.winfo_exists():
+            return
+        try:
+            from PIL import ImageTk
+            thumb = ImageTk.PhotoImage(image, master=self)
+        except Exception:  # noqa: BLE001 — нет Pillow или картинка испорчена: остаётся значок
+            return
+        self.thumbs[key] = thumb
+        label = self.file_previews.get(key)
+        if label is not None and label.winfo_exists():
+            label.configure(image=thumb, text="", bg=SURFACE, width=56, height=56)
 
     def type_icon(self, name):
         """Значок типа файла, как в Проводнике (или None — покажем плашку с расширением)."""
@@ -7919,6 +7958,14 @@ class TodoApp:
 
     def file_data(self, attachment_id):
         return db.attachment_data(self.conn, attachment_id)
+
+    def preview_source(self):
+        """Откуда фоновый поток прочитает картинки для превью: (файл открытого списка, сколько
+        ждать, если файл занят) или None — общий список сейчас без связи с общей папкой."""
+        item = self.current_list()
+        if item["shared"]:
+            return (self.team.path(item), team.TIMEOUT) if self.share_online() else None
+        return db.list_path(item), 5
 
     def attach(self, task_id, items):
         """items — [(имя, содержимое в байтах)]. Слишком большие файлы не добавляются."""

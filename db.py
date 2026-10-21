@@ -924,6 +924,19 @@ def attachment_data(conn, attachment_id):
     return bytes(row[0]) if row else None
 
 
+def read_attachment(path, attachment_id, timeout=5):
+    """Содержимое вложения через отдельное соединение — для фонового потока (соединение окна
+    из другого потока трогать нельзя). Только читает: таблиц не создаёт, нового файла тоже.
+    None — файла списка или вложения нет."""
+    if not Path(path).exists():
+        return None
+    conn = sqlite3.connect(path, timeout=timeout)
+    try:
+        return attachment_data(conn, attachment_id)
+    finally:
+        conn.close()
+
+
 def delete_attachment(conn, attachment_id):
     with conn:
         conn.execute("DELETE FROM attachments WHERE id = ?", (attachment_id,))
