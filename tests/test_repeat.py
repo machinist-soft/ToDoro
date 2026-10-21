@@ -802,23 +802,47 @@ class RepeatFormTests(unittest.TestCase):
         self.top.update()
         return form
 
-    def test_values_and_until_row(self):
+    def until_shown(self, form):
+        """Видны ли «До» и поле даты (оба вместе)."""
+        shown = (bool(form.until.winfo_manager()), bool(form.until_label.winfo_manager()))
+        self.assertEqual(shown[0], shown[1], "подпись «До» и поле даты должны появляться вместе")
+        return shown[0]
+
+    def test_repeat_and_until_in_one_row(self):
+        """«Повторять» и «До» — в одной строке; у «До» нет кнопки 📅."""
+        for compact in (False, True):
+            form = self.form(self.task(repeat="month", repeat_until="2026-12-31"), compact=compact)
+            self.assertIs(form.repeat.master, form.until.master)
+            self.assertIs(form.until_label.master, form.repeat.master)
+            self.assertEqual(form.until_label.cget("text"), "До")
+            self.assertEqual(int(form.until.grid_info()["column"]), int(form.until_label.grid_info()["column"]))
+            self.assertNotEqual(int(form.until.grid_info()["column"]), int(form.repeat.grid_info()["column"]))
+            self.assertEqual(int(form.until.grid_info()["row"]), int(form.repeat.grid_info()["row"]))
+            self.assertEqual([w for w in form.until.winfo_children() if isinstance(w, tk.ttk.Button)], [])
+            self.assertEqual(int(form.until.entry.cget("width")), 10)
+            form.destroy()
+
+    def test_option_labels(self):
+        self.assertEqual(list(self.T.REPEAT_OPTIONS),
+                         ["Не повторять", "Ежедневно", "Еженедельно", "Ежемесячно", "Ежегодно"])
+
+    def test_values_and_until_visibility(self):
         for compact in (False, True):
             form = self.form(self.task(repeat="week", repeat_until="2026-12-31"), compact=compact)
-            self.assertEqual(form.repeat.get(), "Каждую неделю")
-            self.assertTrue(form.until_row.winfo_manager())
+            self.assertEqual(form.repeat.get(), "Еженедельно")
+            self.assertTrue(self.until_shown(form))
             values = form.values()
             self.assertEqual((values["repeat"], values["repeat_until"]), ("week", "2026-12-31"))
             self.assertFalse(form.dirty())
             form.repeat.set("Не повторять")
             form.repeat_changed()
-            self.assertFalse(form.until_row.winfo_manager())  # «до» спрятано
+            self.assertFalse(self.until_shown(form))  # «до» спрятано
             values = form.values()
             self.assertEqual((values["repeat"], values["repeat_until"]), (None, None))
             self.assertTrue(form.dirty())
-            form.repeat.set("Каждый год")
+            form.repeat.set("Ежегодно")
             form.repeat_changed()
-            self.assertTrue(form.until_row.winfo_manager())
+            self.assertTrue(self.until_shown(form))
             self.assertEqual(form.values()["repeat"], "year")
             form.destroy()
 
@@ -826,7 +850,7 @@ class RepeatFormTests(unittest.TestCase):
         task = self.task()
         form = self.form(task)  # словарь задачи без ключей repeat — как в старых местах вызова
         self.assertEqual(form.repeat.get(), "Не повторять")
-        self.assertFalse(form.until_row.winfo_manager())
+        self.assertFalse(self.until_shown(form))
         self.assertEqual((form.values()["repeat"], form.values()["repeat_until"]), (None, None))
         self.assertEqual(form.until.text.get(), "без конца")
 
@@ -848,7 +872,7 @@ class RepeatFormTests(unittest.TestCase):
         self.top.update()
         self.assertEqual(form.repeat.get(), "Не повторять")
         self.assertEqual(str(form.repeat.cget("state")), "disabled")
-        self.assertFalse(form.until_row.winfo_manager())
+        self.assertFalse(self.until_shown(form))
         self.assertEqual((form.values()["repeat"], form.values()["repeat_until"]), (None, None))
         form.date.set(date(2026, 11, 1))
         self.assertEqual(str(form.repeat.cget("state")), "readonly")
@@ -869,6 +893,25 @@ class RepeatFormTests(unittest.TestCase):
         with mock.patch.object(self.T.ui, "showwarning"):
             form.save()
         self.assertIsNone(self.saved[-1]["repeat_until"])
+
+    def test_date_picker_without_button(self):
+        """DatePicker(button=False): кнопки 📅 нет, календарь открывается щелчком по полю."""
+        with_button = self.T.DatePicker(self.top)
+        self.assertEqual(len([w for w in with_button.winfo_children() if isinstance(w, tk.ttk.Button)]), 1)
+        self.assertEqual(int(with_button.entry.cget("width")), 11)
+        with_button.destroy()
+        picker = self.T.DatePicker(self.top, date(2026, 10, 20), button=False, width=10)
+        picker.pack()
+        self.top.update()
+        self.assertEqual([w for w in picker.winfo_children() if isinstance(w, tk.ttk.Button)], [])
+        self.assertEqual(int(picker.entry.cget("width")), 10)
+        picker.close_if_unfocused = lambda: None
+        with mock.patch.object(self.T, "close_when_inactive", lambda *a, **k: None):
+            picker.entry.event_generate("<Button-1>", x=5, y=5)
+            self.top.update_idletasks()
+            self.assertIsNotNone(picker.popup)  # щелчок по полю открыл календарь
+            picker.entry.event_generate("<Button-1>", x=5, y=5)
+            self.assertIsNone(picker.popup)  # второй щелчок — закрыл
 
     def test_date_picker_texts(self):
         picker = self.T.DatePicker(self.top)

@@ -177,8 +177,8 @@ REMIND_OPTIONS = {
 REMIND_LABELS = {minutes: label for label, minutes in REMIND_OPTIONS.items()}
 
 # Повтор задачи (db.REPEATS): пункт выпадающего списка → ключ в базе
-REPEAT_OPTIONS = {"Не повторять": None, "Каждый день": "day", "Каждую неделю": "week",
-                  "Каждый месяц": "month", "Каждый год": "year"}
+REPEAT_OPTIONS = {"Не повторять": None, "Ежедневно": "day", "Еженедельно": "week",
+                  "Ежемесячно": "month", "Ежегодно": "year"}
 REPEAT_LABELS = {key: label for label, key in REPEAT_OPTIONS.items()}
 
 
@@ -1179,8 +1179,10 @@ class ui:
 class DatePicker(ttk.Frame):
     """Поле даты с выпадающим календарём."""
 
-    def __init__(self, parent, value=None, on_change=None, empty="Не задан", clear="Без срока"):
-        """empty — надпись в поле, пока дата не выбрана; clear — ссылка «убрать дату» в календаре."""
+    def __init__(self, parent, value=None, on_change=None, empty="Не задан", clear="Без срока",
+                 button=True, width=11):
+        """empty — надпись в поле, пока дата не выбрана; clear — ссылка «убрать дату» в календаре;
+        button=False — без кнопки 📅 (календарь открывается щелчком по полю; для тесных мест)."""
         super().__init__(parent)
         self.value = value
         self.on_change = on_change
@@ -1188,12 +1190,13 @@ class DatePicker(ttk.Frame):
         self.popup = None
         self.text = tk.StringVar()
 
-        self.entry = ttk.Entry(self, textvariable=self.text, font=FONT, width=11,
+        self.entry = ttk.Entry(self, textvariable=self.text, font=FONT, width=width,
                                state="readonly", cursor="hand2")
         self.entry.pack(side="left")
         self.entry.bind("<Button-1>", lambda e: self.toggle_popup())
-        ttk.Button(self, text="📅", style="Icon.TButton", width=3, cursor="hand2",
-                   command=self.toggle_popup).pack(side="left", padx=(4, 0))
+        if button:
+            ttk.Button(self, text="📅", style="Icon.TButton", width=3, cursor="hand2",
+                       command=self.toggle_popup).pack(side="left", padx=(4, 0))
         self.show()
 
     def set(self, value):
@@ -1216,9 +1219,6 @@ class DatePicker(ttk.Frame):
         self.popup = tk.Toplevel(self)
         self.popup.overrideredirect(True)  # окно без рамки и заголовка
         self.popup.configure(bg=SURFACE, highlightthickness=1, highlightbackground=POPUP_BORDER)
-        x = self.entry.winfo_rootx()
-        y = self.entry.winfo_rooty() + self.entry.winfo_height() + 4
-        self.popup.geometry(f"+{x}+{y}")
         self.popup.bind("<Escape>", lambda e: self.close_popup())
         self.popup.bind("<FocusOut>", lambda e: self.after(150, self.close_if_unfocused))
         self.popup.bind("<MouseWheel>", lambda e: self.shift_month(-1 if e.delta > 0 else 1))
@@ -1297,6 +1297,19 @@ class DatePicker(ttk.Frame):
                        fg=ACCENT, font=FONT_SMALL).pack(side="left")
         self.clickable(footer, self.clear, lambda: self.set(None),
                        fg=MUTED, font=FONT_SMALL).pack(side="right")
+        self.place_popup()
+
+    def place_popup(self):
+        """Календарь — под полем; если внизу экрана места нет (поле у панели задач Windows) —
+        над полем. По ширине не выходит за правый край."""
+        self.popup.update_idletasks()
+        width, height = self.popup.winfo_reqwidth(), self.popup.winfo_reqheight()
+        left, top, area_width, area_height = work_area(self.winfo_toplevel())
+        x = min(self.entry.winfo_rootx(), left + area_width - width)
+        y = self.entry.winfo_rooty() + self.entry.winfo_height() + 4
+        if y + height > top + area_height:
+            y = max(top, self.entry.winfo_rooty() - height - 4)
+        self.popup.geometry(f"+{max(x, left)}+{y}")
 
 
 class TitleSuggest:
@@ -1627,24 +1640,29 @@ class TaskForm(ttk.Frame):
         self.remind.set(next(label for label, minutes in self.remind_options.items()
                              if minutes == task["remind_before"]))
 
-        # Повтор: выполнили задачу — появляется такая же со следующим сроком (db.repeat_task)
-        label("Повторять")
-        self.repeat = ttk.Combobox(self, values=list(REPEAT_OPTIONS), state="readonly",
-                                   width=1 if compact else 18, font=FONT)
-        self.repeat.pack(fill="x" if compact else None, anchor="w")
+        # Повтор: выполнили задачу — появляется такая же со следующим сроком (db.repeat_task).
+        # «Повторять» и «до» — в одной строке, по половине ширины; «до» видно, только если повтор выбран
+        repeat_row = ttk.Frame(self, style=self["style"])
+        repeat_row.pack(fill="x" if compact else None, anchor="w", pady=(12, 0))
+        repeat_row.columnconfigure(0, weight=1)  # «Повторять» берёт место, которое не заняла дата
+        ttk.Label(repeat_row, text="Повторять", style=label_style).grid(row=0, column=0, sticky="w",
+                                                                       pady=(0, 4))
+        self.repeat = ttk.Combobox(repeat_row, values=list(REPEAT_OPTIONS), state="readonly",
+                                   width=1 if compact else 14, font=FONT)
+        self.repeat.grid(row=1, column=0, sticky="we", padx=(0, 8))
         self.repeat.set(REPEAT_LABELS.get(task.get("repeat"), "Не повторять"))
         self.repeat.bind("<<ComboboxSelected>>", lambda e: self.repeat_changed())
-        self.until_row = ttk.Frame(self, style=self["style"])
-        ttk.Label(self.until_row, text="до", style=label_style if compact else "TLabel").pack(
-            side="left", padx=(0, 8))
         until = task.get("repeat_until")
         try:
             until = date.fromisoformat(until) if until else None
         except ValueError:
             until = None
-        self.until = DatePicker(self.until_row, until, empty="без конца", clear="Без конца")
+        self.until_label = ttk.Label(repeat_row, text="До", style=label_style)
+        self.until = DatePicker(repeat_row, until, empty="без конца", clear="Без конца", button=False,
+                                width=10)
         self.until.configure(style=self["style"])
-        self.until.pack(side="left")
+        self.until_parts = ((self.until_label, dict(row=0, column=1, sticky="w", pady=(0, 4))),
+                            (self.until, dict(row=1, column=1, sticky="w")))
         self.repeat_changed()
 
         if not compact:  # в правой панели кнопки — в нижней строке панели (SidePanel.show_form)
@@ -1816,11 +1834,12 @@ class TaskForm(ttk.Frame):
 
     def repeat_changed(self):
         """Строка «до …» видна, только когда задача повторяется."""
-        if REPEAT_OPTIONS.get(self.repeat.get()):
-            if not self.until_row.winfo_manager():
-                self.until_row.pack(fill="x", pady=(6, 0), after=self.repeat)
-        else:
-            self.until_row.pack_forget()
+        shown = bool(REPEAT_OPTIONS.get(self.repeat.get()))
+        for widget, place in self.until_parts:
+            if shown and not widget.winfo_manager():
+                widget.grid(**place)
+            elif not shown:
+                widget.grid_remove()
 
     def values(self):
         """Текущие значения формы (без проверки)."""
