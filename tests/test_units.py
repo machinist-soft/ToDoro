@@ -665,7 +665,13 @@ class UnitsFormTests(TkCase):
         return form
 
     def labels(self, form):
-        return [w.cget("text") for w in form.winfo_children() if isinstance(w, tk.ttk.Label)]
+        found, todo = [], list(form.winfo_children())  # подписи полей лежат в блоках формы
+        while todo:
+            w = todo.pop(0)
+            todo += w.winfo_children()
+            if isinstance(w, tk.ttk.Label):
+                found.append(w.cget("text"))
+        return found
 
     def test_empty_dictionary_no_field(self):
         """Справочник пуст (или не передан) — поля нет, а прежняя единица задачи сохраняется."""

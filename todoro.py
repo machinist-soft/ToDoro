@@ -1529,8 +1529,8 @@ class TaskForm(ttk.Frame):
         style_bg = SURFACE if compact else BG
         label_style = "CardMuted.TLabel" if compact else "Muted.TLabel"
 
-        def label(text, top=12):
-            ttk.Label(self, text=text, style=label_style).pack(anchor="w", pady=(top, 4))
+        def label(text, top=12, parent=self):
+            ttk.Label(parent, text=text, style=label_style).pack(anchor="w", pady=(top, 4))
 
         label("Заголовок", top=0)
         self.title_entry = ttk.Entry(self, font=FONT, width=1 if compact else 48)
@@ -1556,7 +1556,9 @@ class TaskForm(ttk.Frame):
         desc_box = tk.Frame(self, bg=SURFACE, highlightthickness=1,
                             highlightbackground=BORDER, highlightcolor=ACCENT)
         desc_box.pack(fill="x")
-        self.desc = tk.Text(desc_box, font=FONT, height=5 if compact else 6, width=1 if compact else 48,
+        self.desc_user = TaskForm.desc_lines.get(compact)  # высота из ручки под полем (None — обычная)
+        self.desc = tk.Text(desc_box, font=FONT, height=self.desc_user or (5 if compact else 6),
+                            width=1 if compact else 48,
                             wrap="word", relief="flat", borderwidth=0, padx=8, pady=6, bg=SURFACE,
                             fg=TEXT, insertbackground=TEXT, highlightthickness=0, undo=True)
         desc_scroll = ttk.Scrollbar(desc_box, orient="vertical", command=self.desc.yview)
@@ -1566,9 +1568,31 @@ class TaskForm(ttk.Frame):
         self.desc.insert("1.0", task["body"])
         # В описании Enter — новая строка; сохранить — Ctrl+Enter
         self.desc.bind("<Return>", lambda e: (self.desc.insert("insert", "\n"), "break")[1])
+        # Ручка под описанием: потянуть вниз — поле выше, вверх — ниже; высота запоминается
+        self.on_desc_resize = None  # TaskDialog подменяет: окну нужно не уйти за край экрана
+        grip = tk.Canvas(self, bg=style_bg, height=9, highlightthickness=0, cursor="sb_v_double_arrow")
+        grip.pack(fill="x")
+        grip.bind("<Configure>", lambda e: (grip.delete("all"), grip.create_line(
+            e.width // 2 - 14, 4, e.width // 2 + 14, 4, fill=BORDER, width=2)))
+        grip.bind("<ButtonPress-1>", self.grip_pressed)
+        grip.bind("<B1-Motion>", self.grip_moved)
+        grip.bind("<ButtonRelease-1>", self.grip_released)
 
-        label("Статус")
-        self.status = ttk.Combobox(self, values=[s[1] for s in statuses], state="readonly",
+        # Поля под описанием — блоками «подпись + поле». В правой панели шире WIDE блоки встают
+        # парами в две колонки (layout_fields), в узкой панели и в окне — друг под другом
+        self.compact, self.blocks, self.wide = compact, {}, None
+        self.fields = ttk.Frame(self, style=self["style"])
+        self.fields.pack(fill="x")
+        self.fields.columnconfigure((0, 1), weight=1, uniform="field")
+
+        def block(name):
+            frame = ttk.Frame(self.fields, style=self["style"])
+            self.blocks[name] = frame
+            return frame
+
+        box = block("status")
+        label("Статус", parent=box)
+        self.status = ttk.Combobox(box, values=[s[1] for s in statuses], state="readonly",
                                    width=1 if compact else 24, font=FONT)
         self.status.pack(fill="x" if compact else None, anchor="w")
         current = next((s[1] for s in statuses if s[0] == task["status_id"]), statuses[0][1])
@@ -1578,10 +1602,11 @@ class TaskForm(ttk.Frame):
         self.unit_id = task.get("unit_id")  # остаётся как была, если поля нет
         self.unit, self.unit_ids = None, {}
         if units:
-            label("Бизнес-единица")
+            box = block("unit")
+            label("Бизнес-единица", parent=box)
             self.unit_ids = {name: uid for uid, name in units or []}
             names = [NO_UNIT] + list(self.unit_ids)
-            self.unit = ttk.Combobox(self, values=names, state="readonly", width=1 if compact else 24,
+            self.unit = ttk.Combobox(box, values=names, state="readonly", width=1 if compact else 24,
                                      font=FONT)
             self.unit.pack(fill="x" if compact else None, anchor="w")
             self.unit.set(next((n for n, uid in self.unit_ids.items() if uid == self.unit_id), NO_UNIT))
@@ -1590,26 +1615,29 @@ class TaskForm(ttk.Frame):
         if members is not None:
             # Инициатор — по умолчанию автор задачи; можно выбрать участника или вписать любое имя
             # (например, руководителя, который ToDoro не пользуется)
-            label("Инициатор")
+            box = block("initiator")
+            label("Инициатор", parent=box)
             known = sorted(set(members) | ({task.get("initiator")} - {None, ""}), key=str.casefold)
-            self.initiator = ttk.Combobox(self, values=known, width=1 if compact else 24, font=FONT)
+            self.initiator = ttk.Combobox(box, values=known, width=1 if compact else 24, font=FONT)
             self.initiator.pack(fill="x" if compact else None, anchor="w")
             self.initiator.insert(0, task.get("initiator") or "")
-            label("Исполнитель")
+            box = block("assignee")
+            label("Исполнитель", parent=box)
             names = sorted(set(members) | ({task.get("assignee")} - {None, ""}), key=str.casefold)
-            self.assignee = ttk.Combobox(self, values=["— не назначен —"] + names, state="readonly",
+            self.assignee = ttk.Combobox(box, values=["— не назначен —"] + names, state="readonly",
                                          width=1 if compact else 24, font=FONT)
             self.assignee.pack(fill="x" if compact else None, anchor="w")
             self.assignee.set(task.get("assignee") or "— не назначен —")
 
         due = datetime.fromisoformat(task["due_at"]) if task["due_at"] else None
-        label("Срок выполнения")
-        due_row = ttk.Frame(self, style=self["style"])
+        box = block("due")
+        label("Срок выполнения", parent=box)
+        due_row = ttk.Frame(box, style=self["style"])
         due_row.pack(fill="x")
         self.date = DatePicker(due_row, due.date() if due else None, on_change=self.date_changed)
         self.date.configure(style=self["style"])
         self.date.pack(side="left")
-        time_row = ttk.Frame(self, style=self["style"]) if compact else due_row
+        time_row = ttk.Frame(box, style=self["style"]) if compact else due_row
         if compact:
             time_row.pack(fill="x", pady=(6, 0))
         ttk.Label(time_row, text="время" if compact else "в",
@@ -1624,7 +1652,7 @@ class TaskForm(ttk.Frame):
         self.minute.set(due.strftime("%M") if due else DEFAULT_TIME[1])
 
         # Быстрый выбор срока — ссылками
-        quick = tk.Frame(self, bg=style_bg)
+        quick = tk.Frame(box, bg=style_bg)
         quick.pack(fill="x", pady=(6, 0))
         links = (("Сегодня", lambda: self.set_date(0)), ("Завтра", lambda: self.set_date(1)),
                  ("Через неделю", lambda: self.set_date(7)), ("Без срока", lambda: self.date.set(None)))
@@ -1634,8 +1662,9 @@ class TaskForm(ttk.Frame):
                       sticky="w", padx=(0, 14), pady=1)
             link.bind("<Button-1>", lambda e, c=command: c())
 
-        label("Приоритет")
-        prio_row = ttk.Frame(self, style=self["style"])
+        box = block("prio")
+        label("Приоритет", parent=box)
+        prio_row = ttk.Frame(box, style=self["style"])
         prio_row.pack(fill="x")
         self.urgent = tk.BooleanVar(value=bool(task["urgent"]))
         self.important = tk.BooleanVar(value=bool(task["important"]))
@@ -1644,19 +1673,23 @@ class TaskForm(ttk.Frame):
                         command=self.priority_clicked, cursor="hand2").pack(side="left")
         ttk.Checkbutton(prio_row, text="Важно", variable=self.important, style=check_style,
                         command=self.priority_clicked, cursor="hand2").pack(side="left", padx=(18, 0))
-        self.priority_label = ttk.Label(prio_row if not compact else self, style=label_style,
-                                        compound="left")
+        self.priority_label = ttk.Label(prio_row if not compact else box, style=label_style,
+                                        compound="left", justify="left")
         self.priority_label.pack(side="left" if not compact else "top", anchor="w",
                                  padx=(22, 0) if not compact else 0, pady=(4, 0) if compact else 0)
+        if compact:  # в колонке пояснение переносится по словам, а не обрезается
+            box.bind("<Configure>", lambda e: self.priority_label.configure(
+                wraplength=max(e.width - 4, 120)), add="+")
         self.priority_changed()
 
-        label("Напоминание")
+        box = block("remind")
+        label("Напоминание", parent=box)
         # Своё время напоминания (например, «90» из файла CSV) — отдельным пунктом, иначе при
         # сохранении формы оно молча пропало бы
         self.remind_options = dict(REMIND_OPTIONS)
         if task["remind_before"] not in REMIND_LABELS:
             self.remind_options[remind_label(task["remind_before"])] = task["remind_before"]
-        self.remind = ttk.Combobox(self, values=list(self.remind_options), state="readonly",
+        self.remind = ttk.Combobox(box, values=list(self.remind_options), state="readonly",
                                    width=1 if compact else 18, font=FONT)
         self.remind.pack(fill="x" if compact else None, anchor="w")
         self.remind.set(next(label for label, minutes in self.remind_options.items()
@@ -1664,7 +1697,7 @@ class TaskForm(ttk.Frame):
 
         # Повтор: выполнили задачу — появляется такая же со следующим сроком (db.repeat_task).
         # «Повторять» и «до» — в одной строке, по половине ширины; «до» видно, только если повтор выбран
-        repeat_row = ttk.Frame(self, style=self["style"])
+        repeat_row = ttk.Frame(block("repeat"), style=self["style"])
         repeat_row.pack(fill="x" if compact else None, anchor="w", pady=(12, 0))
         repeat_row.columnconfigure(0, weight=1)  # «Повторять» берёт место, которое не заняла дата
         ttk.Label(repeat_row, text="Повторять", style=label_style).grid(row=0, column=0, sticky="w",
@@ -1686,6 +1719,10 @@ class TaskForm(ttk.Frame):
         self.until_parts = ((self.until_label, dict(row=0, column=1, sticky="w", pady=(0, 4))),
                             (self.until, dict(row=1, column=1, sticky="w")))
         self.repeat_changed()
+        self.layout_fields(False)
+        if compact:
+            self.fields.bind("<Configure>", lambda e: self.layout_fields(e.width >= self.WIDE),
+                             add="+")
 
         if not compact:  # в правой панели кнопки — в нижней строке панели (SidePanel.show_form)
             buttons = ttk.Frame(self, style=self["style"])
@@ -1707,6 +1744,61 @@ class TaskForm(ttk.Frame):
         if self.hints_on:
             self.title_entry.bind("<KeyRelease>", lambda e: self.hints_later(), add="+")
             self.update_hints()
+
+    # высота «Описания», выбранная ручкой, строк: {True: в правой панели, False: в окне} — у панели
+    # поле занимает всё свободное место, поэтому её высота окну не подходит, и наоборот
+    desc_lines = {}
+    remember_desc = None  # TodoApp: запомнить её в настройках, remember_desc(compact, строк)
+    DESC_LINES_MIN, DESC_LINES_MAX = 2, 60  # пределы ручки, строк
+    WIDE = 440            # форма в правой панели шире (пикселей) — поля в две колонки
+
+    def layout_fields(self, wide):
+        """Расставляет блоки полей: wide — парами в две колонки (срок рядом с приоритетом,
+        остальные по порядку, повтор — во всю ширину), иначе — друг под другом."""
+        if wide == self.wide:
+            return
+        self.wide = wide
+        order = ("status", "unit", "initiator", "assignee", "remind")
+        if wide:
+            single = [self.blocks[n] for n in order if n in self.blocks]
+            rows = [single[i:i + 2] for i in range(0, len(single), 2)]
+            rows += [[self.blocks["due"], self.blocks["prio"]], [self.blocks["repeat"]]]
+        else:
+            names = ("status", "unit", "initiator", "assignee", "due", "prio", "remind", "repeat")
+            rows = [[self.blocks[n]] for n in names if n in self.blocks]
+        full = (self.blocks["repeat"],) if wide else tuple(self.blocks.values())  # во всю ширину
+        for row, frames in enumerate(rows):
+            for column, frame in enumerate(frames):
+                pad = (0, 0) if frame in full else ((0, 8) if column == 0 else (8, 0))
+                frame.grid(row=row, column=column, columnspan=2 if frame in full else 1,
+                           sticky="nwe" if self.compact else "nw", padx=pad)
+
+    # --- ручка под описанием ---
+
+    def grip_pressed(self, event):
+        self.grip_start = (event.y_root, int(self.desc.cget("height")))
+        self.grip_changed = False  # просто щёлкнули по ручке — высоту не запоминаем
+
+    def grip_moved(self, event):
+        y, start = self.grip_start
+        line = tkfont.Font(font=FONT).metrics("linespace")
+        lines = start + round((event.y_root - y) / line)
+        lines = min(max(lines, self.DESC_LINES_MIN), self.DESC_LINES_MAX)
+        if lines == self.desc_user or (lines == start and not self.grip_changed):
+            return
+        self.grip_changed = True
+        self.desc_user = lines
+        if self.on_desc_resize:
+            self.on_desc_resize(lines)
+        else:
+            self.desc.configure(height=lines)
+
+    def grip_released(self, event):
+        """Отпустили ручку — эту высоту получат и следующие формы, она запоминается."""
+        if getattr(self, "grip_changed", False) and self.desc_user != TaskForm.desc_lines.get(self.compact):
+            TaskForm.desc_lines = {**TaskForm.desc_lines, self.compact: self.desc_user}
+            if TaskForm.remember_desc:
+                TaskForm.remember_desc(self.compact, self.desc_user)
 
     def focus_title(self):
         self.title_entry.focus_set()
@@ -1925,7 +2017,10 @@ class TaskDialog(tk.Toplevel):
                 fill="x", padx=20, pady=(16, 0))
             self.form.configure(padding=(20, 10, 20, 18))
         self.image, self.preview, self.preview_label = image, None, None
-        self.desc_lines = self.DESC_LINES
+        # высота описания: обычная или выбранная ручкой; не влезает окно — поле ниже (fit_description)
+        self.desc_max = self.form.desc_user or self.DESC_LINES
+        self.desc_lines = self.desc_max
+        self.form.on_desc_resize = self.desc_dragged
         self.fit_job = None
         if image is not None:
             self.full_preview = min(self.PREVIEW_HEIGHT, round(image.height * min(
@@ -2013,13 +2108,20 @@ class TaskDialog(tk.Toplevel):
         """Поле «Описание» короче (extra > 0) или снова длиннее (extra < 0), но в пределах
         MIN_DESC_LINES…DESC_LINES строк. Возвращает, на сколько окно ещё не влезает."""
         line = tkfont.Font(font=FONT).metrics("linespace")
-        lines = max(min(self.DESC_LINES, self.desc_lines - math.ceil(extra / line)),
+        lines = max(min(self.desc_max, self.desc_lines - math.ceil(extra / line)),
                     self.MIN_DESC_LINES)
         extra -= (self.desc_lines - lines) * line
         if lines != self.desc_lines:
             self.desc_lines = lines
             self.form.desc.configure(height=lines)
         return extra
+
+    def desc_dragged(self, lines):
+        """Потянули ручку под описанием: окно вытягивается или сжимается вместе с полем,
+        но за край экрана не уходит (keep_on_screen)."""
+        self.desc_max = self.desc_lines = lines
+        self.form.desc.configure(height=lines)
+        self.fit_later()
 
     def saved(self, result):
         self.result = result
@@ -3331,7 +3433,8 @@ class SidePanel(tk.Frame):
     def fit_description(self, area):
         """Поле «Описание» занимает всё свободное место панели до кнопок «Сохранить / Отмена»:
         высота подбирается при каждом изменении размера панели и содержимого формы (например,
-        появились советы под заголовком). Места нет — остаётся DESC_MIN_LINES строк."""
+        появились советы под заголовком). Места нет — остаётся DESC_MIN_LINES строк. Высоту,
+        выбранную ручкой под полем, не уменьшаем — тогда форма прокручивается."""
         form, line = self.form, tkfont.Font(font=FONT).metrics("linespace")
         job = [None]
 
@@ -3341,7 +3444,7 @@ class SidePanel(tk.Frame):
                 return  # форму уже закрыли или открыли другую
             free = area.canvas.winfo_height() - area.inner.winfo_reqheight()
             lines = int(form.desc.cget("height"))
-            wanted = max(self.DESC_MIN_LINES, lines + free // line)
+            wanted = max(self.DESC_MIN_LINES, form.desc_user or 0, lines + free // line)
             if wanted != lines:
                 form.desc.configure(height=wanted)
 
@@ -5948,6 +6051,9 @@ class CalendarView(tk.Frame):
 
 
 class TodoApp:
+    # настройки высоты «Описания», выбранной ручкой: в правой панели и в отдельном окне
+    DESC_KEYS = {True: "desc_lines_panel", False: "desc_lines_window"}
+
     def __init__(self, root, hidden=False):
         """hidden — не показывать главное окно: запустили только ради задачи из письма или снимка."""
         self.root = root
@@ -5957,6 +6063,17 @@ class TodoApp:
         # self.prefs — основной файл: настройки и личный список; self.conn — текущий список задач
         self.prefs = db.connect()
         self.smart_on = db.get_setting(self.prefs, "smart_hints", "1") == "1"  # умные подсказки
+        # высота «Описания» в форме задачи, выбранная ручкой под полем
+        TaskForm.desc_lines = {}  # отдельно для правой панели и для окна
+        for compact, key in self.DESC_KEYS.items():
+            try:
+                saved = int(db.get_setting(self.prefs, key, "") or "-")
+            except ValueError:  # настройки нет или в ней не число
+                continue
+            TaskForm.desc_lines[compact] = min(max(saved, TaskForm.DESC_LINES_MIN),
+                                               TaskForm.DESC_LINES_MAX)
+        TaskForm.remember_desc = lambda compact, lines: db.set_setting(
+            self.prefs, self.DESC_KEYS[compact], str(lines))
         self.list_conns = {db.PERSONAL: self.prefs}  # открытые списки: id -> соединение
         self.team, self.team_error = None, None      # общая папка (team.Team), если подключена
         self.probe = None      # фоновая проверка связи с общей папкой (team.Probe)

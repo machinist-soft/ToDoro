@@ -169,8 +169,10 @@ CSV export / import, e-mail a task, built-in help · one-click updates and an in
 
 В правой панели — всё о задаче: описание, важность и срочность, срок, напоминание, инициатор, исполнитель, кто изменил.
 Изменяется задача тут же — с выбором исполнителя из участников и инициатора (участник или любое имя).
+В широкой панели поля формы встают в две колонки, а поле описания можно растянуть за полоску под ним.
 Нужно больше места для задач — сверните панель в узкую полоску кнопкой «»» или **Ctrl+B**.
 *The side panel shows everything about a task; edit it right there and pick an assignee.
+In a wide panel the form fields go into two columns, and the description box can be resized by its handle.
 Need more room? Collapse the panel to a thin strip with the » button or Ctrl+B.*
 
 ![Карточка задачи / Task card](docs/screenshots/card.png)

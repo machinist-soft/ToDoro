@@ -175,6 +175,10 @@ class ColumnDragWindowTests(unittest.TestCase):
 
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp(prefix="todoro-test-"))
+        # TodoApp ставит высоту описания и сохранение её в свою базу — после теста вернуть
+        saved_desc = (todoro.TaskForm.desc_lines, todoro.TaskForm.remember_desc)
+        self.addCleanup(lambda: (setattr(todoro.TaskForm, "desc_lines", saved_desc[0]),
+                                 setattr(todoro.TaskForm, "remember_desc", saved_desc[1])))
         patches = [
             mock.patch.object(db, "DATA_DIR", self.dir),
             mock.patch.object(db, "DB_PATH", self.dir / "todoro.db"),
