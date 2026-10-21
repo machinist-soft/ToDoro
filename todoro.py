@@ -2,6 +2,7 @@
 import calendar
 import csv
 import ctypes
+import errno
 import math
 import os
 import random
@@ -585,6 +586,61 @@ def file_name_for_disk(name):
     без запрещённых знаков, без точек и пробелов в конце (Windows их молча убирает, и
     «отчёт.exe.» стал бы «отчёт.exe»)."""
     return re.sub(r'[\\/:*?"<>|]', "_", name or "").strip().rstrip(". ") or "файл"
+
+
+def temp_copy(folder, name, data, tries=10):
+    """Кладёт копию вложения во временную папку и возвращает путь к ней. Копия того же файла
+    уже есть — её и отдаём, не перезаписывая: Outlook держит открытое письмо .msg занятым,
+    и запись поверх давала «Permission denied». Занятую копию с другим содержимым не трогаем —
+    новая ляжет рядом, в подпапку «2», «3»… (имя файла остаётся прежним)."""
+    safe = file_name_for_disk(name)
+    folder = Path(folder)
+    for attempt in range(1, tries + 1):
+        place = folder if attempt == 1 else folder / str(attempt)
+        path = place / safe
+        try:
+            if path.read_bytes() == data:
+                try:  # копию только что открыли — clean_temp_files не должна счесть её старой
+                    os.utime(path)
+                except OSError:
+                    pass
+                return path
+        except OSError:
+            pass  # копии нет или её не прочитать — пишем заново
+        try:
+            place.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            return path
+        except PermissionError:
+            if attempt == tries:
+                raise
+
+
+ERROR_REASONS = {  # errno -> понятная причина (Python пишет их по-английски)
+    errno.EACCES: "нет доступа — файл занят другой программой или защищён от записи",
+    errno.EPERM: "нет доступа — файл занят другой программой или защищён от записи",
+    errno.ENOENT: "файл или папка не найдены",
+    errno.EEXIST: "такой файл уже есть",
+    errno.ENOSPC: "на диске закончилось место",
+    errno.EROFS: "диск только для чтения",
+    errno.EISDIR: "это папка, а не файл",
+    errno.EINVAL: "недопустимое имя файла",
+}
+
+
+def error_text(error):
+    """Текст ошибки для окна сообщения. str(OSError) показывает путь с удвоенными «\\\\»
+    и причину по-английски — здесь причина по-русски, а путь — как в Проводнике."""
+    if not isinstance(error, OSError) or not error.errno and not error.strerror:
+        return str(error)
+    # У ошибок Windows (winerror) свой точный текст на языке Windows, а errno у многих из них —
+    # «на всякий случай» EINVAL (сеть пропала, нет программы для файла…): берём текст Windows
+    if getattr(error, "winerror", None) and error.strerror:
+        reason = error.strerror
+    else:
+        reason = ERROR_REASONS.get(error.errno) or error.strerror or str(error)
+    paths = [str(p) for p in (error.filename, error.filename2) if p not in (None, "")]
+    return "\n".join([reason[:1].upper() + reason[1:]] + paths)
 
 
 def is_risky_file(name):
@@ -4596,7 +4652,7 @@ class UnitsDialog(tk.Toplevel):
         try:
             added = db.copy_units(self.units_from(list_id), self.conn)
         except (sqlite3.Error, OSError) as error:
-            ui.showwarning("Бизнес-единицы", f"Не удалось прочитать список «{name}»:\n{error}", parent=self)
+            ui.showwarning("Бизнес-единицы", f"Не удалось прочитать список «{name}»:\n{error_text(error)}", parent=self)
             return
         self.load()
         ui.showinfo("Бизнес-единицы", f"Добавлено из списка «{name}»: {added}." if added
@@ -5860,7 +5916,8 @@ class EisenhowerMatrix(KanbanBoard):
 class CalendarView(tk.Frame):
     """Календарь на месяц: задача стоит в дне своего срока. Следующие сроки повторяющихся задач
     показаны бледно, со значком 🔁 — видно расписание вперёд. Щелчок по задаче — карточка справа,
-    двойной щелчок — изменить, двойной щелчок по дню — новая задача с этим сроком."""
+    двойной щелчок — изменить, двойной щелчок по дню — новая задача с этим сроком. Задачу можно
+    перетащить на другой день — срок переносится, время остаётся прежним."""
 
     CHIP = 21  # высота строки с задачей в дне
     MAX_PROJECTED = 45  # больше повторов одной задачи на экране не бывает (6 недель каждый день — 42)
@@ -5869,7 +5926,9 @@ class CalendarView(tk.Frame):
         super().__init__(parent, bg=BG)
         self.app = app
         self.selected_id = None
-        self.drag = None             # перетаскивания в календаре нет; поле нужно TodoApp.dragging
+        self.drag = None             # задачу тащат на другой день (см. on_press)
+        self.cells = []              # (день, его клетка) — куда можно бросить задачу
+        self.due_of = {}             # id задачи -> срок, как он показан (для переноса)
         self.month = date.today().replace(day=1)
         self.shown = None            # (статусы, задачи, просроченные) — для перерисовки
         self.chips = {}              # id задачи -> [строки с ней в днях месяца]
@@ -5976,16 +6035,22 @@ class CalendarView(tk.Frame):
         return by_day
 
     def draw(self):
+        if self.drag:  # строку, которую тащат, сейчас удалим — отпускания кнопки она не дождётся
+            if self.drag["ghost"] is not None:
+                self.drag["ghost"].destroy()
+                self.configure(cursor="")
+            self.drag = None
         if self.redraw_job:  # отложенная перерисовка (колёсико, размер окна) уже не нужна
             self.after_cancel(self.redraw_job)
         self.redraw_job = None
         for child in self.days.winfo_children():
             child.destroy()
-        self.chips = {}
+        self.chips, self.cells = {}, []
         self.title.configure(text=f"{MONTHS[self.month.month - 1]} {self.month.year}")
         if self.shown is None:
             return
         _, rows, overdue_ids = self.shown
+        self.due_of = {r[0]: r[4] for r in rows if r[4]}
         weeks = self.weeks()
         by_day = self.entries(rows, overdue_ids, weeks[0][0], weeks[-1][-1])
         self.drawn_fit = fit = self.fit()
@@ -6010,7 +6075,11 @@ class CalendarView(tk.Frame):
     def make_day(self, day, row, column, items, fit, today):
         own = day.month == self.month.month
         bg = SURFACE if own else BG
-        cell = tk.Frame(self.days, bg=bg)
+        # рамка цвета дня не видна; когда над днём тащат задачу, она становится акцентной
+        cell = tk.Frame(self.days, bg=bg, highlightthickness=2, highlightbackground=bg,
+                        highlightcolor=bg)
+        cell.bg = bg
+        self.cells.append((day, cell))
         cell.grid(row=row, column=column, sticky="nsew", padx=(1 if column == 0 else 0, 1), pady=(0, 1))
         cell.pack_propagate(False)
         number = tk.Label(cell, text=str(day.day), bg=bg, font=FONT_SMALL_BOLD if day == today else FONT_SMALL,
@@ -6039,11 +6108,15 @@ class CalendarView(tk.Frame):
                         anchor="w", width=1, cursor="hand2", padx=4)
         chip.pack(fill="x", padx=2)
         chip.bg = bg
-        chip.bind("<Button-1>", lambda e: self.app.select_task(task_id))
         chip.bind("<Double-Button-1>", lambda e: (self.app.select_task(task_id), self.app.edit()))
         chip.bind("<Button-3>", lambda e: self.app.show_menu_for(task_id, e.x_root, e.y_root))
-        if not projected:
-            self.chips.setdefault(task_id, []).append(chip)
+        if projected:  # будущий повтор — не отдельная задача, переносить нечего
+            chip.bind("<Button-1>", lambda e: self.app.select_task(task_id))
+            return
+        chip.bind("<Button-1>", lambda e: self.on_press(e, task_id, chip))
+        chip.bind("<B1-Motion>", self.on_motion)
+        chip.bind("<ButtonRelease-1>", self.on_release)
+        self.chips.setdefault(task_id, []).append(chip)
 
     def day_menu(self, items, x, y):
         """«ещё N…»: все задачи дня списком."""
@@ -6067,6 +6140,97 @@ class CalendarView(tk.Frame):
 
     def set_mark(self, task_id, mark):
         """Значков 📎 💬 в календаре нет — места в дне мало."""
+
+    # --- перетаскивание задачи на другой день ---
+    # Как на доске: за курсором едет полупрозрачная копия строки, день под курсором подсвечен.
+
+    def on_press(self, event, task_id, chip):
+        self.drag = {"id": task_id, "chip": chip, "start": (event.x_root, event.y_root),
+                     "offset": (event.x_root - chip.winfo_rootx(), event.y_root - chip.winfo_rooty()),
+                     "ghost": None, "target": None, "pos": None, "pending": False}
+        self.app.select_task(task_id)
+
+    def on_motion(self, event):
+        drag = self.drag
+        if not drag:
+            return
+        if drag["ghost"] is None:
+            sx, sy = drag["start"]
+            if abs(event.x_root - sx) + abs(event.y_root - sy) < 6:
+                return  # ещё не тащим — это просто щелчок
+            if not drag["chip"].winfo_exists():  # календарь успели перерисовать
+                self.drag = None
+                return
+            drag["ghost"] = self.make_ghost(drag["chip"])
+            self.configure(cursor="fleur")
+        drag["pos"] = (event.x_root, event.y_root)
+        if not drag["pending"]:
+            drag["pending"] = True
+            self.after(10, self.follow_mouse)
+
+    def make_ghost(self, chip):
+        """Полупрозрачная копия строки с задачей."""
+        ghost = tk.Toplevel(self)
+        ghost.withdraw()
+        ghost.overrideredirect(True)
+        ghost.attributes("-alpha", 0.9)
+        ghost.attributes("-topmost", True)
+        frame = tk.Frame(ghost, bg=SURFACE, highlightthickness=2, highlightbackground=ACCENT,
+                         width=max(chip.winfo_width(), 120), height=chip.winfo_height() + 6)
+        frame.pack()
+        frame.pack_propagate(False)
+        tk.Label(frame, text=chip.cget("text"), image=chip.cget("image"), compound="left",
+                 bg=SURFACE, fg=TEXT, font=FONT_SMALL, anchor="w", width=1, padx=4).pack(
+            fill="both", expand=True)
+        ox, oy = self.drag["offset"]
+        sx, sy = self.drag["start"]
+        ghost.geometry(f"+{sx - ox}+{sy - oy}")
+        ghost.deiconify()
+        return ghost
+
+    def day_at(self, x, y):
+        """День, над которым курсор (экранные координаты), или None."""
+        for day, cell in self.cells:
+            if not cell.winfo_exists():
+                continue
+            left, top = cell.winfo_rootx(), cell.winfo_rooty()
+            if left <= x < left + cell.winfo_width() and top <= y < top + cell.winfo_height():
+                return day
+        return None
+
+    def mark_day(self, target):
+        for day, cell in self.cells:
+            if cell.winfo_exists():
+                color = ACCENT if day == target else cell.bg
+                cell.configure(highlightbackground=color, highlightcolor=color)
+
+    def follow_mouse(self):
+        drag = self.drag
+        if not drag or drag["ghost"] is None:
+            return
+        drag["pending"] = False
+        x, y = drag["pos"]
+        ox, oy = drag["offset"]
+        drag["ghost"].geometry(f"+{x - ox}+{y - oy}")
+        target = self.day_at(x, y)
+        if target != drag["target"]:  # подсветку меняем, только когда сменился день
+            self.mark_day(target)
+            drag["target"] = target
+
+    def on_release(self, event):
+        drag, self.drag = self.drag, None
+        if not drag or drag["ghost"] is None:
+            return
+        drag["ghost"].destroy()
+        self.configure(cursor="")
+        self.mark_day(None)
+        target = self.day_at(event.x_root, event.y_root)
+        due = self.due_of.get(drag["id"])
+        if target is None or not due or due[:10] == target.isoformat():
+            self.highlight_selected()
+            return
+        # календарь перерисуется после выхода из обработчика события
+        self.after_idle(lambda: self.app.move_due(drag["id"], due, target))
 
 
 class TodoApp:
@@ -6448,7 +6612,7 @@ class TodoApp:
         return {"board": self.board, "matrix": self.matrix, "calendar": self.calendar}.get(self.view.get())
 
     def dragging(self):
-        return bool(self.board.drag or self.matrix.drag)
+        return bool(self.board.drag or self.matrix.drag or self.calendar.drag)
 
     def in_paned(self, widget):
         return str(widget) in (str(p) for p in self.paned.panes())
@@ -7308,7 +7472,7 @@ class TodoApp:
             write_csv(path, header, rows)
             return True
         except OSError as error:
-            ui.showerror(APP_NAME, f"Не удалось сохранить файл:\n{error}\n\n"
+            ui.showerror(APP_NAME, f"Не удалось сохранить файл:\n{error_text(error)}\n\n"
                                  "Если он открыт в Excel — закройте его и попробуйте снова.",
                                  parent=self.root)
             return False
@@ -7347,7 +7511,7 @@ class TodoApp:
         try:
             tasks, notes = prepare_import(self.conn, read_csv(path))
         except OSError as error:
-            ui.showerror(APP_NAME, f"Не удалось открыть файл:\n{error}", parent=self.root)
+            ui.showerror(APP_NAME, f"Не удалось открыть файл:\n{error_text(error)}", parent=self.root)
             return
         except (ValueError, csv.Error) as error:
             ui.showerror(APP_NAME, f"Файл не подходит для импорта.\n\n{error}", parent=self.root)
@@ -7988,6 +8152,23 @@ class TodoApp:
                        by=self.created_by())
         self.refresh(select_id=task_id)
 
+    def move_due(self, task_id, old_due, day):
+        """Задачу перетащили в календаре на другой день: дата срока — новая, время — прежнее."""
+        self.finish_editing()
+        try:
+            moved = db.move_due(self.conn, task_id, old_due, day.isoformat() + old_due[10:],
+                                by=self.created_by())
+        except sqlite3.Error as error:
+            ui.showerror(APP_NAME, f"Не удалось перенести срок:\n{error_text(error)}", parent=self.root)
+            moved = True  # показываем, что в файле на самом деле
+        self.refresh(select_id=task_id)
+        if not moved:
+            ui.showinfo("Срок не перенесён",
+                        "Срок задачи уже успел измениться (в форме задачи или у другого участника) — "
+                        "в календаре теперь её новый вид. Перетащите её ещё раз, если срок всё ещё "
+                        "нужно перенести.",
+                        parent=self.root)
+
     def quick_priority(self, task_id, urgent, important):
         self.finish_editing()
         title, due_at, remind_before, _, _, _ = db.get_task(self.conn, task_id)
@@ -8124,7 +8305,7 @@ class TodoApp:
             try:
                 items.append((Path(path).name, Path(path).read_bytes()))
             except OSError as error:
-                ui.showerror(APP_NAME, f"Не удалось прочитать файл:\n{path}\n\n{error}", parent=self.root)
+                ui.showerror(APP_NAME, f"Не удалось прочитать файл:\n{error_text(error)}", parent=self.root)
         return items
 
     def add_files(self, task_id):
@@ -8193,15 +8374,10 @@ class TodoApp:
                 "компьютере.\n\nОткрывайте, только если доверяете тому, кто приложил файл. "
                 "Запустить?", icon="warning", default="no", parent=self.root):
             return
-        safe = file_name_for_disk(name)
-        folder = DRAFTS_DIR / f"{self.list_id}-{attachment_id}"
         try:
-            folder.mkdir(parents=True, exist_ok=True)
-            path = folder / safe
-            path.write_bytes(data)
-            os.startfile(path)
+            os.startfile(temp_copy(DRAFTS_DIR / f"{self.list_id}-{attachment_id}", name, data))
         except OSError as error:
-            ui.showerror(APP_NAME, f"Не удалось открыть файл:\n{error}", parent=self.root)
+            ui.showerror(APP_NAME, f"Не удалось открыть файл:\n{error_text(error)}", parent=self.root)
 
     def save_attachment(self, attachment_id):
         name = self.attachment_name(attachment_id)
@@ -8211,7 +8387,7 @@ class TodoApp:
             try:
                 Path(path).write_bytes(self.file_data(attachment_id))
             except (OSError, sqlite3.Error) as error:
-                ui.showerror(APP_NAME, f"Не удалось сохранить файл:\n{error}", parent=self.root)
+                ui.showerror(APP_NAME, f"Не удалось сохранить файл:\n{error_text(error)}", parent=self.root)
 
     def delete_attachment(self, attachment_id):
         name = self.attachment_name(attachment_id)
@@ -8969,7 +9145,7 @@ class TodoApp:
         try:
             subprocess.Popen(command, close_fds=True)
         except OSError as error:
-            ui.showerror(APP_NAME, f"Не удалось перезапустить программу: {error}\n\n"
+            ui.showerror(APP_NAME, f"Не удалось перезапустить программу:\n{error_text(error)}\n\n"
                          "Закройте и откройте её сами.", parent=self.root)
             return
         self.close()
@@ -9078,7 +9254,7 @@ class TodoApp:
             image = snip.select_area(self.root)
         except Exception as error:  # noqa: BLE001 — нет Pillow, не удалось снять экран
             image = None
-            ui.showerror(APP_NAME, f"Не удалось сделать снимок экрана:\n{error}",
+            ui.showerror(APP_NAME, f"Не удалось сделать снимок экрана:\n{error_text(error)}",
                          parent=None if self.hidden else self.root)
         finally:
             if shown:

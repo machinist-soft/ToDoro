@@ -670,6 +670,16 @@ def update_task(conn, task_id, title, due_at, remind_before, urgent=False, impor
     return cur.rowcount > 0
 
 
+def move_due(conn, task_id, old_due, new_due, by=None):
+    """Перенос срока (задачу перетащили в календаре на другой день). Сохраняется, только если
+    срок в файле всё ещё old_due — тот, что видели на экране; иначе (задачу тем временем
+    изменил другой участник) ничего не меняется и возвращается False. Напомнить — заново."""
+    with conn:
+        cur = conn.execute(f"UPDATE tasks SET due_at = ?, reminded = 0, {TOUCH_SQL} "
+                           "WHERE id = ? AND due_at IS ?", (new_due, by, task_id, old_due))
+    return cur.rowcount > 0
+
+
 def set_done(conn, task_id, done, by=None):
     """Отметить выполненной — перенести в первую «выполненную» колонку, снять отметку —
     в первую невыполненную. Возвращает False, если подходящей колонки нет."""
