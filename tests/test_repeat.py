@@ -826,7 +826,27 @@ class RepeatFormTests(unittest.TestCase):
 
     def test_option_labels(self):
         self.assertEqual(list(self.T.REPEAT_OPTIONS),
-                         ["Не повторять", "Ежедневно", "Еженедельно", "Ежемесячно", "Ежегодно"])
+                         ["Не повторять", "Ежедневно", "Еженедельно", "Ежемесячно", "Ежеквартально",
+                          "Раз в полгода", "Ежегодно"])
+
+    def test_quarter_and_halfyear_in_form(self):
+        """Квартал и полгода: пункт показывается по ключу из базы и сохраняется обратно ключом."""
+        for key, label in (("quarter", "Ежеквартально"), ("halfyear", "Раз в полгода")):
+            for compact in (False, True):
+                form = self.form(self.task(repeat=key, repeat_until="2027-12-31"), compact=compact)
+                self.assertEqual(form.repeat.get(), label)
+                self.assertIn(label, form.repeat.cget("values"))
+                self.assertTrue(self.until_shown(form))
+                self.assertEqual((form.values()["repeat"], form.values()["repeat_until"]), (key, "2027-12-31"))
+                self.assertFalse(form.dirty())
+                form.destroy()
+        form = self.form(self.task(repeat="month"))
+        form.repeat.set("Раз в полгода")
+        form.repeat_changed()
+        self.assertTrue(self.until_shown(form))
+        self.assertEqual(form.values()["repeat"], "halfyear")
+        self.assertTrue(form.dirty())
+        form.destroy()
 
     def test_values_and_until_visibility(self):
         for compact in (False, True):
@@ -1242,3 +1262,214 @@ class CalendarViewTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------- повтор раз в квартал и раз в полгода ----------
+
+class QuarterHalfyearPeriodTests(unittest.TestCase):
+    """Расчёт сроков для «каждый квартал» (3 месяца) и «раз в полгода» (6 месяцев)."""
+
+    def test_keys_and_months(self):
+        self.assertEqual(list(db.REPEATS), ["day", "week", "month", "quarter", "halfyear", "year"])
+        self.assertEqual(db.REPEAT_MONTHS, {"month": 1, "quarter": 3, "halfyear": 6, "year": 12})
+
+    def test_quarter_31st_becomes_last_day(self):
+        jan31 = datetime(2026, 1, 31, 10, 0)
+        self.assertEqual(db.add_period(jan31, "quarter"), datetime(2026, 4, 30, 10, 0))
+        # счёт от исходного срока: после короткого апреля снова 31-е
+        self.assertEqual(db.add_period(jan31, "quarter", 2), datetime(2026, 7, 31, 10, 0))
+        self.assertEqual(db.add_period(jan31, "quarter", 3), datetime(2026, 10, 31, 10, 0))
+        self.assertEqual(db.add_period(jan31, "quarter", 4), datetime(2027, 1, 31, 10, 0))
+        self.assertEqual(db.add_period(datetime(2026, 11, 30), "quarter"), datetime(2027, 2, 28))
+        self.assertEqual(db.add_period(datetime(2027, 11, 30), "quarter"), datetime(2028, 2, 29))
+
+    def test_halfyear_31st_becomes_end_of_february(self):
+        self.assertEqual(db.add_period(datetime(2025, 8, 31, 9, 0), "halfyear"), datetime(2026, 2, 28, 9, 0))
+        self.assertEqual(db.add_period(datetime(2027, 8, 31, 9, 0), "halfyear"), datetime(2028, 2, 29, 9, 0))
+        self.assertEqual(db.add_period(datetime(2025, 8, 31, 9, 0), "halfyear", 2), datetime(2026, 8, 31, 9, 0))
+        self.assertEqual(db.add_period(datetime(2025, 8, 31, 9, 0), "halfyear", 3), datetime(2027, 2, 28, 9, 0))
+
+    def test_crosses_year(self):
+        self.assertEqual(db.add_period(datetime(2026, 11, 15, 8, 0), "quarter"), datetime(2027, 2, 15, 8, 0))
+        self.assertEqual(db.add_period(datetime(2026, 12, 31), "quarter"), datetime(2027, 3, 31))
+        self.assertEqual(db.add_period(datetime(2026, 10, 20), "halfyear"), datetime(2027, 4, 20))
+        self.assertEqual(db.add_period(datetime(2026, 7, 1), "halfyear"), datetime(2027, 1, 1))
+        self.assertEqual(db.add_period(datetime(2026, 10, 20), "halfyear", 3), datetime(2028, 4, 20))
+        self.assertEqual(db.add_period(datetime(2026, 10, 20), "quarter", 9), datetime(2029, 1, 20))
+
+    def test_leap_day(self):
+        feb29 = datetime(2024, 2, 29, 9, 0)
+        self.assertEqual(db.add_period(feb29, "quarter", 1), datetime(2024, 5, 29, 9, 0))
+        self.assertEqual(db.add_period(feb29, "quarter", 4), datetime(2025, 2, 28, 9, 0))
+        self.assertEqual(db.add_period(feb29, "halfyear", 2), datetime(2025, 2, 28, 9, 0))
+        self.assertEqual(db.add_period(feb29, "halfyear", 8), datetime(2028, 2, 29, 9, 0))
+
+    def test_same_as_months(self):
+        """Квартал = 3 месяца, полгода = 6 месяцев, 2 полугодия = год — при любом числе шагов."""
+        for start in (datetime(2026, 1, 31, 10, 0), datetime(2024, 2, 29), datetime(2026, 12, 31, 23, 59),
+                      datetime(2026, 5, 15, 0, 0)):
+            for steps in range(1, 41):
+                with self.subTest(start=start, steps=steps):
+                    self.assertEqual(db.add_period(start, "quarter", steps),
+                                     db.add_period(start, "month", 3 * steps))
+                    self.assertEqual(db.add_period(start, "halfyear", steps),
+                                     db.add_period(start, "month", 6 * steps))
+                    if steps % 2 == 0:
+                        self.assertEqual(db.add_period(start, "halfyear", steps),
+                                         db.add_period(start, "year", steps // 2))
+
+    def test_next_due_simple(self):
+        now = datetime(2026, 10, 20, 12, 0)
+        self.assertEqual(db.next_due("2026-10-20 09:00", "quarter", now), "2027-01-20 09:00")
+        self.assertEqual(db.next_due("2026-10-20 09:00", "halfyear", now), "2027-04-20 09:00")
+        # выполнили заранее — следующий срок через период после срока, а не после «сейчас»
+        self.assertEqual(db.next_due("2026-12-01 09:00", "quarter", datetime(2026, 10, 1)), "2027-03-01 09:00")
+        self.assertEqual(db.next_due("2026-12-01 09:00", "halfyear", datetime(2026, 10, 1)), "2027-06-01 09:00")
+
+    def test_next_due_late_skips_missed(self):
+        """Опоздали на несколько кварталов/полугодий — пропущенные сроки не создаются,
+        а 31-е число не «съезжает» после короткого месяца."""
+        now = datetime(2026, 10, 21, 12, 0)
+        self.assertEqual(db.next_due("2025-01-31 10:00", "quarter", now), "2026-10-31 10:00")
+        self.assertEqual(db.next_due("2025-08-31 10:00", "halfyear", now), "2027-02-28 10:00")
+        self.assertEqual(db.next_due("2025-08-31 10:00", "halfyear", datetime(2027, 3, 1)), "2027-08-31 10:00")
+        self.assertEqual(db.next_due("2020-05-15 10:00", "halfyear", now), "2026-11-15 10:00")
+        self.assertEqual(db.next_due("2020-05-15 10:00", "quarter", now), "2026-11-15 10:00")
+        # ровно в срок апреля — он уже не «впереди», следующий — 31 июля
+        self.assertEqual(db.next_due("2026-01-31 10:00", "quarter", datetime(2026, 4, 30, 10, 0)),
+                         "2026-07-31 10:00")
+        self.assertEqual(db.next_due("2026-01-31 10:00", "quarter", datetime(2026, 4, 30, 9, 59)),
+                         "2026-04-30 10:00")
+
+    def test_next_due_far_future(self):
+        """У границы календаря (9999 год) — None, а не исключение."""
+        for repeat in ("quarter", "halfyear"):
+            self.assertIsNone(db.next_due("9999-11-30 10:00", repeat, datetime(2026, 10, 20)), repeat)
+
+    def test_first_step_after_minimal(self):
+        """Общий перебор FirstStepAfterTests.test_same_as_step_by_step идёт по db.REPEATS — новые
+        ключи в нём есть; здесь ещё проверка минимальности каждый день на двух годах вперёд."""
+        self.assertTrue({"quarter", "halfyear"} <= set(db.REPEATS))
+        start = datetime(2026, 1, 31, 10, 0)
+        for repeat in ("quarter", "halfyear"):
+            for days in range(800):
+                for minutes in (-1, 0, 1):
+                    moment = start + timedelta(days=days, minutes=minutes)
+                    steps = db.first_step_after(start, repeat, moment)
+                    with self.subTest(repeat=repeat, moment=moment):
+                        self.assertGreater(db.add_period(start, repeat, steps), moment)
+                        if steps > 1:
+                            self.assertLessEqual(db.add_period(start, repeat, steps - 1), moment)
+
+    def test_repeat_text(self):
+        self.assertEqual(db.repeat_text("quarter", "2027-12-31"), "каждый квартал до 31.12.2027")
+        self.assertEqual(db.repeat_text("quarter"), "каждый квартал")
+        self.assertEqual(db.repeat_text("halfyear"), "раз в полгода")
+        self.assertEqual(db.repeat_text("halfyear", "2028-06-30"), "раз в полгода до 30.06.2028")
+        self.assertEqual(db.repeat_text("halfyear", "испорчено"), "раз в полгода")
+
+
+class QuarterHalfyearDbTests(TempDir):
+    """Следующая задача через 3 и 6 месяцев (во временной базе)."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn = db.connect(self.dir / "a.db")
+
+    def tearDown(self):
+        self.conn.close()
+        super().tearDown()
+
+    def task(self, due, repeat, until=None):
+        tid = db.add_task(self.conn, "Отчёт за квартал")
+        db.update_task(self.conn, tid, "Отчёт за квартал", due, None)
+        db.set_repeat(self.conn, tid, repeat, until)
+        return tid
+
+    def due_and_repeat(self, tid):
+        return self.conn.execute("SELECT due_at, repeat, repeat_until FROM tasks WHERE id = ?",
+                                 (tid,)).fetchone()
+
+    def test_saved_and_read(self):
+        for repeat in ("quarter", "halfyear"):
+            tid = self.task("2026-10-20 09:00", repeat, "2027-12-31")
+            self.assertEqual(db.get_repeat(self.conn, tid), (repeat, "2027-12-31"))
+            self.assertEqual(db.repeat_infos(self.conn)[tid], (repeat, "2027-12-31", 0))
+
+    def test_repeat_task_after_3_and_6_months(self):
+        now = datetime(2026, 10, 21, 12, 0)
+        quarter = self.task("2026-10-20 09:00", "quarter", "2027-12-31")
+        halfyear = self.task("2026-08-31 09:00", "halfyear")
+        new_q = db.repeat_task(self.conn, quarter, now=now)
+        new_h = db.repeat_task(self.conn, halfyear, now=now)
+        self.assertEqual(self.due_and_repeat(new_q), ("2027-01-20 09:00", "quarter", "2027-12-31"))
+        self.assertEqual(self.due_and_repeat(new_h), ("2027-02-28 09:00", "halfyear", None))
+        self.assertIsNone(db.repeat_task(self.conn, quarter, now=now))  # следующая уже есть
+        self.assertEqual(self.due_and_repeat(db.repeat_task(self.conn, new_q, now=now))[0], "2027-04-20 09:00")
+
+    def test_set_done_creates_next(self):
+        tid = self.task("2026-10-20 09:00", "halfyear")
+        db.set_done(self.conn, tid, True)
+        rows = self.conn.execute("SELECT due_at, repeat FROM tasks WHERE id != ?", (tid,)).fetchall()
+        self.assertEqual(len(rows), 1)
+        due = datetime.fromisoformat(rows[0][0])
+        self.assertEqual(rows[0][1], "halfyear")
+        self.assertEqual((due.day, due.hour, due.minute), (20, 9, 0))
+        self.assertIn(due.month, (4, 10))  # 20 апреля или 20 октября — зависит от сегодняшней даты
+        self.assertGreater(due, datetime.now())
+
+    def test_until_inclusive(self):
+        now = datetime(2026, 10, 21)
+        self.assertIsNotNone(db.repeat_task(self.conn, self.task("2026-10-20 09:00", "quarter", "2027-01-20"),
+                                            now=now))
+        self.assertIsNone(db.repeat_task(self.conn, self.task("2026-10-20 09:00", "quarter", "2027-01-19"),
+                                         now=now))
+        self.assertIsNone(db.repeat_task(self.conn, self.task("2026-10-20 09:00", "halfyear", "2027-04-19"),
+                                         now=now))
+
+
+class QuarterCalendarTests(unittest.TestCase):
+    """Будущие повторы раз в квартал и раз в полгода в виде «Календарь» (без окна).
+    Сроки в 2030 году и позже — в будущем при любом дне запуска."""
+
+    @classmethod
+    def setUpClass(cls):
+        import todoro
+        cls.T = todoro
+
+    def projected(self, rows, repeats, first, last):
+        fake = SimpleNamespace(app=SimpleNamespace(repeats=repeats),
+                               MAX_PROJECTED=self.T.CalendarView.MAX_PROJECTED)
+        got = self.T.CalendarView.entries(fake, rows, set(), first, last)
+        return got, sorted(day for day, items in got.items() if any(i[6] for i in items))
+
+    def test_quarter_projection(self):
+        rows = [row(1, "2030-01-31 10:00")]
+        got, days = self.projected(rows, {1: ("quarter", None, 0)}, date(2030, 1, 1), date(2030, 12, 31))
+        self.assertEqual(sorted(got), [date(2030, 1, 31), date(2030, 4, 30), date(2030, 7, 31), date(2030, 10, 31)])
+        self.assertEqual(days, [date(2030, 4, 30), date(2030, 7, 31), date(2030, 10, 31)])
+        self.assertEqual(got[date(2030, 4, 30)][0][0], "10:00")
+
+    def test_quarter_month_without_repeat(self):
+        got, _ = self.projected([row(1, "2030-01-31 10:00")], {1: ("quarter", None, 0)},
+                                date(2030, 2, 1), date(2030, 3, 31))
+        self.assertEqual(got, {})
+
+    def test_quarter_far_month(self):
+        """Месяц через много кварталов от срока — повтор этого месяца виден."""
+        _, days = self.projected([row(1, "2030-01-31 10:00")], {1: ("quarter", None, 0)},
+                                 date(2041, 4, 1), date(2041, 4, 30))
+        self.assertEqual(days, [date(2041, 4, 30)])
+
+    def test_quarter_until_and_next(self):
+        _, days = self.projected([row(1, "2030-01-31 10:00")], {1: ("quarter", "2030-07-31", 0)},
+                                 date(2030, 2, 1), date(2030, 12, 31))
+        self.assertEqual(days, [date(2030, 4, 30), date(2030, 7, 31)])
+        _, days = self.projected([row(1, "2030-01-31 10:00")], {1: ("quarter", None, 1)},
+                                 date(2030, 2, 1), date(2030, 12, 31))
+        self.assertEqual(days, [])  # следующая задача уже есть — повторы рисует она
+
+    def test_halfyear_projection(self):
+        _, days = self.projected([row(1, "2030-08-31 09:00")], {1: ("halfyear", None, 0)},
+                                 date(2030, 9, 1), date(2031, 12, 31))
+        self.assertEqual(days, [date(2031, 2, 28), date(2031, 8, 31)])

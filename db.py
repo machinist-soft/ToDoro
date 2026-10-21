@@ -51,7 +51,7 @@ NEW_COLUMNS = [
     ("mail_from", "TEXT"),                          # его отправитель — адресат письма по задаче
     ("initiator", "TEXT"),                          # инициатор (в общих списках); NULL — автор
     ("unit_id", "INTEGER"),                         # бизнес-единица (таблица units); NULL — не указана
-    ("repeat", "TEXT"),                             # повтор: 'day', 'week', 'month', 'year'; NULL — нет
+    ("repeat", "TEXT"),                             # повтор: ключ из REPEATS ('day' … 'year'); NULL — нет
     ("repeat_until", "TEXT"),                       # повторять до 'ГГГГ-ММ-ДД' включительно; NULL — всегда
     ("repeat_next", "INTEGER"),                     # id следующей задачи, созданной по повтору
 ]
@@ -414,17 +414,19 @@ def set_task_status(conn, task_id, status_id, by=None):
 # поставить снова, вторая копия не создаётся (repeat_next помнит, что следующая уже есть).
 
 NOW_SQL = "strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')"
-REPEATS = {"day":"каждый день", "week": "каждую неделю", "month": "каждый месяц", "year": "каждый год"}
+REPEATS = {"day": "каждый день", "week": "каждую неделю", "month": "каждый месяц",
+           "quarter": "каждый квартал", "halfyear": "раз в полгода", "year": "каждый год"}
+REPEAT_MONTHS = {"month": 1, "quarter": 3, "halfyear": 6, "year": 12}  # сколько месяцев в периоде
 
 
 def add_period(when, repeat, steps=1):
-    """Срок через steps периодов. Месяц и год: число сохраняется, а если такого числа в месяце
+    """Срок через steps периодов. Месяц, квартал, полгода и год: число сохраняется, а если такого числа в месяце
     нет (31-е, 29 февраля) — последний день месяца."""
     if repeat == "day":
         return when + timedelta(days=steps)
     if repeat == "week":
         return when + timedelta(weeks=steps)
-    months = steps * (12 if repeat == "year" else 1)
+    months = steps * REPEAT_MONTHS.get(repeat, 1)
     year, month = divmod(when.month - 1 + months, 12)
     year += when.year
     month += 1
@@ -456,7 +458,7 @@ def first_step_after(start, repeat, moment):
             steps = max(1, (moment - start) // timedelta(days=1 if repeat == "day" else 7))
         else:
             months = (moment.year - start.year) * 12 + moment.month - start.month
-            steps = max(1, months // (12 if repeat == "year" else 1))
+            steps = max(1, months // REPEAT_MONTHS[repeat])
     while add_period(start, repeat, steps) <= moment:
         steps += 1
     return steps

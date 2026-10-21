@@ -33,7 +33,8 @@
 - **Умные подсказки** (без интернета): при вводе задачи ToDoro предлагает названия из ваших
   прошлых задач, понимает срок из текста («Сдать отчёт завтра в 10» — срок и напоминание
   поставятся сами), советует «срочно / важно» и список шагов по похожим задачам.
-- **Повторяющиеся задачи**: каждый день, неделю, месяц или год, можно — до заданной даты;
+- **Повторяющиеся задачи**: каждый день, неделю, месяц, квартал,
+  полгода или год, можно — до заданной даты;
   выполнили задачу — сразу появляется следующая с новым сроком.
 - **Напоминания**: в срок окно ToDoro всплывает поверх остальных и показывает все просроченные
   задачи; щелчок по задаче открывает её. Окно можно открыть и самому из меню.
@@ -69,7 +70,7 @@
   сохраняются; «Что нового» во всех версиях — прямо в программе.
 
 *Tasks with due dates, reminders and urgent / important priority · repeating tasks (daily, weekly,
-monthly, yearly, optionally until a date): finish one and the next appears with a new due date · smart hints that work offline:
+monthly, quarterly, half-yearly, yearly, optionally until a date): finish one and the next appears with a new due date · smart hints that work offline:
 title suggestions from your past tasks, due dates understood from the text (“завтра в 10”),
 priority and checklist suggestions from similar tasks · a reminders window with every
 overdue task, one click opens a task · file attachments, pasted

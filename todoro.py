@@ -178,7 +178,8 @@ REMIND_LABELS = {minutes: label for label, minutes in REMIND_OPTIONS.items()}
 
 # Повтор задачи (db.REPEATS): пункт выпадающего списка → ключ в базе
 REPEAT_OPTIONS = {"Не повторять": None, "Ежедневно": "day", "Еженедельно": "week",
-                  "Ежемесячно": "month", "Ежегодно": "year"}
+                  "Ежемесячно": "month", "Ежеквартально": "quarter", "Раз в полгода": "halfyear",
+                  "Ежегодно": "year"}
 REPEAT_LABELS = {key: label for label, key in REPEAT_OPTIONS.items()}
 
 

@@ -135,7 +135,7 @@ for title, unit in (("Подготовить презентацию для кл�
 # повторяющиеся задачи — значок 🔁 в списке и будущие сроки в календаре
 with shared:
     for title, repeat in (("Купить продукты на неделю", "week"), ("Оплатить интернет", "month"),
-                          ("Сдать квартальный отчёт", "month")):
+                          ("Сдать квартальный отчёт", "quarter")):
         shared.execute("UPDATE tasks SET repeat = ? WHERE id = ?", (repeat, ids[title]))
 shared.close()
 share.close()
