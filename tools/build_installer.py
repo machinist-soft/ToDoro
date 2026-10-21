@@ -6,7 +6,7 @@ dist/ToDoro-Setup-<версия>.zip (в некоторых корпоратив
 2. Inno Setup (ISCC.exe) упаковывает эту папку в один установщик.
 
 Запуск из папки проекта:  python tools/build_installer.py
-Нужны: pip install pyinstaller pywin32 segno  и  Inno Setup 6 (https://jrsoftware.org/isdl.php).
+Нужны: pip install pyinstaller pywin32 segno "pillow>=13"  и  Inno Setup 6 (https://jrsoftware.org/isdl.php).
 """
 import os
 import re
@@ -56,7 +56,23 @@ def make_zip(installer):
     return archive
 
 
+MIN_PILLOW = (13, 0)  # в старых версиях Pillow — известные уязвимости (pip-audit, 21.10.2026)
+
+
+def check_pillow():
+    """Pillow попадает в ToDoro.exe и разбирает картинки, приложенные к задачам (в общем списке —
+    от любого участника), поэтому со старой версией не собираем."""
+    try:
+        import PIL
+    except ImportError:
+        sys.exit('Не установлен Pillow: python -m pip install --user "pillow>=13"')
+    if tuple(int(n) for n in re.findall(r"\d+", PIL.__version__)[:2]) < MIN_PILLOW:
+        sys.exit(f"Pillow {PIL.__version__} устарел (нужна {'.'.join(map(str, MIN_PILLOW))} или новее): "
+                 'python -m pip install --user --upgrade "pillow>=13"')
+
+
 def main():
+    check_pillow()
     version = app_version()
     print(f"== ToDoro {version}: собираю ToDoro.exe ==")
     BUILD.mkdir(exist_ok=True)

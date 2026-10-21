@@ -26,7 +26,7 @@ python tools/android_screenshots.py                # Android screenshots via Rob
 python tools/make_images.py / make_icon.py / make_android_icons.py      # regenerate images/ and icons
 ```
 
-Build deps: `pip install pyinstaller pywin32 segno pillow`. Android needs JDK 17+ and SDK 35;
+Build deps: `pip install pyinstaller pywin32 segno "pillow>=13"` (Pillow shows previews of attached pictures — keep it current: `pip-audit`). Android needs JDK 17+ and SDK 35;
 `android/local.properties` points to `D:\Claude\android-tools` (see `android/README.md`).
 
 ## Architecture
