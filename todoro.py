@@ -1577,6 +1577,7 @@ class TaskForm(ttk.Frame):
         grip.bind("<ButtonPress-1>", self.grip_pressed)
         grip.bind("<B1-Motion>", self.grip_moved)
         grip.bind("<ButtonRelease-1>", self.grip_released)
+        grip.bind("<Double-Button-1>", self.grip_reset)
 
         # Поля под описанием — блоками «подпись + поле». В правой панели шире WIDE блоки встают
         # парами в две колонки (layout_fields), в узкой панели и в окне — друг под другом
@@ -1799,6 +1800,20 @@ class TaskForm(ttk.Frame):
             TaskForm.desc_lines = {**TaskForm.desc_lines, self.compact: self.desc_user}
             if TaskForm.remember_desc:
                 TaskForm.remember_desc(self.compact, self.desc_user)
+
+    def grip_reset(self, event=None):
+        """Двойной щелчок по ручке — обычная высота: в правой панели поле снова само занимает
+        свободное место до кнопок, в окне — DESC_LINES строк. Выбранная высота забывается."""
+        self.desc_user = None
+        lines = 5 if self.compact else TaskDialog.DESC_LINES
+        if self.on_desc_resize:
+            self.on_desc_resize(lines)
+        else:
+            self.desc.configure(height=lines)
+        if self.compact in TaskForm.desc_lines:
+            TaskForm.desc_lines = {k: v for k, v in TaskForm.desc_lines.items() if k != self.compact}
+            if TaskForm.remember_desc:
+                TaskForm.remember_desc(self.compact, None)
 
     def focus_title(self):
         self.title_entry.focus_set()
@@ -3433,8 +3448,9 @@ class SidePanel(tk.Frame):
     def fit_description(self, area):
         """Поле «Описание» занимает всё свободное место панели до кнопок «Сохранить / Отмена»:
         высота подбирается при каждом изменении размера панели и содержимого формы (например,
-        появились советы под заголовком). Места нет — остаётся DESC_MIN_LINES строк. Высоту,
-        выбранную ручкой под полем, не уменьшаем — тогда форма прокручивается."""
+        появились советы под заголовком). Места нет — остаётся DESC_MIN_LINES строк. Если
+        высоту выбрали ручкой под полем, поле ровно такое (ниже — под формой пусто, выше — форма
+        прокручивается); двойной щелчок по ручке возвращает подгонку."""
         form, line = self.form, tkfont.Font(font=FONT).metrics("linespace")
         job = [None]
 
@@ -3444,7 +3460,10 @@ class SidePanel(tk.Frame):
                 return  # форму уже закрыли или открыли другую
             free = area.canvas.winfo_height() - area.inner.winfo_reqheight()
             lines = int(form.desc.cget("height"))
-            wanted = max(self.DESC_MIN_LINES, form.desc_user or 0, lines + free // line)
+            if form.desc_user:  # высоту выбрали ручкой — она и остаётся, хоть меньше, хоть больше
+                wanted = form.desc_user
+            else:
+                wanted = max(self.DESC_MIN_LINES, lines + free // line)
             if wanted != lines:
                 form.desc.configure(height=wanted)
 
@@ -6072,8 +6091,8 @@ class TodoApp:
                 continue
             TaskForm.desc_lines[compact] = min(max(saved, TaskForm.DESC_LINES_MIN),
                                                TaskForm.DESC_LINES_MAX)
-        TaskForm.remember_desc = lambda compact, lines: db.set_setting(
-            self.prefs, self.DESC_KEYS[compact], str(lines))
+        TaskForm.remember_desc = lambda compact, lines: db.set_setting(  # None — забыть
+            self.prefs, self.DESC_KEYS[compact], str(lines) if lines else "")
         self.list_conns = {db.PERSONAL: self.prefs}  # открытые списки: id -> соединение
         self.team, self.team_error = None, None      # общая папка (team.Team), если подключена
         self.probe = None      # фоновая проверка связи с общей папкой (team.Probe)

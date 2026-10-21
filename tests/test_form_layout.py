@@ -301,7 +301,8 @@ class GripTests(FormCase):
                  if isinstance(w, tk.Canvas) and str(w.cget("cursor")) == "sb_v_double_arrow"]
         self.assertEqual(len(grips), 1)
         grip = grips[0]
-        for sequence in ("<ButtonPress-1>", "<B1-Motion>", "<ButtonRelease-1>"):
+        for sequence in ("<ButtonPress-1>", "<B1-Motion>", "<ButtonRelease-1>",
+                         "<Double-Button-1>"):
             self.assertTrue(grip.bind(sequence), sequence)
         # ручка — сразу под полем описания, до блоков полей
         packed = form.pack_slaves()
@@ -478,6 +479,40 @@ class GripTests(FormCase):
         self.assertIsNone(form.desc_user)
         self.assertEqual(self.height(form), 5)
 
+    def test_double_click_without_remembered_no_call(self):
+        """Двойной щелчок, когда высота не запомнена, — remember_desc не вызывается."""
+        for compact in (True, False):
+            with self.subTest(compact=compact):
+                self.T.TaskForm.desc_lines = {not compact: 14}
+                calls = self.recorder()
+                form = self.form(compact=compact)
+                form.grip_reset()
+                self.assertEqual(calls, [])
+                self.assertEqual(self.T.TaskForm.desc_lines, {not compact: 14})
+                self.assertEqual(self.height(form), 5 if compact else 6)
+                form.destroy()
+
+    def test_double_click_resets_form_outside_panel(self):
+        """Форма без панели и окна (on_desc_resize не задан): обычная высота ставится сама."""
+        for compact, lines in ((True, 5), (False, 6)):
+            with self.subTest(compact=compact):
+                self.T.TaskForm.desc_lines = {compact: 30}
+                calls = self.recorder()
+                form = self.form(compact=compact)
+                self.assertEqual(self.height(form), 30)
+                form.grip_reset()
+                self.assertIsNone(form.desc_user)
+                self.assertEqual(self.height(form), lines)
+                self.assertEqual(self.T.TaskForm.desc_lines, {})
+                self.assertEqual(calls, [(compact, None)])
+                form.destroy()
+
+    def test_double_click_without_remember_callback(self):
+        self.T.TaskForm.desc_lines = {False: 30}
+        form = self.form(compact=False)
+        form.grip_reset()  # remember_desc не задан — не падает
+        self.assertEqual(self.T.TaskForm.desc_lines, {})
+
     def test_on_desc_resize_replaces_direct_change(self):
         form = self.form(compact=False)
         got = []
@@ -506,7 +541,8 @@ class GripTests(FormCase):
 
 
 class SidePanelGripTests(FormCase):
-    """Правая панель: подгонка описания под свободное место не уменьшает высоту из ручки."""
+    """Правая панель: высота, выбранная ручкой, держится ровно (и меньше, и больше подгонки);
+    без неё поле само занимает свободное место; двойной щелчок по ручке возвращает подгонку."""
 
     def setUp(self):
         super().setUp()
@@ -541,11 +577,72 @@ class SidePanelGripTests(FormCase):
         self.assertIsNone(form.desc_user)
         self.assertEqual(self.height(form), self.T.SidePanel.DESC_MIN_LINES)
 
-    def test_tall_panel_still_fills_when_remembered_small(self):
-        """Запомнили 2 строки, а места много — поле всё равно занимает свободное место."""
+    def free(self, form):
+        area = form.master.master.master
+        return area.canvas.winfo_height() - area.inner.winfo_reqheight()
+
+    def test_tall_panel_keeps_remembered_small(self):
+        """Запомнили 2 строки, а места много — поле ровно 2 строки, под формой пусто."""
         self.T.TaskForm.desc_lines = {True: 2}
         form = self.open(1000)
+        self.assertEqual(self.height(form), 2)
+        self.assertGreater(self.free(form), self.line)
+
+    def test_tall_panel_fills_without_remembered(self):
+        form = self.open(1000)
         self.assertGreater(self.height(form), self.T.SidePanel.DESC_MIN_LINES)
+        self.assertGreaterEqual(self.free(form), 0)
+        self.assertLess(self.free(form), self.line)
+
+    def test_shrink_in_tall_panel(self):
+        """Ошибка: в высокой панели поле, уменьшенное ручкой, тут же растягивалось обратно.
+        Теперь уменьшается и остаётся таким после пересчёта панели."""
+        form = self.open(1000)
+        big = self.height(form)
+        self.assertGreater(big, 8)
+        self.press(form, 500)
+        self.move(form, 500 - 4 * self.line)
+        self.settle()
+        self.assertEqual(self.height(form), big - 4)
+        self.release(form)
+        self.settle()
+        self.assertEqual(self.height(form), big - 4)
+        self.root.geometry("330x1010" + OFFSCREEN)  # панель пересчитывает высоту описания
+        self.settle()
+        self.assertEqual(self.height(form), big - 4)
+        self.assertGreater(self.free(form), self.line)  # под формой пусто — так и задумано
+
+    def test_double_click_in_panel_restores_fit(self):
+        """Двойной щелчок по ручке: поле снова заполняет панель, высота панели забыта
+        (высота окна остаётся), remember_desc(True, None)."""
+        self.T.TaskForm.desc_lines = {True: 3, False: 9}
+        calls = self.recorder()
+        form = self.open(1000)
+        self.assertEqual(self.height(form), 3)
+        form.grip_reset()
+        self.settle()
+        self.assertIsNone(form.desc_user)
+        self.assertGreater(self.height(form), self.T.SidePanel.DESC_MIN_LINES)
+        self.assertGreaterEqual(self.free(form), 0)
+        self.assertLess(self.free(form), self.line)
+        self.assertEqual(self.T.TaskForm.desc_lines, {False: 9})
+        self.assertEqual(calls, [(True, None)])
+
+    def test_double_click_after_drag_restores_fit(self):
+        """Потянули (ничего не запомнено), затем двойной щелчок — подгонка вернулась,
+        remember_desc не вызывается."""
+        calls = self.recorder()
+        form = self.open(1000)
+        fitted = self.height(form)
+        self.press(form, 500)
+        self.move(form, 500 - 3 * self.line)
+        self.settle()
+        self.assertEqual(self.height(form), fitted - 3)
+        form.grip_reset()
+        self.settle()
+        self.assertEqual(self.height(form), fitted)
+        self.assertEqual(calls, [])
+        self.assertEqual(self.T.TaskForm.desc_lines, {})
 
     def test_drag_in_panel_survives_refit(self):
         form = self.open(500)
@@ -675,6 +772,31 @@ class DialogGripTests(FormCase):
         self.assertIsNone(dialog.form.desc_user)
         self.assertEqual(dialog.desc_max, self.T.TaskDialog.DESC_LINES)
         self.assertEqual(self.height(dialog.form), self.T.TaskDialog.DESC_LINES)
+
+    def test_double_click_in_dialog_restores_six_lines(self):
+        """Двойной щелчок в окне: 6 строк, окно сжимается, высота окна забыта, панели — нет."""
+        self.T.TaskForm.desc_lines = {False: 20, True: 7}
+        calls = self.recorder()
+        dialog = self.dialog((0, 0, 1920, 3000))
+        self.assertEqual(self.height(dialog.form), 20)
+        before = dialog.winfo_height()
+        dialog.form.grip_reset()
+        self.settle(dialog)
+        self.assertEqual(self.height(dialog.form), self.T.TaskDialog.DESC_LINES)
+        self.assertEqual(dialog.desc_max, self.T.TaskDialog.DESC_LINES)
+        self.assertEqual(dialog.desc_lines, self.T.TaskDialog.DESC_LINES)
+        self.assertLess(dialog.winfo_height(), before)
+        self.assertEqual(self.T.TaskForm.desc_lines, {True: 7})
+        self.assertEqual(calls, [(False, None)])
+        self.assert_inside(dialog, self.area)
+
+    def test_double_click_in_dialog_without_remembered(self):
+        calls = self.recorder()
+        dialog = self.dialog((0, 0, 1920, 3000))
+        dialog.form.grip_reset()
+        self.settle(dialog)
+        self.assertEqual(self.height(dialog.form), self.T.TaskDialog.DESC_LINES)
+        self.assertEqual(calls, [])
 
     def test_drag_in_dialog_remembered_for_window_only(self):
         self.T.TaskForm.desc_lines = {True: 40}
@@ -825,6 +947,18 @@ class AppSettingTests(unittest.TestCase):
         self.assertEqual(self.setting(app, "desc_lines_window"), "9")
         self.assertEqual(self.setting(app, "desc_lines_panel"), "23")
         self.assertEqual(self.setting(app, "desc_lines"), "нет настройки")
+
+    def test_forget_writes_empty_and_skipped_on_start(self):
+        """remember_desc(..., None) (двойной щелчок по ручке) пишет пустую строку; при следующем
+        запуске такая настройка пропускается."""
+        app = self.make_app(desc_lines_panel="23", desc_lines_window="9")
+        self.assertEqual(self.T.TaskForm.desc_lines, {True: 23, False: 9})
+        self.T.TaskForm.remember_desc(True, None)
+        self.assertEqual(self.setting(app, "desc_lines_panel"), "")
+        self.assertEqual(self.setting(app, "desc_lines_window"), "9")
+        self.close_apps()
+        self.make_app()
+        self.assertEqual(self.T.TaskForm.desc_lines, {False: 9})
 
     def test_saved_heights_used_by_forms(self):
         """После перезапуска формы открываются каждая со своей сохранённой высотой."""
