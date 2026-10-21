@@ -819,7 +819,9 @@ class RepeatFormTests(unittest.TestCase):
             self.assertNotEqual(int(form.until.grid_info()["column"]), int(form.repeat.grid_info()["column"]))
             self.assertEqual(int(form.until.grid_info()["row"]), int(form.repeat.grid_info()["row"]))
             self.assertEqual([w for w in form.until.winfo_children() if isinstance(w, tk.ttk.Button)], [])
-            self.assertEqual(int(form.until.entry.cget("width")), 10)
+            self.assertEqual(int(form.until.entry.cget("width")), 9)
+            self.assertEqual(str(form.until.entry.cget("style")), "Date.TEntry")
+            self.assertEqual([w.cget("text") for w in form.until.entry.winfo_children()], ["📅"])
             form.destroy()
 
     def test_option_labels(self):
@@ -894,24 +896,99 @@ class RepeatFormTests(unittest.TestCase):
             form.save()
         self.assertIsNone(self.saved[-1]["repeat_until"])
 
+    def icon(self, picker):
+        icons = [w for w in picker.entry.winfo_children() if isinstance(w, tk.Label)]
+        self.assertEqual(len(icons), 1)
+        return icons[0]
+
     def test_date_picker_without_button(self):
-        """DatePicker(button=False): кнопки 📅 нет, календарь открывается щелчком по полю."""
+        """DatePicker(button=False): отдельной кнопки нет, значок 📅 — внутри поля справа (стиль
+        Date.TEntry оставляет под него место); у обычного поля — кнопка и стиль TEntry."""
         with_button = self.T.DatePicker(self.top)
         self.assertEqual(len([w for w in with_button.winfo_children() if isinstance(w, tk.ttk.Button)]), 1)
         self.assertEqual(int(with_button.entry.cget("width")), 11)
+        self.assertIn(str(with_button.entry.cget("style")), ("", "TEntry"))
+        self.assertEqual(with_button.entry.winfo_children(), [])
         with_button.destroy()
-        picker = self.T.DatePicker(self.top, date(2026, 10, 20), button=False, width=10)
+        picker = self.T.DatePicker(self.top, date(2026, 10, 20), button=False, width=9)
         picker.pack()
         self.top.update()
         self.assertEqual([w for w in picker.winfo_children() if isinstance(w, tk.ttk.Button)], [])
-        self.assertEqual(int(picker.entry.cget("width")), 10)
+        self.assertEqual(int(picker.entry.cget("width")), 9)
+        self.assertEqual(str(picker.entry.cget("style")), "Date.TEntry")
+        right = tk.ttk.Style(self.top).lookup("Date.TEntry", "padding")
+        self.assertTrue(right, "у стиля Date.TEntry нет отступов")
+        icon = self.icon(picker)
+        self.assertEqual(icon.cget("text"), "📅")
+        place = icon.place_info()
+        self.assertEqual((place["relx"], place["anchor"]), ("1", "e"))
+        # значок у правого края поля и целиком внутри него
+        self.assertLessEqual(icon.winfo_x() + icon.winfo_width(), picker.entry.winfo_width())
+        self.assertGreater(icon.winfo_x(), picker.entry.winfo_width() // 2)
+
+    def test_click_on_field_and_icon_toggles_popup(self):
+        picker = self.T.DatePicker(self.top, date(2026, 10, 20), button=False, width=9)
+        picker.pack()
+        self.top.update()
         picker.close_if_unfocused = lambda: None
+        icon = self.icon(picker)
         with mock.patch.object(self.T, "close_when_inactive", lambda *a, **k: None):
-            picker.entry.event_generate("<Button-1>", x=5, y=5)
-            self.top.update_idletasks()
-            self.assertIsNotNone(picker.popup)  # щелчок по полю открыл календарь
-            picker.entry.event_generate("<Button-1>", x=5, y=5)
-            self.assertIsNone(picker.popup)  # второй щелчок — закрыл
+            for widget in (picker.entry, icon, picker.entry):
+                widget.event_generate("<Button-1>", x=3, y=3)
+                self.top.update_idletasks()
+                self.assertIsNotNone(picker.popup, widget)  # щелчок открыл календарь
+                widget.event_generate("<Button-1>", x=3, y=3)
+                self.assertIsNone(picker.popup, widget)  # второй щелчок — закрыл
+
+    def test_click_handlers_break(self):
+        """Обработчики щелчка по полю и по значку возвращают "break": привязки дальше по цепочке
+        (класс ttk.Entry, который забирает фокус, — из-за него календарь сразу закрывался) не
+        выполняются. Проверяем меткой, вставленной в bindtags сразу после виджета."""
+        for button in (False, True):
+            picker = self.T.DatePicker(self.top, date(2026, 10, 20), button=button)
+            picker.pack()
+            self.top.update()
+            picker.close_if_unfocused = lambda: None
+            widgets = [picker.entry] + ([] if button else [self.icon(picker)])
+            for widget in widgets:
+                reached = []
+                tag = f"after_{id(widget)}"
+                self.top.bind_class(tag, "<Button-1>", lambda e: reached.append(1))
+                tags = widget.bindtags()
+                widget.bindtags((tags[0], tag) + tags[1:])
+                with mock.patch.object(self.T, "close_when_inactive", lambda *a, **k: None):
+                    widget.event_generate("<Button-1>", x=3, y=3)
+                self.assertIsNotNone(picker.popup)
+                self.assertEqual(reached, [], f"щелчок прошёл дальше обработчика: {widget}")
+                picker.close_popup()
+            picker.destroy()
+
+    def wait(self, ms):
+        """Обработать события Tk за ms миллисекунд (в том числе отложенные через after)."""
+        import time as time_module
+        end = time_module.monotonic() + ms / 1000
+        while time_module.monotonic() < end:
+            self.top.update()
+            time_module.sleep(0.01)
+
+    def check_click_keeps_popup(self, picker):
+        picker.pack()
+        self.top.update()
+        with mock.patch.object(self.T, "close_when_inactive", lambda *a, **k: None):
+            picker.entry.event_generate("<Button-1>", x=5, y=5)  # привязка поля, затем класса TEntry
+            self.wait(400)  # <FocusOut> закрыл бы календарь через 150 мс
+            self.assertIsNotNone(picker.popup, "календарь закрылся сразу после щелчка по полю")
+            self.assertTrue(picker.popup.winfo_exists())
+            focus = picker.popup.focus_get()
+            self.assertNotEqual(focus, picker.entry, "щелчок по полю забрал фокус у календаря")
+            picker.close_popup()
+
+    def test_click_on_field_keeps_popup_open(self):
+        """Щелчок по полю даты (и «До» без кнопки, и обычное поле срока): календарь остаётся открытым.
+        Раньше класс ttk.Entry после нашей привязки ставил фокус на поле, у календаря срабатывал
+        <FocusOut>, и через 150 мс он закрывался."""
+        self.check_click_keeps_popup(self.T.DatePicker(self.top, date(2026, 10, 20), button=False, width=10))
+        self.check_click_keeps_popup(self.T.DatePicker(self.top, date(2026, 10, 20)))
 
     def test_date_picker_texts(self):
         picker = self.T.DatePicker(self.top)

@@ -401,6 +401,7 @@ def setup_style(root):
               bordercolor=[("focus", ACCENT)], lightcolor=[("focus", ACCENT)],
               fieldbackground=[("readonly", SURFACE)])
     style.configure("Placeholder.TEntry", foreground=DONE)
+    style.configure("Date.TEntry", padding=(6, 6, 22, 6))  # справа — место под значок 📅 (DatePicker)
     style.configure("TCombobox", fieldbackground=SURFACE, background=SURFACE, foreground=TEXT,
                     lightcolor=SURFACE, darkcolor=SURFACE, arrowcolor=MUTED, padding=(6, 4),
                     insertcolor=TEXT)  # курсор в списке, куда можно вписать своё (инициатор)
@@ -1182,7 +1183,7 @@ class DatePicker(ttk.Frame):
     def __init__(self, parent, value=None, on_change=None, empty="Не задан", clear="Без срока",
                  button=True, width=11):
         """empty — надпись в поле, пока дата не выбрана; clear — ссылка «убрать дату» в календаре;
-        button=False — без кнопки 📅 (календарь открывается щелчком по полю; для тесных мест)."""
+        button=False — значок 📅 не отдельной кнопкой, а внутри поля (для тесных мест)."""
         super().__init__(parent)
         self.value = value
         self.on_change = on_change
@@ -1191,12 +1192,17 @@ class DatePicker(ttk.Frame):
         self.text = tk.StringVar()
 
         self.entry = ttk.Entry(self, textvariable=self.text, font=FONT, width=width,
-                               state="readonly", cursor="hand2")
+                               state="readonly", cursor="hand2", style="TEntry" if button else "Date.TEntry")
         self.entry.pack(side="left")
-        self.entry.bind("<Button-1>", lambda e: self.toggle_popup())
+        # "break": иначе поле после щелчка забирает фокус у календаря, и тот сразу закрывается
+        self.entry.bind("<Button-1>", lambda e: (self.toggle_popup(), "break")[1])
         if button:
             ttk.Button(self, text="📅", style="Icon.TButton", width=3, cursor="hand2",
                        command=self.toggle_popup).pack(side="left", padx=(4, 0))
+        else:  # тесно — значок внутри поля, у правого края
+            icon = tk.Label(self.entry, text="📅", bg=SURFACE, fg=MUTED, font=FONT_SMALL, cursor="hand2")
+            icon.place(relx=1, rely=0.5, x=-4, anchor="e")
+            icon.bind("<Button-1>", lambda e: (self.toggle_popup(), "break")[1])
         self.show()
 
     def set(self, value):
@@ -1649,7 +1655,7 @@ class TaskForm(ttk.Frame):
                                                                        pady=(0, 4))
         self.repeat = ttk.Combobox(repeat_row, values=list(REPEAT_OPTIONS), state="readonly",
                                    width=1 if compact else 14, font=FONT)
-        self.repeat.grid(row=1, column=0, sticky="we", padx=(0, 8))
+        self.repeat.grid(row=1, column=0, sticky="we", padx=(0, 4))
         self.repeat.set(REPEAT_LABELS.get(task.get("repeat"), "Не повторять"))
         self.repeat.bind("<<ComboboxSelected>>", lambda e: self.repeat_changed())
         until = task.get("repeat_until")
@@ -1659,7 +1665,7 @@ class TaskForm(ttk.Frame):
             until = None
         self.until_label = ttk.Label(repeat_row, text="До", style=label_style)
         self.until = DatePicker(repeat_row, until, empty="без конца", clear="Без конца", button=False,
-                                width=10)
+                                width=9)  # дата целиком; значок 📅 — в отступе справа (Date.TEntry)
         self.until.configure(style=self["style"])
         self.until_parts = ((self.until_label, dict(row=0, column=1, sticky="w", pady=(0, 4))),
                             (self.until, dict(row=1, column=1, sticky="w")))
