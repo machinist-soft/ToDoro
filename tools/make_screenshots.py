@@ -257,11 +257,13 @@ def run():
     if wanted("card"):  # 3. Карточка задачи справа
         select("Сдать квартальный отчёт")
         grab("card.png")
-    if wanted("form"):  # 4. Форма изменения задачи (с исполнителем)
+    if wanted("form"):  # 4. Форма изменения задачи (с исполнителем) — в широкой панели, поля в две колонки
         select("Подготовить презентацию для клиента")
+        app.paned.paneconfigure(app.side, width=600)
         app.edit()
         grab("form.png")
         app.cancel_edit()
+        app.paned.paneconfigure(app.side, width=app.panel_width)
     if wanted("files") or wanted("comments"):  # 4б. Вкладки «Файлы» и «Комментарии» в карточке
         shoot_card_tabs()
     app.clear_selection()  # после card/form — дальше снимки без выделенной задачи, как при полной съёмке
