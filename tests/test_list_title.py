@@ -14,7 +14,7 @@ import todoro  # noqa: E402
 
 
 def fake_app(counts=None, mail=(), column_sort=None):
-    fake = SimpleNamespace(extra_counts=counts or {}, mail_ids=set(mail),
+    fake = SimpleNamespace(extra_counts=counts or {}, mail_ids=set(mail), repeats={},
                            column_sort=column_sort, authors={}, assignees={}, unit_names={},
                            sort_key=lambda row: row[0])
     fake.marks_order = lambda task_id: todoro.TodoApp.marks_order(fake, task_id)
@@ -83,10 +83,11 @@ class MarksOrderTests(unittest.TestCase):
         self.assertIsNone(order(1, {2: (3, 3)}, mail={2}))
 
     def test_values(self):
-        self.assertEqual(order(1, {1: (2, 3)}), (-2, -3, 0))
-        self.assertEqual(order(1, {1: (0, 1)}), (0, -1, 0))
-        self.assertEqual(order(1, mail={1}), (0, 0, -1))
-        self.assertEqual(order(1, {1: (1, 0)}, mail={1}), (-1, 0, -1))
+        # последнее число — повтор (🔁): у этих задач его нет
+        self.assertEqual(order(1, {1: (2, 3)}), (-2, -3, 0, 0))
+        self.assertEqual(order(1, {1: (0, 1)}), (0, -1, 0, 0))
+        self.assertEqual(order(1, mail={1}), (0, 0, -1, 0))
+        self.assertEqual(order(1, {1: (1, 0)}, mail={1}), (-1, 0, -1, 0))
 
     def test_files_before_comments_before_mail(self):
         """Больше файлов — выше; при равных файлах — больше комментариев; потом письмо."""

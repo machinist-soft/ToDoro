@@ -257,7 +257,7 @@ class InitiatorAppTests(TempDir):
         """Минимум TodoApp, нужный apply_edit/form_data/people/resolve_conflict."""
         T = self.T
         app = SimpleNamespace(conn=conn, list_id="team" if shared else None, refreshed=[],
-                              unit_names={})
+                              unit_names={}, repeats={})
         app.created_by = lambda: user if shared else None
         app.members = lambda: ["Анна", "Борис"] if shared else None
         app.current_list = lambda: {"shared": shared, "name": "Команда"}

@@ -33,12 +33,15 @@
 - **Умные подсказки** (без интернета): при вводе задачи ToDoro предлагает названия из ваших
   прошлых задач, понимает срок из текста («Сдать отчёт завтра в 10» — срок и напоминание
   поставятся сами), советует «срочно / важно» и список шагов по похожим задачам.
+- **Повторяющиеся задачи**: каждый день, неделю, месяц или год, можно — до заданной даты;
+  выполнили задачу — сразу появляется следующая с новым сроком.
 - **Напоминания**: в срок окно ToDoro всплывает поверх остальных и показывает все просроченные
   задачи; щелчок по задаче открывает её. Окно можно открыть и самому из меню.
 - **Файлы, картинки и комментарии** в каждой задаче: приложите документ или снимок экрана
   (Ctrl+V), обсудите задачу с командой прямо в её карточке.
-- **Список, канбан-доска и матрица Эйзенхауэра**: свои колонки-статусы с цветами, перетаскивание
+- **Список, канбан-доска, матрица Эйзенхауэра и календарь**: свои колонки-статусы с цветами, перетаскивание
   карточек и колонок; в матрице карточку переносят в другую четверть — меняется приоритет;
+  календарь показывает задачи по срокам на месяц, с будущими повторами;
   фильтры «Все / Активные / Выполненные / Просроченные», **поиск** (Ctrl+F), сортировка
   по любому столбцу; столбцы списка можно менять местами перетаскиванием.
 - **Несколько списков**: личные и **общие для команды** — в общей сетевой папке, в том числе
@@ -65,12 +68,14 @@
 - **Обновления в один клик**: программа сама сообщает о новой версии и ставит её — задачи
   сохраняются; «Что нового» во всех версиях — прямо в программе.
 
-*Tasks with due dates, reminders and urgent / important priority · smart hints that work offline:
+*Tasks with due dates, reminders and urgent / important priority · repeating tasks (daily, weekly,
+monthly, yearly, optionally until a date): finish one and the next appears with a new due date · smart hints that work offline:
 title suggestions from your past tasks, due dates understood from the text (“завтра в 10”),
 priority and checklist suggestions from similar tasks · a reminders window with every
 overdue task, one click opens a task · file attachments, pasted
 screenshots and comments in every task · list, kanban board with
 custom columns and Eisenhower matrix (drag a card to another quadrant to change its priority),
+a month calendar with upcoming repeats,
 filters, search, column sorting and drag-to-reorder columns · an optional business unit per task,
 picked from each list’s own directory · several lists, personal and shared with a team via a network
 folder (VPN works) · an Android app: personal and shared lists on your phone, comments, works offline,
@@ -99,6 +104,13 @@ CSV export / import, e-mail a task, built-in help · one-click updates and an in
 *Tasks sorted by urgent and important; drag a card to another quadrant to change its priority.*
 
 ![Матрица Эйзенхауэра / Eisenhower matrix](docs/screenshots/matrix.png)
+
+### Календарь и повторяющиеся задачи / Calendar and repeating tasks
+
+Задачи на месяц по срокам; бледные строки с 🔁 — будущие сроки повторяющихся задач. Двойной щелчок по дню — новая задача на этот день.
+*A month of tasks by due date; faded 🔁 lines are upcoming repeats. Double-click a day to add a task for it.*
+
+![Календарь / Calendar](docs/screenshots/calendar.png)
 
 ### Умные подсказки / Smart hints
 

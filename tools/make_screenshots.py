@@ -31,7 +31,7 @@ import db  # noqa: E402
 DARK = "dark" in sys.argv[1:]  # python tools/make_screenshots.py dark — только снимок тёмной темы
 # снимки светлой темы (имена файлов без .png); catbus — анимация catbus.gif
 SHOTS = ("list", "lists", "card", "form", "files", "comments", "outlook", "snip", "smart", "board",
-         "matrix", "tour", "settings", "about", "whatsnew", "reminders", "phone", "update", "catbus")
+         "matrix", "calendar", "tour", "settings", "about", "whatsnew", "reminders", "phone", "update", "catbus")
 # python tools/make_screenshots.py card files — только эти снимки; без имён — все
 WANTED = {name.removesuffix(".png").removesuffix(".gif") for name in sys.argv[1:]}
 DARK = DARK or "dark" in WANTED
@@ -132,6 +132,11 @@ for title, unit in (("Подготовить презентацию для кл�
                     ("Забрать посылку на почте", "Офис")):
     with shared:  # напрямую: set_task_unit записал бы «изменил» без имени и время «сейчас»
         shared.execute("UPDATE tasks SET unit_id = ? WHERE id = ?", (units[unit], ids[title]))
+# повторяющиеся задачи — значок 🔁 в списке и будущие сроки в календаре
+with shared:
+    for title, repeat in (("Купить продукты на неделю", "week"), ("Оплатить интернет", "month"),
+                          ("Сдать квартальный отчёт", "month")):
+        shared.execute("UPDATE tasks SET repeat = ? WHERE id = ?", (repeat, ids[title]))
 shared.close()
 share.close()
 
@@ -274,6 +279,10 @@ def run():
         app.view.set("matrix")
         app.switch_view()
         grab("matrix.png")
+    if wanted("calendar"):  # 5в. Календарь: задачи по срокам и будущие повторы
+        app.view.set("calendar")
+        app.switch_view()
+        grab("calendar.png")
     app.view.set("list")
     app.switch_view()
     app.clear_selection()

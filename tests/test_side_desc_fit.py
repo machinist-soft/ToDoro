@@ -157,7 +157,7 @@ class SideDescFitTests(unittest.TestCase):
             self.root.update_idletasks()
             self.panel.show_form(task("вторая"), STATUSES, noop, noop)
             self.settle()
-            self.resize(800)
+            self.resize(850)  # в 800 форма (с полем «Повторять») при 5 строках описания уже не помещается
         report.assert_not_called()
         self.assertEqual(self.panel.form.title_entry.get(), "вторая")
         self.assert_fills()

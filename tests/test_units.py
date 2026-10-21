@@ -354,7 +354,7 @@ class UnitsAppTests(TempDir):
         T = self.T
         app = SimpleNamespace(conn=conn, list_id="team" if shared else None, refreshed=[],
                               authors={}, assignees={}, unit_names={}, search_query="",
-                              extra_counts={}, mail_ids=set(), column_sort=None)
+                              extra_counts={}, mail_ids=set(), repeats={}, column_sort=None)
         app.created_by = lambda: user if shared else None
         app.members = lambda: ["Анна", "Борис"] if shared else None
         app.current_list = lambda: {"shared": shared, "name": "Список"}

@@ -176,6 +176,11 @@ REMIND_OPTIONS = {
 }
 REMIND_LABELS = {minutes: label for label, minutes in REMIND_OPTIONS.items()}
 
+# Повтор задачи (db.REPEATS): пункт выпадающего списка → ключ в базе
+REPEAT_OPTIONS = {"Не повторять": None, "Каждый день": "day", "Каждую неделю": "week",
+                  "Каждый месяц": "month", "Каждый год": "year"}
+REPEAT_LABELS = {key: label for label, key in REPEAT_OPTIONS.items()}
+
 
 def remind_label(minutes):
     """Подпись напоминания: «За 1 час»; своё время (например, из файла CSV) — «За 1 ч 30 мин»."""
@@ -719,13 +724,15 @@ def short_time(stamp):
 
 
 MAIL_MARK = "📧"  # значок задачи, созданной из письма Outlook
+REPEAT_MARK = "🔁"  # значок повторяющейся задачи
 
 
-def extras_mark(counts, from_mail=False):
-    """'   📧  📎 2  💬 3' — задача из письма Outlook, сколько у неё файлов и комментариев
-    (или '', если ничего нет)."""
+def extras_mark(counts, from_mail=False, repeat=False):
+    """'   🔁  📧  📎 2  💬 3' — задача повторяется, создана из письма Outlook, сколько у неё файлов
+    и комментариев (или '', если ничего нет)."""
     files, comments = counts or (0, 0)
-    parts = ([MAIL_MARK] if from_mail else []) + ([f"📎 {files}"] if files else []) + (
+    parts = ([REPEAT_MARK] if repeat else []) + ([MAIL_MARK] if from_mail else []) + (
+        [f"📎 {files}"] if files else []) + (
         [f"💬 {comments}"] if comments else [])
     return "   " + "  ".join(parts) if parts else ""
 
@@ -784,7 +791,7 @@ def short_text(text, limit=60):
 
 
 def build_email(number, title, status, priority, due, remind, created, urgent, body="", author="",
-                assignee="", unit=""):
+                assignee="", unit="", repeat=""):
     """Тема и текст письма по задаче: в теме — заголовок, в тексте — описание и все поля."""
     subject = f"Задача из {APP_NAME}: {short_text(title)}"
     if urgent:
@@ -798,6 +805,7 @@ def build_email(number, title, status, priority, due, remind, created, urgent, b
         f"Приоритет: {priority} — {level_hint}" if priority else "Приоритет: обычный",
         f"Срок: {due or 'не задан'}",
         f"Напоминание: {remind or 'нет'}",
+        *([f"Повтор: {repeat}"] if repeat else []),
         f"Создана: {created}",
         *([f"Инициатор: {author}"] if author else []),
         *([f"Исполнитель: {assignee}"] if assignee else []),
@@ -1171,10 +1179,12 @@ class ui:
 class DatePicker(ttk.Frame):
     """Поле даты с выпадающим календарём."""
 
-    def __init__(self, parent, value=None, on_change=None):
+    def __init__(self, parent, value=None, on_change=None, empty="Не задан", clear="Без срока"):
+        """empty — надпись в поле, пока дата не выбрана; clear — ссылка «убрать дату» в календаре."""
         super().__init__(parent)
         self.value = value
         self.on_change = on_change
+        self.empty, self.clear = empty, clear
         self.popup = None
         self.text = tk.StringVar()
 
@@ -1194,7 +1204,7 @@ class DatePicker(ttk.Frame):
             self.on_change()
 
     def show(self):
-        self.text.set(self.value.strftime("%d.%m.%Y") if self.value else "Не задан")
+        self.text.set(self.value.strftime("%d.%m.%Y") if self.value else self.empty)
 
     # --- выпадающий календарь ---
 
@@ -1285,7 +1295,7 @@ class DatePicker(ttk.Frame):
         footer.grid(row=len(weeks) + 2, column=0, columnspan=7, sticky="we", pady=(8, 0))
         self.clickable(footer, "Сегодня", lambda: self.set(today),
                        fg=ACCENT, font=FONT_SMALL).pack(side="left")
-        self.clickable(footer, "Без срока", lambda: self.set(None),
+        self.clickable(footer, self.clear, lambda: self.set(None),
                        fg=MUTED, font=FONT_SMALL).pack(side="right")
 
 
@@ -1617,6 +1627,26 @@ class TaskForm(ttk.Frame):
         self.remind.set(next(label for label, minutes in self.remind_options.items()
                              if minutes == task["remind_before"]))
 
+        # Повтор: выполнили задачу — появляется такая же со следующим сроком (db.repeat_task)
+        label("Повторять")
+        self.repeat = ttk.Combobox(self, values=list(REPEAT_OPTIONS), state="readonly",
+                                   width=1 if compact else 18, font=FONT)
+        self.repeat.pack(fill="x" if compact else None, anchor="w")
+        self.repeat.set(REPEAT_LABELS.get(task.get("repeat"), "Не повторять"))
+        self.repeat.bind("<<ComboboxSelected>>", lambda e: self.repeat_changed())
+        self.until_row = ttk.Frame(self, style=self["style"])
+        ttk.Label(self.until_row, text="до", style=label_style if compact else "TLabel").pack(
+            side="left", padx=(0, 8))
+        until = task.get("repeat_until")
+        try:
+            until = date.fromisoformat(until) if until else None
+        except ValueError:
+            until = None
+        self.until = DatePicker(self.until_row, until, empty="без конца", clear="Без конца")
+        self.until.configure(style=self["style"])
+        self.until.pack(side="left")
+        self.repeat_changed()
+
         if not compact:  # в правой панели кнопки — в нижней строке панели (SidePanel.show_form)
             buttons = ttk.Frame(self, style=self["style"])
             buttons.pack(fill="x", pady=(18, 0))
@@ -1775,12 +1805,22 @@ class TaskForm(ttk.Frame):
         )
 
     def date_changed(self):
-        """Без даты время и напоминание выбирать нельзя."""
+        """Без даты время, напоминание и повтор выбирать нельзя (повтор отсчитывается от срока)."""
         has_date = self.date.value is not None
-        for combo in (self.hour, self.minute, self.remind):
+        for combo in (self.hour, self.minute, self.remind, self.repeat):
             combo.configure(state="readonly" if has_date else "disabled")
         if not has_date:
             self.remind.set("Не напоминать")
+            self.repeat.set("Не повторять")
+        self.repeat_changed()
+
+    def repeat_changed(self):
+        """Строка «до …» видна, только когда задача повторяется."""
+        if REPEAT_OPTIONS.get(self.repeat.get()):
+            if not self.until_row.winfo_manager():
+                self.until_row.pack(fill="x", pady=(6, 0), after=self.repeat)
+        else:
+            self.until_row.pack_forget()
 
     def values(self):
         """Текущие значения формы (без проверки)."""
@@ -1794,11 +1834,13 @@ class TaskForm(ttk.Frame):
             assignee = self.assignee.get()
         initiator = (self.initiator.get().strip() or None) if self.initiator is not None else None
         unit_id = self.unit_ids.get(self.unit.get()) if self.unit is not None else self.unit_id
+        repeat = REPEAT_OPTIONS.get(self.repeat.get()) if due_at else None
+        until = self.until.value.isoformat() if repeat and self.until.value else None
         return dict(title=self.title_entry.get().strip(), body=self.desc.get("1.0", "end-1c").strip(),
                     status_id=status_id, due_at=due_at,
                     remind_before=self.remind_options.get(self.remind.get()),
                     urgent=self.urgent.get(), important=self.important.get(), assignee=assignee,
-                    initiator=initiator, unit_id=unit_id)
+                    initiator=initiator, unit_id=unit_id, repeat=repeat, repeat_until=until)
 
     def dirty(self):
         """Есть ли несохранённые изменения."""
@@ -1811,6 +1853,10 @@ class TaskForm(ttk.Frame):
             return
         if result["remind_before"] is not None and result["due_at"] is None:
             ui.showwarning("Задача", "Чтобы напомнить о задаче, укажите срок.", parent=self)
+            return
+        if result["repeat_until"] and result["repeat_until"] < result["due_at"][:10]:
+            ui.showwarning("Задача", "«Повторять до» раньше срока задачи — выберите дату позже срока "
+                                     "или «Без конца».", parent=self)
             return
         self.on_save(result)
 
@@ -2717,7 +2763,7 @@ class TaskCard(tk.Frame):
         self.values = {}
         self.captions = {}
         for row, (key, label) in enumerate((("important", "Важность"), ("urgent", "Срочность"),
-                                            ("due", "Срок"), ("remind", "Напомнить"),
+                                            ("due", "Срок"), ("remind", "Напомнить"), ("repeat", "Повтор"),
                                             ("created", "Создана"), ("author", "Инициатор"),
                                             ("assignee", "Исполнитель"), ("unit", "Бизнес-единица"),
                                             ("updated", "Изменена"))):
@@ -2963,11 +3009,11 @@ class TaskCard(tk.Frame):
 
     def show(self, number, title, body, status, status_color, overdue, done, priority_level_,
              priority_name, due, remind, created, author="", assignee="", updated="",
-             urgent=False, important=False, from_mail=False, unit=""):
+             urgent=False, important=False, from_mail=False, unit="", repeat=""):
         self.load_extras(number)
         shown = (number, title, body, status, status_color, overdue, done, priority_level_,
                  priority_name, due, remind, created, author, assignee, updated, urgent, important,
-                 from_mail, unit)
+                 from_mail, unit, repeat)
         if shown == getattr(self, "shown", None):
             return  # ничего не изменилось — не трогаем, чтобы не сбросить прокрутку описания
         self.shown = shown
@@ -3005,8 +3051,9 @@ class TaskCard(tk.Frame):
         self.values["remind"].configure(text=remind or "Нет")
         self.values["created"].configure(text=created)
         # инициатор, исполнитель и «кто изменил» есть только в общих списках — в личных строк нет
-        # бизнес-единица — только если указана
-        for key, value in (("author", author), ("assignee", assignee), ("unit", unit), ("updated", updated)):
+        # бизнес-единица и повтор — только если указаны
+        for key, value in (("repeat", repeat), ("author", author), ("assignee", assignee), ("unit", unit),
+                           ("updated", updated)):
             self.values[key].configure(text=value)
             for widget in (self.values[key], self.captions[key]):
                 widget.grid() if value else widget.grid_remove()
@@ -5623,6 +5670,218 @@ class EisenhowerMatrix(KanbanBoard):
         self.after_idle(lambda: self.app.quick_priority(drag["id"], urgent, important))
 
 
+class CalendarView(tk.Frame):
+    """Календарь на месяц: задача стоит в дне своего срока. Следующие сроки повторяющихся задач
+    показаны бледно, со значком 🔁 — видно расписание вперёд. Щелчок по задаче — карточка справа,
+    двойной щелчок — изменить, двойной щелчок по дню — новая задача с этим сроком."""
+
+    CHIP = 21  # высота строки с задачей в дне
+    MAX_PROJECTED = 45  # больше повторов одной задачи на экране не бывает (6 недель каждый день — 42)
+
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=BG)
+        self.app = app
+        self.selected_id = None
+        self.drag = None             # перетаскивания в календаре нет; поле нужно TodoApp.dragging
+        self.month = date.today().replace(day=1)
+        self.shown = None            # (статусы, задачи, просроченные) — для перерисовки
+        self.chips = {}              # id задачи -> [строки с ней в днях месяца]
+        self.drawn_fit = None        # сколько задач помещалось в день при последней отрисовке
+        self.redraw_job = None
+
+        head = tk.Frame(self, bg=BG)
+        head.pack(fill="x", pady=(0, 8))
+        ttk.Button(head, text="‹", style="Icon.TButton", width=3, cursor="hand2",
+                   command=lambda: self.shift_month(-1)).pack(side="left")
+        ttk.Button(head, text="›", style="Icon.TButton", width=3, cursor="hand2",
+                   command=lambda: self.shift_month(1)).pack(side="left", padx=(4, 0))
+        self.title = tk.Label(head, bg=BG, fg=TEXT, font=FONT_BOLD)
+        self.title.pack(side="left", padx=(12, 0))
+        ttk.Button(head, text="Сегодня", style="Soft.TButton", cursor="hand2",
+                   command=self.go_today).pack(side="left", padx=(12, 0))
+        self.note = tk.Label(head, bg=BG, fg=MUTED, font=FONT_SMALL)
+        self.note.pack(side="right")
+
+        self.days = tk.Frame(self, bg=BORDER)  # линии между днями — цвет фона в щелях сетки
+        self.days.pack(fill="both", expand=True)
+        for column in range(7):
+            self.days.columnconfigure(column, weight=1, uniform="day")
+        self.days.bind("<Configure>", self.resized)
+        bind_tree(self, "<MouseWheel>", self.wheel)  # дни создаются в draw — там привязываем и их
+
+    # --- месяц ---
+
+    def shift_month(self, step):
+        """Листать месяцы. Колёсико (особенно тачпад) даёт много событий подряд — название
+        месяца меняется сразу, а дни рисуются, когда прокрутка остановилась."""
+        index = self.month.year * 12 + self.month.month - 1 + step
+        self.month = date(index // 12, index % 12 + 1, 1)
+        self.title.configure(text=f"{MONTHS[self.month.month - 1]} {self.month.year}")
+        if self.redraw_job:
+            self.after_cancel(self.redraw_job)
+        self.redraw_job = self.after(120, self.draw)
+
+    def wheel(self, event):
+        self.shift_month(-1 if event.delta > 0 else 1)
+        return "break"
+
+    def go_today(self):
+        self.month = date.today().replace(day=1)
+        self.draw()
+
+    def resized(self, event):
+        # поменялась высота — в день помещается другое число задач: рисуем заново, но не сразу
+        if self.shown and self.fit() != self.drawn_fit:
+            if self.redraw_job:
+                self.after_cancel(self.redraw_job)
+            self.redraw_job = self.after(150, self.draw)
+
+    def weeks(self):
+        return calendar.Calendar(firstweekday=0).monthdatescalendar(self.month.year, self.month.month)
+
+    def fit(self):
+        """Сколько строк с задачами помещается в один день."""
+        height = self.days.winfo_height()
+        if height < 100:  # ещё не показан на экране
+            return 3
+        cell = (height - 24) // len(self.weeks())
+        return max(1, (cell - 32) // self.CHIP)  # 32 — число дня сверху и запас снизу
+
+    # --- отрисовка ---
+
+    def render(self, statuses, rows, overdue_ids):
+        self.shown = (statuses, rows, overdue_ids)
+        self.draw()
+
+    def entries(self, rows, overdue_ids, first, last):
+        """{день: [(время, уровень, id, заголовок, выполнена, просрочена, будущий повтор)]}."""
+        by_day = {}
+        now = datetime.now()
+        for task_id, title, done, _, due_at, _, urgent, important, _, _ in rows:
+            if not due_at:
+                continue
+            try:
+                due = datetime.fromisoformat(due_at)
+            except ValueError:
+                continue
+            level = priority_level(urgent, important)
+            if first <= due.date() <= last:
+                by_day.setdefault(due.date(), []).append(
+                    (due.strftime("%H:%M"), level, task_id, title, bool(done), task_id in overdue_ids, False))
+            repeat, until, has_next = self.app.repeats.get(task_id, (None, None, False))
+            if not repeat or done or has_next:
+                continue  # следующий срок — уже отдельная задача, её повторы рисуются от неё
+            # как в db.next_due: прошедшие сроки при выполнении пропускаются — их не показываем;
+            # первый шаг считаем сразу от начала показанных недель (месяц может быть далеко от срока)
+            after = max(now, datetime.combine(first, time.min) - timedelta(microseconds=1))
+            try:
+                first_step = db.first_step_after(due, repeat, after)
+                for step in range(first_step, first_step + self.MAX_PROJECTED):
+                    when = db.add_period(due, repeat, step)
+                    if when.date() > last or (until and when.date().isoformat() > until):
+                        break
+                    by_day.setdefault(when.date(), []).append(
+                        (when.strftime("%H:%M"), level, task_id, title, False, False, True))
+            except (OverflowError, ValueError):  # дошли до конца календаря (9999 год)
+                pass
+        for items in by_day.values():
+            items.sort(key=lambda item: (item[6], item[0], item[1], item[2]))
+        return by_day
+
+    def draw(self):
+        if self.redraw_job:  # отложенная перерисовка (колёсико, размер окна) уже не нужна
+            self.after_cancel(self.redraw_job)
+        self.redraw_job = None
+        for child in self.days.winfo_children():
+            child.destroy()
+        self.chips = {}
+        self.title.configure(text=f"{MONTHS[self.month.month - 1]} {self.month.year}")
+        if self.shown is None:
+            return
+        _, rows, overdue_ids = self.shown
+        weeks = self.weeks()
+        by_day = self.entries(rows, overdue_ids, weeks[0][0], weeks[-1][-1])
+        self.drawn_fit = fit = self.fit()
+        no_due = sum(1 for r in rows if not r[4] and not r[2])
+        self.note.configure(text=f"Без срока: {no_due} — такие задачи видны в списке" if no_due else "")
+
+        for column, name in enumerate(WEEKDAYS):
+            tk.Label(self.days, text=name, bg=BG, fg=DANGER if column >= 5 else MUTED,
+                     font=FONT_SMALL).grid(row=0, column=column, sticky="nsew", pady=(0, 1))
+        self.days.rowconfigure(0, weight=0)
+        today = date.today()
+        for row, week in enumerate(weeks, start=1):
+            self.days.rowconfigure(row, weight=1, uniform="week")
+            for column, day in enumerate(week):
+                self.make_day(day, row, column, by_day.get(day, []), fit, today)
+        for row in range(len(weeks) + 1, 8):  # от прошлого месяца могла остаться лишняя неделя
+            self.days.rowconfigure(row, weight=0, uniform="")
+        for child in self.days.winfo_children():  # сама рамка self.days привязана в __init__
+            bind_tree(child, "<MouseWheel>", self.wheel)
+        self.highlight_selected()
+
+    def make_day(self, day, row, column, items, fit, today):
+        own = day.month == self.month.month
+        bg = SURFACE if own else BG
+        cell = tk.Frame(self.days, bg=bg)
+        cell.grid(row=row, column=column, sticky="nsew", padx=(1 if column == 0 else 0, 1), pady=(0, 1))
+        cell.pack_propagate(False)
+        number = tk.Label(cell, text=str(day.day), bg=bg, font=FONT_SMALL_BOLD if day == today else FONT_SMALL,
+                          fg=OTHER_MONTH if not own else DANGER if column >= 5 else TEXT, padx=4)
+        if day == today:
+            number.configure(bg=ACCENT, fg="white")
+        number.pack(anchor="ne", padx=4, pady=(3, 1))
+        shown = items if len(items) <= fit else items[:max(fit - 1, 0)]
+        for time_text, level, task_id, title, done, overdue, projected in shown:
+            self.make_chip(cell, bg, time_text, level, task_id, title, done, overdue, projected)
+        if len(shown) < len(items):
+            more = tk.Label(cell, text=f"ещё {len(items) - len(shown)}…", bg=bg, fg=ACCENT,
+                            font=FONT_SMALL, anchor="w", cursor="hand2", padx=4)
+            more.pack(fill="x", padx=2)
+            more.bind("<Button-1>", lambda e, i=items: self.day_menu(i, e.x_root, e.y_root))
+        for widget in (cell, number):
+            widget.bind("<Button-1>", lambda e: self.app.clear_selection())
+            widget.bind("<Double-Button-1>", lambda e, d=day: self.app.new_task_on(d))
+
+    def make_chip(self, cell, bg, time_text, level, task_id, title, done, overdue, projected):
+        text = f"{REPEAT_MARK} {time_text}  {title}" if projected else f"{time_text}  {title}"
+        fg = DANGER if overdue else DONE if done or projected else TEXT
+        icon = IMAGES.get(f"priority_{level}", "") if level < 4 and not projected and not done else ""
+        # width=1: длинный заголовок обрезается по ширине дня, а не раздвигает столбец
+        chip = tk.Label(cell, text=text, image=icon, compound="left", bg=bg, fg=fg, font=FONT_SMALL,
+                        anchor="w", width=1, cursor="hand2", padx=4)
+        chip.pack(fill="x", padx=2)
+        chip.bg = bg
+        chip.bind("<Button-1>", lambda e: self.app.select_task(task_id))
+        chip.bind("<Double-Button-1>", lambda e: (self.app.select_task(task_id), self.app.edit()))
+        chip.bind("<Button-3>", lambda e: self.app.show_menu_for(task_id, e.x_root, e.y_root))
+        if not projected:
+            self.chips.setdefault(task_id, []).append(chip)
+
+    def day_menu(self, items, x, y):
+        """«ещё N…»: все задачи дня списком."""
+        menu = PopupMenu()
+        for time_text, _, task_id, title, _, _, projected in items:
+            label = f"{REPEAT_MARK + ' ' if projected else ''}{time_text}  {short_text(title, 50)}"
+            menu.command(label, lambda t=task_id: self.app.select_task(t))
+        menu.popup(self.app.root, x, y)
+
+    # --- выделение ---
+
+    def select(self, task_id):
+        self.selected_id = task_id
+        self.highlight_selected()
+
+    def highlight_selected(self):
+        for task_id, chips in self.chips.items():
+            for chip in chips:
+                if chip.winfo_exists():
+                    chip.configure(bg=ACCENT_SOFT if task_id == self.selected_id else chip.bg)
+
+    def set_mark(self, task_id, mark):
+        """Значков 📎 💬 в календаре нет — места в дне мало."""
+
+
 class TodoApp:
     def __init__(self, root, hidden=False):
         """hidden — не показывать главное окно: запустили только ради задачи из письма или снимка."""
@@ -5655,6 +5914,7 @@ class TodoApp:
         self.units, self.unit_names = {}, {}  # справочник бизнес-единиц; id задачи -> её единица
         self.extra_counts = {}  # id задачи -> (файлов, комментариев)
         self.mail_ids = set()   # задачи, созданные из писем Outlook (значок 📧)
+        self.repeats = {}       # повторяющиеся задачи: id -> (повтор, до, есть следующая) (значок 🔁)
         self.assignees = {}  # id задачи -> исполнитель (в общих списках)
         try:
             self.conn = self.list_conn(self.list_id)
@@ -5741,7 +6001,8 @@ class TodoApp:
         views = ttk.Frame(toolbar, style="Segments.TFrame", padding=3)
         views.pack(side="left")
         self.views_frame = views
-        for value, text in (("list", "☰  Список"), ("board", "▦  Доска"), ("matrix", "⊞  Матрица")):
+        for value, text in (("list", "☰  Список"), ("board", "▦  Доска"), ("matrix", "⊞  Матрица"),
+                            ("calendar", "▤  Календарь")):
             ttk.Radiobutton(views, text=text, value=value, variable=self.view,
                             style="Segment.TRadiobutton", command=self.switch_view,
                             cursor="hand2").pack(side="left")
@@ -5912,6 +6173,7 @@ class TodoApp:
 
         self.board = KanbanBoard(content, self)
         self.matrix = EisenhowerMatrix(content, self)
+        self.calendar = CalendarView(content, self)
 
         # Клавиши работают и в списке, и на доске (но не во время набора текста)
         for sequence, action in (("<F2>", self.edit), ("<space>", self.toggle),
@@ -5978,11 +6240,11 @@ class TodoApp:
     # --- список, доска или матрица ---
 
     def main_widget(self):
-        return {"board": self.board, "matrix": self.matrix}.get(self.view.get(), self.table_card)
+        return self.cards_view() or self.table_card
 
     def cards_view(self):
-        """Доска или матрица, если показана одна из них (там задачи — карточки), иначе None."""
-        return {"board": self.board, "matrix": self.matrix}.get(self.view.get())
+        """Доска, матрица или календарь, если показан один из них, иначе (список) None."""
+        return {"board": self.board, "matrix": self.matrix, "calendar": self.calendar}.get(self.view.get())
 
     def dragging(self):
         return bool(self.board.drag or self.matrix.drag)
@@ -6147,7 +6409,7 @@ class TodoApp:
     def show_main_widget(self):
         """Слева в разделителе — таблица, доска или матрица, справа — панель."""
         main = self.main_widget()
-        for other in (self.table_card, self.board, self.matrix):
+        for other in (self.table_card, self.board, self.matrix, self.calendar):
             if other is not main and self.in_paned(other):
                 self.paned.forget(other)
         if not self.in_paned(main):
@@ -6332,9 +6594,10 @@ class TodoApp:
              "Пока задача не выбрана, Тоторо подсказывает, с чего начать, "
              "и волнуется о просроченных делах. Кнопка «»» (или Ctrl+B) сворачивает "
              "панель в узкую полоску."),
-            (lambda: self.views_frame, "Список, доска и матрица",
+            (lambda: self.views_frame, "Список, доска, матрица и календарь",
              "Список — таблица задач. Доска — колонки по статусам, задачи перетаскиваются "
-             "мышью. Матрица Эйзенхауэра раскладывает задачи по важности и срочности."),
+             "мышью. Матрица Эйзенхауэра раскладывает задачи по важности и срочности. "
+             "Календарь показывает задачи по срокам на месяц вперёд."),
             (lambda: self.filters_frame, "Фильтры",
              "Показывают все задачи, только активные, выполненные или просроченные. "
              "На кнопке «Просроченные» — сколько их сейчас."),
@@ -6418,21 +6681,21 @@ class TodoApp:
         if self.tree.exists(str(task_id)):
             self.tree.selection_set(str(task_id))
             self.tree.see(str(task_id))
-        self.board.select(task_id)
-        self.matrix.select(task_id)
+        for view in (self.board, self.matrix, self.calendar):
+            view.select(task_id)
         self.update_side()
 
     def on_tree_select(self):
         sel = self.tree.selection()
         if self.view.get() == "list":
-            self.board.select(int(sel[0]) if sel else None)
-            self.matrix.select(int(sel[0]) if sel else None)
+            for view in (self.board, self.matrix, self.calendar):
+                view.select(int(sel[0]) if sel else None)
         self.update_side()
 
     def clear_selection(self):
         self.tree.selection_remove(*self.tree.selection())
-        self.board.select(None)
-        self.matrix.select(None)
+        for view in (self.board, self.matrix, self.calendar):
+            view.select(None)
         self.update_side()
 
     def click_empty_space(self, event):
@@ -6520,10 +6783,11 @@ class TodoApp:
     def form_data(self, task_id):
         title, due_at, remind_before, urgent, important, body = db.get_task(self.conn, task_id)
         meta = db.task_meta(self.conn, task_id)
+        repeat, until = db.get_repeat(self.conn, task_id)
         return dict(title=title, due_at=due_at, remind_before=remind_before, urgent=urgent,
                     important=important, body=body, status_id=self.task_info(task_id)["status_id"],
                     assignee=meta["assignee"], initiator=meta["initiator"], unit_id=meta["unit_id"],
-                    version=meta["version"])
+                    repeat=repeat, repeat_until=until, version=meta["version"])
 
     def apply_edit(self, task_id, result, refresh=True, version=None):
         """Сохраняет правку. version — номер версии на момент открытия формы (в общих списках):
@@ -6539,6 +6803,8 @@ class TodoApp:
             if unit_id is not None and unit_id not in dict(db.list_units(self.conn)):
                 unit_id = None  # пока форма была открыта, единицу удалили из справочника
             db.set_task_unit(self.conn, task_id, unit_id, by=by)
+        if "repeat" in result and (result["repeat"], result.get("repeat_until")) != db.get_repeat(self.conn, task_id):
+            db.set_repeat(self.conn, task_id, result["repeat"], result.get("repeat_until"), by=by)
         if self.members() is not None:
             if result.get("assignee") != meta.get("assignee"):
                 db.set_assignee(self.conn, task_id, result.get("assignee"), by=by)
@@ -6579,7 +6845,7 @@ class TodoApp:
     CHANGED_NAMES = {"title": "заголовок", "body": "описание", "status_id": "статус",
                      "due_at": "срок", "remind_before": "напоминание", "urgent": "«срочно»",
                      "important": "«важно»", "assignee": "исполнителя", "initiator": "инициатора",
-                     "unit_id": "бизнес-единицу"}
+                     "unit_id": "бизнес-единицу", "repeat": "повтор", "repeat_until": "«повторять до»"}
 
     def resolve_conflict(self, task_id, mine, initial, can_return):
         """Задачу, которую вы правили, тем временем изменил другой участник.
@@ -6650,7 +6916,8 @@ class TodoApp:
             when = datetime.fromisoformat(meta["updated_at"]).strftime("%d.%m %H:%M")
             updated = f"{when}, {meta['updated_by']}"
         return dict(author=meta.get("initiator") or "", assignee=meta.get("assignee") or "",
-                    updated=updated, shared=shared, unit=self.unit_names.get(task_id, ""))
+                    updated=updated, shared=shared, unit=self.unit_names.get(task_id, ""),
+                    repeat=db.repeat_text(*self.repeats.get(task_id, (None, None))[:2]))
 
     def update_side(self):
         """Выбрана задача — показываем её карточку, иначе — Тоторо.
@@ -6672,7 +6939,7 @@ class TodoApp:
             due=info["due"], remind=info["remind"], created=info["created"], author=info["author"],
             assignee=info["assignee"] or ("Не назначен" if info["shared"] else ""),
             updated=info["updated"], urgent=bool(info["urgent"]), important=bool(info["important"]),
-            from_mail=task_id in self.mail_ids, unit=info["unit"],
+            from_mail=task_id in self.mail_ids, unit=info["unit"], repeat=info["repeat"].capitalize(),
         )
 
     def update_buddy(self):
@@ -7062,6 +7329,7 @@ class TodoApp:
                            if uid in self.units}  # id задачи -> название её единицы
         self.extra_counts = db.extras_counts(self.conn)  # id задачи -> (файлов, комментариев)
         self.mail_ids = db.mail_task_ids(self.conn)
+        self.repeats = db.repeat_infos(self.conn)  # id задачи -> (повтор, до, есть следующая)
         shared = bool(self.list_id and self.current_list()["shared"])
         # столбцы «Исполнитель» и «Инициатор» — только в общих списках (в личном всё ваше)
         columns = [c for c in self.column_order if shared or c not in ("assignee", "author")]
@@ -7229,7 +7497,8 @@ class TodoApp:
         task_id = self.current_id()
         info = self.task_info(task_id) if task_id is not None else None
         if not info:
-            where = {"board": "на доске", "matrix": "в матрице"}.get(self.view.get(), "в списке")
+            where = {"board": "на доске", "matrix": "в матрице",
+                     "calendar": "в календаре"}.get(self.view.get(), "в списке")
             ui.showinfo(APP_NAME, f"Сначала выберите задачу {where}.", parent=self.root)
             return None
         return task_id, info["done"]
@@ -7538,7 +7807,7 @@ class TodoApp:
         subject, body = build_email(task[0], info["title"], info["status_name"], info["priority"],
                                     info["due"], info["remind"], info["created"],
                                     info["urgent"], info["body"], info["author"], info["assignee"],
-                                    info["unit"])
+                                    info["unit"], info["repeat"])
         to = db.mail_from(self.conn, task[0])  # задача из письма — отвечаем его отправителю
         # Основной способ — черновик письма в файле .eml: Outlook открывает его как новое
         # письмо, и длина текста не ограничена (в отличие от ссылки mailto:).
@@ -7594,19 +7863,21 @@ class TodoApp:
             self.side.card.load_extras(task_id)
 
     def task_mark(self, task_id):
-        """Значки карточки на доске: 📧 (из письма Outlook), 📎 файлы, 💬 комментарии."""
-        return extras_mark(self.extra_counts.get(task_id), task_id in self.mail_ids)
+        """Значки карточки на доске: 🔁 (повторяется), 📧 (из письма Outlook), 📎 файлы, 💬 комментарии."""
+        return extras_mark(self.extra_counts.get(task_id), task_id in self.mail_ids, task_id in self.repeats)
 
     def list_marks(self, task_id):
-        """Столбец значков в списке: '📧  📎 3  💬 2' (или '', если ничего нет) — отдельно от
+        """Столбец значков в списке: '🔁  📧  📎 3  💬 2' (или '', если ничего нет) — отдельно от
         названия, чтобы названия задач стояли ровно."""
-        return extras_mark(self.extra_counts.get(task_id), task_id in self.mail_ids).strip()
+        return extras_mark(self.extra_counts.get(task_id), task_id in self.mail_ids,
+                           task_id in self.repeats).strip()
 
     def marks_order(self, task_id):
         """Сортировка по столбцу значков: больше файлов, потом комментариев — выше; без значков — None."""
         files, comments = self.extra_counts.get(task_id) or (0, 0)
         mail = task_id in self.mail_ids
-        return (-files, -comments, -mail) if files or comments or mail else None
+        repeat = task_id in self.repeats
+        return (-files, -comments, -mail, -repeat) if files or comments or mail or repeat else None
 
     def attachments(self, task_id):
         try:
@@ -8666,6 +8937,28 @@ class TodoApp:
         outlook.mark_added(mail["entry_id"], mail["store_id"])  # категория «В ToDoro» в Outlook
         return task_id
 
+    def new_task_on(self, day):
+        """Двойной щелчок по дню в календаре: новая задача со сроком в этот день."""
+        if self.root.grab_current() is not None:
+            return  # открыто другое окно
+        self.finish_editing()
+        members = self.members()
+        statuses = db.list_statuses(self.conn)
+        due = datetime.combine(day, time(int(DEFAULT_TIME[0]), int(DEFAULT_TIME[1])))
+        task = dict(title="", body="", due_at=due.strftime("%Y-%m-%d %H:%M"), remind_before=None,
+                    urgent=False, important=False, status_id=statuses[0][0],
+                    assignee=self.user_name() if members is not None else None,
+                    initiator=self.user_name() if members is not None else None, version=None)
+        dialog = TaskDialog(self.root, task, statuses, members=members, title="Новая задача",
+                            note=f"Срок — {day:%d.%m.%Y}, в список «{self.current_list()['name']}».",
+                            history=self.smart_rows(), hints=True, units=db.list_units(self.conn))
+        self.root.wait_window(dialog)
+        if dialog.result:
+            task_id = db.add_task(self.conn, dialog.result["title"],
+                                  status_id=dialog.result["status_id"], created_by=self.created_by())
+            self.apply_edit(task_id, dialog.result, refresh=False)
+            self.show_new_tasks([task_id])
+
     def show_new_tasks(self, task_ids):
         if not task_ids:
             return
@@ -8674,6 +8967,13 @@ class TodoApp:
         if self.search_query:
             self.clear_search(refresh=False)
         self.only_mine.set(False)
+        if self.view.get() == "calendar":  # новая задача со сроком в другом месяце — листаем к ней
+            due = db.get_task(self.conn, task_ids[-1])
+            try:
+                if due and due[1]:
+                    self.calendar.month = datetime.fromisoformat(due[1]).date().replace(day=1)
+            except ValueError:
+                pass  # испорченный срок — остаёмся в том же месяце
         self.refresh(select_id=task_ids[-1])
 
     def watch_show_requests(self, event):

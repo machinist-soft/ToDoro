@@ -1,7 +1,7 @@
 """Работа с базой данных SQLite: здесь хранятся задачи."""
 import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # Файл базы лежит в личной папке пользователя (%APPDATA%\ToDoro): в папку установленной
@@ -51,6 +51,9 @@ NEW_COLUMNS = [
     ("mail_from", "TEXT"),                          # его отправитель — адресат письма по задаче
     ("initiator", "TEXT"),                          # инициатор (в общих списках); NULL — автор
     ("unit_id", "INTEGER"),                         # бизнес-единица (таблица units); NULL — не указана
+    ("repeat", "TEXT"),                             # повтор: 'day', 'week', 'month', 'year'; NULL — нет
+    ("repeat_until", "TEXT"),                       # повторять до 'ГГГГ-ММ-ДД' включительно; NULL — всегда
+    ("repeat_next", "INTEGER"),                     # id следующей задачи, созданной по повтору
 ]
 
 # Инициатор задачи: указанный вручную, а если не указан — автор (тот, кто создал)
@@ -249,12 +252,21 @@ def set_status_color(conn, status_id, color):
 
 def set_status_done(conn, status_id, is_done, by=None):
     """Отметить колонку как «выполненную» (или нет) — вместе со всеми её задачами."""
+    now_done = undone_repeats(conn, "status_id = ?", (status_id,)) if is_done else []
     with conn:
         conn.execute("UPDATE statuses SET is_done = ? WHERE id = ?", (int(is_done), status_id))
         conn.execute(
             f"UPDATE tasks SET done = ?, done_at = {DONE_AT_SQL}, {TOUCH_SQL} WHERE status_id = ?",
             (int(is_done), int(is_done), by, status_id),
         )
+    for task_id in now_done:
+        repeat_task(conn, task_id, by)
+
+
+def undone_repeats(conn, where, args):
+    """Невыполненные повторяющиеся задачи (условие where) — те, что вот-вот станут выполненными."""
+    return [r[0] for r in conn.execute(
+        f"SELECT id FROM tasks WHERE done = 0 AND repeat IS NOT NULL AND {where}", args)]
 
 
 def reorder_statuses(conn, ids):
@@ -278,11 +290,14 @@ def move_status(conn, status_id, step):
 
 def delete_status(conn, status_id, move_to, by=None):
     """Удаляет колонку; её задачи переносятся в колонку move_to."""
+    done = conn.execute("SELECT is_done FROM statuses WHERE id = ?", (move_to,)).fetchone()[0]
+    now_done = undone_repeats(conn, "status_id = ?", (status_id,)) if done else []
     with conn:
-        done = conn.execute("SELECT is_done FROM statuses WHERE id = ?", (move_to,)).fetchone()[0]
         conn.execute(f"UPDATE tasks SET status_id = ?, done = ?, done_at = {DONE_AT_SQL}, {TOUCH_SQL} "
                      "WHERE status_id = ?", (move_to, done, done, by, status_id))
         conn.execute("DELETE FROM statuses WHERE id = ?", (status_id,))
+    for task_id in now_done:
+        repeat_task(conn, task_id, by)
 
 
 def count_in_status(conn, status_id):
@@ -379,7 +394,8 @@ TOUCH_SQL = ("version = version + 1, updated_at = strftime('%Y-%m-%d %H:%M:%S', 
 
 def set_task_status(conn, task_id, status_id, by=None):
     """Переносит задачу в колонку; «выполнена» ли она — решает колонка.
-    Возвращает True, если задача только что стала выполненной."""
+    Возвращает True, если задача только что стала выполненной (у повторяющейся задачи тогда же
+    появляется следующая — см. repeat_task)."""
     is_done = conn.execute("SELECT is_done FROM statuses WHERE id = ?", (status_id,)).fetchone()[0]
     was_done = conn.execute("SELECT done FROM tasks WHERE id = ?", (task_id,)).fetchone()[0]
     with conn:
@@ -387,7 +403,139 @@ def set_task_status(conn, task_id, status_id, by=None):
             f"UPDATE tasks SET status_id = ?, done = ?, done_at = {DONE_AT_SQL}, {TOUCH_SQL} WHERE id = ?",
             (status_id, is_done, is_done, by, task_id),
         )
+    if is_done and not was_done:
+        repeat_task(conn, task_id, by)
     return bool(is_done and not was_done)
+
+
+# ---------- повторяющиеся задачи ----------
+# Выполнили повторяющуюся задачу — она остаётся выполненной (история, «сделано сегодня»), а рядом
+# появляется такая же со следующим сроком. Новая появляется один раз: если отметку снять и
+# поставить снова, вторая копия не создаётся (repeat_next помнит, что следующая уже есть).
+
+NOW_SQL = "strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')"
+REPEATS = {"day":"каждый день", "week": "каждую неделю", "month": "каждый месяц", "year": "каждый год"}
+
+
+def add_period(when, repeat, steps=1):
+    """Срок через steps периодов. Месяц и год: число сохраняется, а если такого числа в месяце
+    нет (31-е, 29 февраля) — последний день месяца."""
+    if repeat == "day":
+        return when + timedelta(days=steps)
+    if repeat == "week":
+        return when + timedelta(weeks=steps)
+    months = steps * (12 if repeat == "year" else 1)
+    year, month = divmod(when.month - 1 + months, 12)
+    year += when.year
+    month += 1
+    last = (date(year + (month == 12), month % 12 + 1, 1) - timedelta(days=1)).day
+    return when.replace(year=year, month=month, day=min(when.day, last))
+
+
+def next_due(due_at, repeat, now=None):
+    """Следующий срок повторяющейся задачи ('ГГГГ-ММ-ДД ЧЧ:ММ') или None, если повтор испорчен.
+    Если задачу выполнили с опозданием на несколько периодов, пропущенные сроки не создаются:
+    следующий срок — первый, который ещё впереди."""
+    if repeat not in REPEATS:
+        return None
+    try:
+        start = datetime.fromisoformat(due_at)
+        # считаем от прежнего срока, а не шаг за шагом: пропуская месяцы, не теряем 31-е число
+        return add_period(start, repeat, first_step_after(start, repeat, now or datetime.now())).strftime(
+            "%Y-%m-%d %H:%M")
+    except (TypeError, ValueError, OverflowError):  # испорченный срок или срок у конца календаря (9999 год)
+        return None
+
+
+def first_step_after(start, repeat, moment):
+    """Наименьшее число периодов (от 1), через которое срок start окажется позже moment.
+    Сначала прикидываем сразу (задача могла быть просрочена на годы), потом уточняем."""
+    steps = 1
+    if moment >= start:
+        if repeat in ("day", "week"):
+            steps = max(1, (moment - start) // timedelta(days=1 if repeat == "day" else 7))
+        else:
+            months = (moment.year - start.year) * 12 + moment.month - start.month
+            steps = max(1, months // (12 if repeat == "year" else 1))
+    while add_period(start, repeat, steps) <= moment:
+        steps += 1
+    return steps
+
+
+def repeat_task(conn, task_id, by=None, now=None):
+    """Создаёт следующую задачу повторяющейся задачи. Возвращает её id или None: повтора нет,
+    следующая уже создана, срок вышел за «повторять до»."""
+    row = conn.execute(
+        """SELECT title, body, due_at, remind_before, urgent, important, created_by, assignee,
+                  mail_from, initiator, unit_id, repeat, repeat_until, repeat_next
+           FROM tasks WHERE id = ?""", (task_id,)).fetchone()
+    if row is None:
+        return None
+    (title, body, due_at, remind_before, urgent, important, created_by, assignee, mail_from_,
+     initiator, unit_id, repeat, until, repeat_next) = row
+    if repeat_next is not None and conn.execute("SELECT 1 FROM tasks WHERE id = ?", (repeat_next,)).fetchone():
+        return None  # следующая уже есть (если её удалили — создаём заново)
+    if not repeat:
+        return None
+    due = next_due(due_at, repeat, now)
+    if due is None or (until and due[:10] > until):
+        return None
+    status_id = first_status(conn, False) or list_statuses(conn)[0][0]
+    is_done = conn.execute("SELECT is_done FROM statuses WHERE id = ?", (status_id,)).fetchone()[0]
+    with conn:
+        # Сначала «занимаем» задачу: в общем списке её могли выполнить двое почти одновременно.
+        # Запись в файл SQLite идёт по очереди, поэтому второй участник дождётся первого, увидит
+        # изменённый repeat_next и вторую копию не создаст.
+        if not conn.execute("UPDATE tasks SET repeat_next = -1 WHERE id = ? AND repeat_next IS ?",
+                            (task_id, repeat_next)).rowcount:
+            return None
+        new_id = conn.execute(
+            f"""INSERT INTO tasks (title, body, status_id, done, done_at, due_at, remind_before,
+                                  urgent, important, created_by, assignee, mail_from, initiator,
+                                  unit_id, repeat, repeat_until, updated_by, updated_at)
+               VALUES (?, ?, ?, ?, CASE WHEN ? THEN {NOW_SQL} END,
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {NOW_SQL})""",
+            (title, body, status_id, is_done, is_done, due, remind_before, urgent, important, created_by,
+             assignee, mail_from_, initiator, unit_id, repeat, until, by),
+        ).lastrowid
+        conn.execute("UPDATE tasks SET repeat_next = ? WHERE id = ?", (new_id, task_id))
+    return new_id
+
+
+def set_repeat(conn, task_id, repeat, until=None, by=None):
+    """Повтор задачи: repeat — ключ из REPEATS или None (не повторять); until — 'ГГГГ-ММ-ДД' или None."""
+    repeat = repeat if repeat in REPEATS else None
+    with conn:
+        conn.execute(f"UPDATE tasks SET repeat = ?, repeat_until = ?, {TOUCH_SQL} WHERE id = ?",
+                     (repeat, (until or None) if repeat else None, by, task_id))
+
+
+def get_repeat(conn, task_id):
+    """(повтор, до какой даты) задачи; (None, None) — не повторяется."""
+    row = conn.execute("SELECT repeat, repeat_until FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    return (row[0] if row[0] in REPEATS else None, row[1]) if row else (None, None)
+
+
+def repeat_infos(conn):
+    """{id задачи: (повтор, до какой даты, следующая уже создана)} — только у повторяющихся
+    задач, одним запросом."""
+    return {task_id: (repeat, until, has_next) for task_id, repeat, until, has_next in conn.execute(
+        """SELECT id, repeat, repeat_until,
+                  EXISTS (SELECT 1 FROM tasks n WHERE n.id = tasks.repeat_next)
+           FROM tasks WHERE repeat IS NOT NULL""") if repeat in REPEATS}
+
+
+def repeat_text(repeat, until=None):
+    """«каждую неделю до 31.12.2026» — для карточки и письма."""
+    if repeat not in REPEATS:
+        return ""
+    text = REPEATS[repeat]
+    if until:
+        try:
+            text += " до " + date.fromisoformat(until).strftime("%d.%m.%Y")
+        except ValueError:
+            pass
+    return text
 
 
 def count_done_today(conn):
@@ -502,18 +650,20 @@ def update_task(conn, task_id, title, due_at, remind_before, urgent=False, impor
     изменил, ничего не сохраняется и возвращается False (иначе True)."""
     # Если изменился срок или напоминание — напомнить нужно заново.
     # («IS» вместо «=» правильно сравнивает и пустые значения NULL.)
-    # body=None — описание не трогаем.
+    # body=None — описание не трогаем. Убрали срок — повтор тоже снимается: его не от чего считать.
     with conn:
         cur = conn.execute(
             f"""
             UPDATE tasks SET
                 reminded = CASE WHEN due_at IS ? AND remind_before IS ? THEN reminded ELSE 0 END,
                 title = ?, due_at = ?, remind_before = ?, urgent = ?, important = ?,
-                body = COALESCE(?, body), {TOUCH_SQL}
+                body = COALESCE(?, body),
+                repeat = CASE WHEN ? IS NULL THEN NULL ELSE repeat END,
+                repeat_until = CASE WHEN ? IS NULL THEN NULL ELSE repeat_until END, {TOUCH_SQL}
             WHERE id = ? AND (? IS NULL OR version = ?)
             """,
             (due_at, remind_before, title, due_at, remind_before,
-             int(urgent), int(important), body, by, task_id, version, version),
+             int(urgent), int(important), body, due_at, due_at, by, task_id, version, version),
         )
     return cur.rowcount > 0
 
@@ -689,13 +839,13 @@ def move_task_to(src, task_id, dst):
     row = src.execute(
         """SELECT t.title, t.body, t.done, t.created_at, t.due_at, t.remind_before, t.reminded,
                   t.urgent, t.important, t.done_at, s.name, t.created_by, t.assignee,
-                  t.mail_id, t.mail_from, t.initiator, u.name
+                  t.mail_id, t.mail_from, t.initiator, u.name, t.repeat, t.repeat_until
            FROM tasks t LEFT JOIN statuses s ON s.id = t.status_id
                         LEFT JOIN units u ON u.id = t.unit_id WHERE t.id = ?""",
         (task_id,),
     ).fetchone()
     (title, body, done, created, due_at, remind_before, reminded, urgent, important, done_at, status,
-     created_by, assignee, mail_id, mail_from_, initiator, unit) = row
+     created_by, assignee, mail_id, mail_from_, initiator, unit, repeat, repeat_until) = row
     same = [sid for sid, name, _, is_done in list_statuses(dst)
             if name.strip().lower() == (status or "").strip().lower() and is_done == done]
     status_id = same[0] if same else first_status(dst, done)
@@ -708,11 +858,11 @@ def move_task_to(src, task_id, dst):
         new_id = dst.execute(
             """INSERT INTO tasks (title, body, done, created_at, due_at, remind_before, reminded,
                                   urgent, important, done_at, status_id, created_by, assignee,
-                                  mail_id, mail_from, initiator, unit_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  mail_id, mail_from, initiator, unit_id, repeat, repeat_until)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (title, body, is_done, created, due_at, remind_before, reminded, urgent, important,
              done_at if is_done else None, status_id, created_by, assignee, mail_id, mail_from_,
-             initiator, unit_id),
+             initiator, unit_id, repeat, repeat_until),
         ).lastrowid
         # вложения и комментарии переезжают вместе с задачей
         dst.executemany(
