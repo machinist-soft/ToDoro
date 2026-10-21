@@ -8,7 +8,7 @@
 [Что нового / What's new](RELEASE_NOTES.md) ·
 [Сообщить об ошибке / Report a bug](https://github.com/machinist-soft/ToDoro/issues/new?template=bug_report.yml)
 
-![Общий список команды: исполнители, инициаторы и Тоторо-помощник / Team list with assignees, initiators and the Totoro helper](docs/screenshots/list.png)
+![Общий список команды: исполнители, инициаторы, бизнес-единицы и Тоторо-помощник / Team list with assignees, initiators, business units and the Totoro helper](docs/screenshots/list.png)
 
 > **Фан-проект / Fan project**
 >

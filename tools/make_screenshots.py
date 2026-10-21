@@ -125,6 +125,13 @@ for author, text in (("Олег", "Набросал макет слайдов �
 # задача из письма Outlook — со значком 📧 в списке и на доске
 db.set_mail_id(shared, ids["Ответить на письмо от бухгалтерии"], "<demo-buh@example.com>",
                "Бухгалтерия <buh@example.com>")
+# бизнес-единицы: справочник списка и единица у части задач — в кадре столбец «Бизнес-единица»
+units = {name: db.add_unit(shared, name) for name in ("Продажи", "Финансы", "Офис")}
+for title, unit in (("Подготовить презентацию для клиента", "Продажи"), ("Сдать квартальный отчёт", "Финансы"),
+                    ("Оплатить интернет", "Офис"), ("Ответить на письмо от бухгалтерии", "Финансы"),
+                    ("Забрать посылку на почте", "Офис")):
+    with shared:  # напрямую: set_task_unit записал бы «изменил» без имени и время «сейчас»
+        shared.execute("UPDATE tasks SET unit_id = ? WHERE id = ?", (units[unit], ids[title]))
 shared.close()
 share.close()
 
@@ -147,7 +154,7 @@ app.side.totoro.animate = False  # на снимках Тоторо не дол�
 T.center_on_screen(root, 1560, 860)  # пошире, чтобы названия задач и все столбцы помещались
 # ширины столбцов для снимка: место — названию задачи, остальным — по содержимому
 for column, width in (("num", 48), ("status", 112), ("marks", 72), ("title", 202), ("priority", 128), ("due", 122),
-                      ("remind", 104), ("assignee", 116), ("author", 118), ("created", 116)):
+                      ("remind", 104), ("assignee", 116), ("author", 118), ("unit", 150), ("created", 116)):
     app.tree.column(column, width=width)
 app.columns_fitted = True
 root.attributes("-topmost", True)
