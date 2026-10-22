@@ -5550,13 +5550,12 @@ class KanbanBoard(tk.Frame):
         menu_btn.bind("<Enter>", lambda e: menu_btn.configure(fg=TEXT))
         menu_btn.bind("<Leave>", lambda e: menu_btn.configure(fg=MUTED))
 
-        # Внизу колонки — «＋ Добавить задачу» (раскладывается раньше карточек, чтобы они
-        # не вытеснили строку за край); над ней — карточки в прокручиваемой области
+        # Под заголовком — «＋ Добавить задачу», ниже — карточки в прокручиваемой области
         quick = QuickAdd(lane, self.app, ("status", status_id), lane_bg)
-        quick.pack(side="bottom", fill="x", padx=(10, 10), pady=(0, 8))
+        quick.pack(fill="x", padx=10, pady=(0, 6))
         self.quick_adds.append(quick)
         area = tk.Canvas(lane, bg=lane_bg, highlightthickness=0)
-        area.pack(fill="both", expand=True, padx=(10, 6), pady=(0, 4))
+        area.pack(fill="both", expand=True, padx=(10, 6), pady=(0, 10))
         cards = tk.Frame(area, bg=lane_bg)
         area.create_window(0, 0, window=cards, anchor="nw", width=LANE_WIDTH - 20)
         cards.bind("<Configure>", lambda e: area.configure(scrollregion=area.bbox("all")))
@@ -5947,10 +5946,10 @@ class EisenhowerMatrix(KanbanBoard):
         area = tk.Canvas(box, bg=bg, highlightthickness=0)
         bar = ttk.Scrollbar(box, orient="vertical", command=area.yview, style=bar_style)
         area.configure(yscrollcommand=lambda first, last: self.update_bar(bar, area, first, last))
-        quick = QuickAdd(box, self.app, ("level", level), bg)  # внизу четверти, как в колонке доски
-        quick.pack(side="bottom", fill="x", padx=10, pady=(0, 8))
+        quick = QuickAdd(box, self.app, ("level", level), bg)  # под заголовком, как в колонке доски
+        quick.pack(fill="x", padx=10, pady=(0, 6))
         self.quick_adds.append(quick)
-        area.pack(fill="both", expand=True, padx=(10, 6), pady=(0, 4))
+        area.pack(fill="both", expand=True, padx=(10, 6), pady=(0, 10))
         cards = tk.Frame(area, bg=bg)
         area.create_window(0, 0, window=cards, anchor="nw")
         cards.bind("<Configure>", lambda e: area.configure(scrollregion=area.bbox("all")))
@@ -6468,6 +6467,7 @@ class TodoApp:
                                       command=self.from_screen, cursor="hand2")
         self.snip_button.pack(side="left", padx=(8, 0))
         self.quick_draft = None  # недописанная задача в «＋ Добавить задачу» (см. QuickAdd)
+        self.fresh_ids = []  # задачи, добавленные, пока окно открыто, — стоят первыми (fresh_first)
 
         # Вид (список, доска или матрица), фильтр и сортировка
         toolbar = ttk.Frame(page)
@@ -7817,7 +7817,7 @@ class TodoApp:
             rows = [row for row in rows if bool(row[2]) == wanted]
         if self.search_query:
             rows = [r for r in rows if self.found(r)]
-        rows = self.sort_rows(rows, statuses)
+        rows = self.fresh_first(self.sort_rows(rows, statuses))
         overdue_ids = late & {r[0] for r in rows}
 
         self.hide_title_tip()
@@ -7900,6 +7900,18 @@ class TodoApp:
         rows = sorted(rows, key=lambda r: r[0])
         filled = sorted((r for r in rows if value(r) is not None), key=value, reverse=descending)
         return filled + [r for r in rows if value(r) is None]
+
+    def fresh_first(self, rows):
+        """Только что добавленные задачи — первыми (самая новая выше), при любой сортировке:
+        добавили — сразу видно под строкой «＋ Добавить задачу». После перезапуска или смены
+        списка они встают на обычное место."""
+        if not self.fresh_ids:
+            return rows
+        order = {task_id: i for i, task_id in enumerate(reversed(self.fresh_ids))}
+        if self.column_sort:  # по столбцу выполненные не опускаются вниз — свежие просто первые
+            return sorted(rows, key=lambda row: order.get(row[0], len(order)))  # остальные — как были
+        # обычная сортировка держит выполненные внизу: свежая выполненная — первая среди них
+        return sorted(rows, key=lambda row: (bool(row[2]), order.get(row[0], len(order))))
 
     def sort_by_column(self, column):
         if self.column_drag and self.column_drag["moved"]:
@@ -7992,6 +8004,7 @@ class TodoApp:
         if told and (urgent or not told[0]) and (important or not told[1]):
             told = None  # четверть уже такая — «Отменить» на полосе было бы не о чем
         task_id = db.add_task(self.conn, title, status_id=status_id, created_by=self.created_by())
+        self.fresh_ids.append(task_id)
         # Срок из названия и «срочно/важно» из его слов ставим сразу — их сказали явно;
         # приоритет и шаги похожих задач — только предлагаем в полосе над окном
         urgent, important = urgent or bool(told and told[0]), important or bool(told and told[1])
@@ -8978,6 +8991,7 @@ class TodoApp:
             return
         self.list_id, self.conn = list_id, conn
         self.quick_draft = None  # колонки другого списка — другие
+        self.fresh_ids = []
         self.list_counter = None
         db.set_setting(self.prefs, "current_list", list_id)
         self.show_list_name()
@@ -9325,7 +9339,7 @@ class TodoApp:
         if existing and ui.askyesno("Задача из письма", "По этому письму уже есть задача "
                                     f"№{existing} в списке «{list_name}». Открыть её?\n\n"
                                     "«Нет» — создать ещё одну.", parent=parent):
-            self.show_new_tasks([existing])
+            self.show_new_tasks([existing], fresh=False)  # задача старая — место прежнее
             self.bring_to_front()  # открыть задачу — значит показать окно ToDoro
             return
         note = f"Из письма Outlook, в список «{list_name}»."
@@ -9474,9 +9488,11 @@ class TodoApp:
             self.apply_edit(task_id, dialog.result, refresh=False)
             self.show_new_tasks([task_id])
 
-    def show_new_tasks(self, task_ids):
+    def show_new_tasks(self, task_ids, fresh=True):
         if not task_ids:
             return
+        if fresh:
+            self.fresh_ids.extend(task_ids)  # новые — первыми в колонке и списке
         if FILTERS[self.filter.get()] not in (None, False):
             self.filter.set("Все")  # иначе новую задачу может быть не видно
         if self.search_query:

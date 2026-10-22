@@ -446,6 +446,7 @@ class AddTests(TempDir):
         app.banner = FakeBanner(banner_kind, has_action)
         app.quick_priority = mock.Mock()
         app.all_rows = []
+        app.fresh_ids = []  # add() запоминает новые задачи — они первыми (fresh_first)
         self.conns.append(conn)
         return app
 

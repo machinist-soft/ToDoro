@@ -99,6 +99,7 @@ class PlaceAddTests(TempDir):
         app.banner = FakeBanner(banner_kind, has_action)
         app.quick_priority = mock.Mock()
         app.all_rows, app.refreshed = [], []
+        app.fresh_ids = []  # add() запоминает новые задачи — они первыми (fresh_first)
         return app
 
     def last(self):
@@ -121,6 +122,20 @@ class PlaceAddTests(TempDir):
         """Колонку удалили (другой участник), а строка ещё на экране — статус не подставляем."""
         app = self.make_app()
         self.assertEqual(app.place_flags(("status", 9999)), (None, False, False))
+
+    # --- только что добавленные — первыми (fresh_first) ---
+
+    def test_add_remembers_fresh(self):
+        app = self.make_app()
+        app.add("Первая")
+        app.add("Вторая", ("level", 1))
+        app.add("Третья", ("status", self.done_id))
+        self.assertEqual(app.fresh_ids, [t[0] for t in db.list_tasks(self.conn)])
+
+    def test_empty_title_not_fresh(self):
+        app = self.make_app()
+        app.add("   ")
+        self.assertEqual(app.fresh_ids, [])
 
     # --- add() в список, колонку, четверть ---
 
@@ -782,7 +797,7 @@ class CalendarChipTests(unittest.TestCase):
 
 # ---------- Настоящее окно TodoApp: строки в доске и матрице, Ctrl+N ----------
 
-class QuickAddWindowTests(unittest.TestCase):
+class WindowTestCase(unittest.TestCase):
     """Настоящий TodoApp на временной базе (окно за краем экрана; трей, напоминания,
     обновления, тур и сообщения подменены)."""
 
@@ -846,6 +861,7 @@ class QuickAddWindowTests(unittest.TestCase):
     def tasks(self):
         return db.list_tasks(self.app.conn)
 
+class QuickAddWindowTests(WindowTestCase):
     def test_old_entry_gone_list_has_quick_add(self):
         for name in ("entry", "add_row", "entry_text", "entry_enter", "title_suggest"):
             self.assertFalse(hasattr(self.app, name), name)
@@ -1001,6 +1017,265 @@ class QuickAddWindowTests(unittest.TestCase):
         self.assertIsNone(self.app.quick_draft)
         self.assertTrue(all(q.entry is None for q in self.app.board.quick_adds))
 
+
+
+# ---------- Только что добавленные задачи — первыми (TodoApp.fresh_first) ----------
+
+def frow(task_id, title=None, done=0, due=None, urgent=0, important=0, status=1):
+    """Строка задачи, как из db.list_tasks."""
+    return (task_id, title or f"Задача {task_id}", done, "2030-01-01 10:00", due, None,
+            urgent, important, "", status)
+
+
+class FreshFirstTests(unittest.TestCase):
+    """fresh_first и sort_rows без окна: методы TodoApp на простом объекте."""
+
+    def make_app(self, fresh_ids=(), mode="По приоритету", column_sort=None):
+        app = SimpleNamespace(fresh_ids=list(fresh_ids), sort=FakeVar(mode), column_sort=column_sort,
+                              authors={}, assignees={}, unit_names={},
+                              marks_order=lambda task_id: 0)
+        app.sort_key = lambda row: T.TodoApp.sort_key(app, row)
+        return app
+
+    def ids(self, app, rows):
+        statuses = [(1, "Сделать", "#000", 0), (2, "Готово", "#000", 1)]
+        return [r[0] for r in T.TodoApp.fresh_first(app, T.TodoApp.sort_rows(app, rows, statuses))]
+
+    def rows(self):
+        return [frow(1, "Б", due="2030-01-05 10:00", urgent=1, important=1),
+                frow(2, "А", due="2030-01-01 10:00"),
+                frow(3, "В", urgent=1),
+                frow(4, "Г", done=1),
+                frow(5, "Д")]
+
+    def test_no_fresh_keeps_order(self):
+        app = self.make_app()
+        rows = self.rows()
+        self.assertIs(T.TodoApp.fresh_first(app, rows), rows)  # без свежих — тот же список
+        self.assertEqual(T.TodoApp.fresh_first(self.make_app([5]), []), [])
+
+    def test_one_fresh_first_rest_as_were(self):
+        app = self.make_app([5])
+        rows = self.rows()
+        self.assertEqual([r[0] for r in T.TodoApp.fresh_first(app, rows)], [5, 1, 2, 3, 4])
+
+    def test_several_fresh_newest_on_top(self):
+        app = self.make_app([2, 5, 3])
+        rows = self.rows()
+        self.assertEqual([r[0] for r in T.TodoApp.fresh_first(app, rows)], [3, 5, 2, 1, 4])
+
+    def test_fresh_not_in_rows_ignored(self):
+        """Свежую задачу удалили или её скрыл фильтр — остальные на своих местах."""
+        app = self.make_app([99, 5, 77])
+        self.assertEqual([r[0] for r in T.TodoApp.fresh_first(app, self.rows())], [5, 1, 2, 3, 4])
+
+    def test_with_every_sort(self):
+        cases = {"По приоритету": [1, 3, 2, 4], "По сроку": [2, 1, 3, 4],
+                 "По порядку добавления": [1, 2, 3, 4]}
+        for mode, rest in cases.items():
+            with self.subTest(mode=mode):
+                self.assertEqual(self.ids(self.make_app([5], mode=mode), self.rows()), [5] + rest)
+
+    def test_sort_without_fresh_unchanged(self):
+        self.assertEqual(self.ids(self.make_app(mode="По приоритету"), self.rows()), [1, 3, 2, 5, 4])
+        self.assertEqual(self.ids(self.make_app(mode="По сроку"), self.rows()), [2, 1, 3, 5, 4])
+
+    def test_with_column_sort(self):
+        for column_sort, rest in ((["title", False], [2, 1, 3, 4]), (["title", True], [4, 3, 1, 2]),
+                                  (["due", True], [1, 2, 3, 4]), (["num", True], [4, 3, 2, 1])):
+            with self.subTest(column_sort=column_sort):
+                app = self.make_app([5], column_sort=column_sort)
+                self.assertEqual(self.ids(app, self.rows()), [5] + rest)
+
+    def test_fresh_done_task_first_among_done(self):
+        """Выполненные всегда внизу: только что добавленная в «Готово» — первая среди них,
+        а не над активными. При сортировке по столбцу — просто первая."""
+        ids = self.ids(self.make_app([4]), self.rows())
+        self.assertNotEqual(ids[0], 4)
+        rows = {r[0]: r for r in self.rows()}
+        done = [i for i in ids if rows[i][2]]
+        self.assertEqual(done[0], 4)
+        self.assertEqual(ids[:ids.index(4)], [i for i in ids if not rows[i][2]])
+        self.assertEqual(self.ids(self.make_app([4], column_sort=["title", False]), self.rows())[0], 4)
+
+
+
+class FreshWindowTests(WindowTestCase):
+    """Только что добавленные — первыми в списке, колонке доски и четверти матрицы;
+    строка «＋ Добавить задачу» — под заголовком, над карточками."""
+
+    def make_old(self, title, urgent=False, important=False, status_id=None, due=None):
+        """Задача, которая была в списке до открытия окна (не «свежая»)."""
+        task_id = db.add_task(self.app.conn, title, status_id=status_id)
+        db.update_task(self.app.conn, task_id, title, due, None, urgent, important)
+        return task_id
+
+    def tree_ids(self):
+        return [int(iid) for iid in self.app.tree.get_children()]
+
+    def lane_ids(self, board, task_id):
+        """Задачи колонки (по порядку сверху вниз), в которой стоит карточка task_id."""
+        ids = {card: tid for tid, card in board.cards.items()}
+        return [ids[w] for w in board.cards[task_id].master.pack_slaves() if w in ids]
+
+    def quadrant_ids(self, matrix, task_id):
+        """Задачи четверти по порядку (слева направо, сверху вниз), где стоит карточка task_id."""
+        cells = {}
+        holder = matrix.cards[task_id].master.master  # карточка → ячейка → сетка карточек
+        for tid, card in matrix.cards.items():
+            cell = card.master
+            if cell.master is holder:
+                info = cell.grid_info()
+                cells[(int(info["row"]), int(info["column"]))] = tid
+        return [cells[key] for key in sorted(cells)]
+
+    def quick_enter(self, quick, title):
+        quick.open()  # поле могло остаться открытым после прошлой задачи
+        quick.entry.delete(0, "end")
+        quick.entry.insert(0, title)
+        quick.enter()
+        self.pump()
+        return self.tasks()[-1][0]
+
+    # --- список ---
+
+    def test_list_new_task_first_despite_priority(self):
+        """«По приоритету» новая задача без приоритета всё равно сверху, следующая — ещё выше."""
+        self.app.sort.set("По приоритету")
+        old = [self.make_old("Важная", True, True), self.make_old("Срочная", True)]
+        self.app.refresh()
+        first = self.quick_enter(self.app.list_quick, "Новая")
+        self.assertEqual(self.app.fresh_ids, [first])
+        self.assertEqual(self.tree_ids()[:3], [first] + old)
+        second = self.quick_enter(self.app.list_quick, "Ещё новее")
+        self.assertEqual(self.tree_ids()[:4], [second, first] + old)
+
+    def test_list_fresh_first_by_due_and_column(self):
+        old = [self.make_old("Б со сроком", due="2030-01-01 10:00"), self.make_old("А")]
+        self.app.refresh()
+        new = self.quick_enter(self.app.list_quick, "Я — новая")
+        self.app.sort.set("По сроку")
+        self.app.sort_chosen()
+        self.pump()
+        self.assertEqual(self.tree_ids()[:3], [new] + old)
+        self.app.sort_by_column("title")  # по алфавиту «Я» была бы последней
+        self.pump()
+        self.assertEqual(self.tree_ids()[0], new)
+        self.app.sort_by_column("title")  # обратный порядок
+        self.pump()
+        self.assertEqual(self.tree_ids()[0], new)
+
+    # --- доска и матрица ---
+
+    def test_board_new_task_first_in_lane(self):
+        self.show("board")
+        second = self.app.board.lanes[1][0]
+        old = [self.make_old("Важная", True, True, second), self.make_old("Срочная", True, False, second)]
+        self.app.refresh()
+        self.pump()
+        new = self.quick_enter(self.app.board.quick_adds[1], "Новая в колонке")
+        self.assertEqual(self.lane_ids(self.app.board, new), [new] + old)
+        newer = self.quick_enter(self.app.board.quick_adds[1], "Ещё новее")
+        self.assertEqual(self.lane_ids(self.app.board, new), [newer, new] + old)
+
+    def test_matrix_new_task_first_in_quadrant(self):
+        old = [self.make_old(f"Старая {i}", True, True, due=f"2030-01-0{i} 10:00") for i in (1, 2, 3)]
+        self.show("matrix")
+        new = self.quick_enter(self.app.matrix.quick_adds[0], "Новая в четверти")
+        self.assertEqual(self.quadrant_ids(self.app.matrix, new), [new] + old)
+
+    # --- show_new_tasks и смена списка ---
+
+    def test_show_new_tasks_fresh_and_not(self):
+        self.app.sort.set("По приоритету")
+        top = self.make_old("Важная", True, True)
+        plain = self.make_old("Обычная")
+        self.app.refresh()
+        self.app.show_new_tasks([plain], fresh=False)  # уже была — место прежнее
+        self.assertEqual(self.app.fresh_ids, [])
+        self.assertEqual(self.tree_ids(), [top, plain])
+        self.assertEqual(self.app.current_id(), plain)
+        made = self.make_old("Из письма")
+        self.app.show_new_tasks([made])
+        self.assertEqual(self.app.fresh_ids, [made])
+        self.assertEqual(self.tree_ids(), [made, top, plain])
+        self.assertEqual(self.app.current_id(), made)
+        self.app.show_new_tasks([])  # пусто — ничего
+        self.assertEqual(self.app.fresh_ids, [made])
+
+    def test_existing_mail_task_keeps_place(self):
+        """Из письма, по которому задача уже есть, «Открыть её?» — «Да»: место прежнее."""
+        self.app.sort.set("По приоритету")
+        top = self.make_old("Важная", True, True)
+        existing = self.make_old("По письму")
+        db.set_mail_id(self.app.conn, existing, "mail-1")
+        self.app.refresh()
+        mail = dict(mail_id="mail-1", title="Письмо", body="", due_at=None, important=False,
+                    files=[])
+        with mock.patch.object(T.outlook, "read_selected", return_value=[mail]), \
+                mock.patch.object(T.outlook, "mark_added", create=True), \
+                mock.patch.object(T.ui, "askyesno", return_value=True), \
+                mock.patch.object(self.app, "bring_to_front"):
+            self.app.from_outlook()
+        self.pump()
+        self.assertEqual(self.app.fresh_ids, [])
+        self.assertEqual(self.tree_ids(), [top, existing])
+        self.assertEqual(self.app.current_id(), existing)
+
+    def test_switch_list_drops_fresh(self):
+        self.app.sort.set("По приоритету")
+        top = self.make_old("Важная", True, True)
+        self.app.refresh()
+        new = self.quick_enter(self.app.list_quick, "Новая")
+        self.assertEqual(self.tree_ids(), [new, top])
+        item = {"id": "second", "name": "Второй", "file": db.new_list_file()}
+        db.save_registry(self.app.prefs, db.list_registry(self.app.prefs) + [item])
+        self.app.load_lists()
+        self.app.switch_list("second")
+        self.pump()
+        self.assertEqual(self.app.fresh_ids, [])
+        self.app.switch_list(db.PERSONAL)
+        self.pump()
+        self.assertEqual(self.tree_ids(), [top, new])  # вернулись — новая на обычном месте
+
+    # --- строка «＋ Добавить задачу» над карточками ---
+
+    def check_order(self, box, quick, name):
+        slaves = box.pack_slaves()
+        canvas = next(w for w in slaves if isinstance(w, tk.Canvas))
+        index = slaves.index(quick)
+        self.assertLess(index, slaves.index(canvas))
+        head = slaves[index - 1]  # прямо перед строкой — заголовок с названием
+        texts = [w.cget("text") for w in head.winfo_children() if isinstance(w, tk.Label)]
+        self.assertIn(name, texts)
+        self.assertEqual(quick.pack_info()["side"], "top")
+        # на экране: строка ниже заголовка и выше карточек, целиком внутри рамки
+        self.assertTrue(quick.winfo_ismapped())
+        self.assertLessEqual(head.winfo_y() + head.winfo_height(), quick.winfo_y())
+        self.assertLessEqual(quick.winfo_y() + quick.winfo_height(), canvas.winfo_y())
+        self.assertLessEqual(quick.winfo_y() + quick.winfo_height(), box.winfo_height())
+
+    def test_quick_add_above_cards_in_lane(self):
+        first = db.list_statuses(self.app.conn)[0][0]
+        for i in range(30):  # карточек больше, чем помещается, — строка всё равно видна
+            self.make_old(f"Задача {i}", status_id=first)
+        self.show("board")
+        self.pump()
+        board = self.app.board
+        for (status_id, lane, _), quick in zip(board.lanes, board.quick_adds, strict=True):
+            with self.subTest(status=status_id):
+                self.check_order(lane, quick, self.app.statuses[status_id][0])
+
+    def test_quick_add_above_cards_in_quadrant(self):
+        for i in range(30):
+            self.make_old(f"Задача {i}", True, True)
+        self.show("matrix")
+        self.pump()
+        matrix = self.app.matrix
+        names = {q[0]: q[3] for q in T.EisenhowerMatrix.QUADRANTS}
+        for (level, box, _), quick in zip(matrix.lanes, matrix.quick_adds, strict=True):
+            with self.subTest(level=level):
+                self.check_order(box, quick, names[level])
 
 if __name__ == "__main__":
     unittest.main()
