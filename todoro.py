@@ -155,7 +155,7 @@ FILTERS = {
     "Просроченные": "overdue",  # невыполненные с прошедшим сроком
 }
 EMPTY_TEXT = {
-    "Все": "Задач пока нет — добавьте первую в поле выше",
+    "Все": "Задач пока нет — нажмите «＋ Добавить задачу» выше",
     "Активные": "Все задачи выполнены 🎉",
     "Выполненные": "Выполненных задач пока нет",
     "Просроченные": "Просроченных задач нет — всё успеваете 🎉",
@@ -244,7 +244,6 @@ MONTHS = ["Январь", "Февраль", "Март", "Апрель", "Май"
           "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"]
 WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
-PLACEHOLDER = "Заголовок новой задачи… (Enter — добавить)"
 SEARCH_HINT = "Поиск задач  (Ctrl+F)"
 # Длиннее ссылку «создать письмо» (mailto:) почтовые программы могут не принять:
 # Outlook ломался уже на ~1700 символах (русская буква в ссылке занимает 6 символов).
@@ -402,7 +401,6 @@ def setup_style(root):
     style.map("TEntry",
               bordercolor=[("focus", ACCENT)], lightcolor=[("focus", ACCENT)],
               fieldbackground=[("readonly", SURFACE)])
-    style.configure("Placeholder.TEntry", foreground=DONE)
     style.configure("Date.TEntry", padding=(6, 6, 22, 6))  # справа — место под значок 📅 (DatePicker)
     style.configure("TCombobox", fieldbackground=SURFACE, background=SURFACE, foreground=TEXT,
                     lightcolor=SURFACE, darkcolor=SURFACE, arrowcolor=MUTED, padding=(6, 4),
@@ -5376,6 +5374,91 @@ def bind_tree(widget, sequence, func):
         bind_tree(child, sequence, func)
 
 
+class QuickAdd(tk.Frame):
+    """Строка «＋ Добавить задачу» над списком, в колонке доски и в четверти матрицы.
+    Щелчок — раскрывается поле для названия; Enter добавляет задачу сюда (статус колонки,
+    приоритет четверти), и поле остаётся открытым для следующей; Esc или пустое поле без
+    фокуса — снова строка. Доска перерисовывается целиком (после своих и чужих изменений) —
+    поэтому недописанный текст хранится в app.quick_draft и поле открывается заново с ним."""
+
+    def __init__(self, parent, app, place, bg):
+        super().__init__(parent, bg=bg)
+        self.app, self.place = app, place
+        self.entry = self.suggest = None
+        self.link = tk.Label(self, text="＋  Добавить задачу", bg=bg, fg=MUTED, font=FONT_SMALL,
+                             anchor="w", cursor="hand2", padx=6, pady=4)
+        self.link.pack(fill="x")
+        self.link.bind("<Button-1>", lambda e: self.open())
+        self.link.bind("<Enter>", lambda e: self.link.configure(fg=ACCENT))
+        self.link.bind("<Leave>", lambda e: self.link.configure(fg=MUTED))
+        draft = app.quick_draft
+        if draft and draft["place"] == place:
+            # фокус возвращаем, только если пользователь не ушёл печатать в другое поле
+            # (доску могли перерисовать, пока поле ещё не узнало, что фокус ушёл)
+            try:
+                busy = isinstance(app.root.focus_get(), (tk.Entry, ttk.Entry, tk.Text, ttk.Combobox))
+            except (KeyError, tk.TclError):  # фокус был в уже удалённом поле
+                busy = False
+            self.open(draft["text"], focus=draft["focus"] and not busy)
+
+    def open(self, text="", focus=True):
+        if self.entry is None:
+            self.link.pack_forget()
+            self.entry = ttk.Entry(self, font=FONT)
+            self.entry.pack(fill="x", ipady=1)
+            self.entry.insert(0, text)
+            self.suggest = TitleSuggest(self.entry, self.text, lambda: self.app.smart_rows() or [])
+            self.entry.bind("<Return>", self.enter)
+            self.entry.bind("<KP_Enter>", self.enter)
+            # Esc сначала закрывает список похожих названий (TitleSuggest), потом — само поле
+            self.entry.bind("<Escape>", lambda e: (self.close(), "break")[1], add="+")
+            self.entry.bind("<KeyRelease>", lambda e: self.remember(), add="+")
+            self.entry.bind("<FocusOut>", lambda e: self.app.root.after(250, self.unfocused), add="+")
+        self.remember(focus)
+        if focus:
+            self.entry.focus_set()
+            self.entry.icursor("end")
+
+    def text(self):
+        return self.entry.get().strip() if self.entry is not None else ""
+
+    def remember(self, focus=True):
+        if self.entry is not None:
+            self.app.quick_draft = dict(place=self.place, text=self.entry.get(), focus=focus)
+
+    def enter(self, event=None):
+        if not self.suggest.accept():  # Enter подставил вариант названия — не добавляем
+            title = self.text()
+            if title:
+                self.entry.delete(0, "end")
+                self.remember()
+                self.app.add(title, self.place)  # доска перерисуется — поле откроется снова, пустым
+        return "break"
+
+    def unfocused(self):
+        """Ушли из поля: пустое сворачивается, с текстом — остаётся (без фокуса)."""
+        try:
+            if self.entry is None or not self.entry.winfo_exists():
+                return  # строку уже перерисовали
+            if self.entry.focus_get() is self.entry:
+                return
+        except (KeyError, tk.TclError):  # фокус в уже закрытом окне
+            pass
+        if self.text():
+            self.remember(focus=False)
+        else:
+            self.close()
+
+    def close(self):
+        draft = self.app.quick_draft
+        if draft and draft["place"] == self.place:
+            self.app.quick_draft = None
+        if self.entry is not None:
+            self.entry.destroy()  # список похожих названий закроется сам (TitleSuggest)
+            self.entry = self.suggest = None
+            self.link.pack(fill="x")
+
+
 class KanbanBoard(tk.Frame):
     """Канбан-доска: колонки-статусы и карточки задач, которые можно перетаскивать."""
 
@@ -5386,6 +5469,7 @@ class KanbanBoard(tk.Frame):
         self.drag = None
         self.lanes = []   # [(status_id, рамка колонки, цвет фона колонки)]
         self.cards = {}   # id задачи -> рамка карточки
+        self.quick_adds = []  # «＋ Добавить задачу» в колонках, слева направо
         self.card_width = LANE_WIDTH
         self.show_priority = True
 
@@ -5419,7 +5503,7 @@ class KanbanBoard(tk.Frame):
     def render(self, statuses, rows, overdue_ids):
         for child in self.inner.winfo_children():
             child.destroy()
-        self.lanes, self.cards = [], {}
+        self.lanes, self.cards, self.quick_adds = [], {}, []
         by_status = {}
         for row in rows:
             by_status.setdefault(row[9], []).append(row)
@@ -5466,20 +5550,29 @@ class KanbanBoard(tk.Frame):
         menu_btn.bind("<Enter>", lambda e: menu_btn.configure(fg=TEXT))
         menu_btn.bind("<Leave>", lambda e: menu_btn.configure(fg=MUTED))
 
-        # Карточки — в прокручиваемой области
+        # Внизу колонки — «＋ Добавить задачу» (раскладывается раньше карточек, чтобы они
+        # не вытеснили строку за край); над ней — карточки в прокручиваемой области
+        quick = QuickAdd(lane, self.app, ("status", status_id), lane_bg)
+        quick.pack(side="bottom", fill="x", padx=(10, 10), pady=(0, 8))
+        self.quick_adds.append(quick)
         area = tk.Canvas(lane, bg=lane_bg, highlightthickness=0)
-        area.pack(fill="both", expand=True, padx=(10, 6), pady=(0, 10))
+        area.pack(fill="both", expand=True, padx=(10, 6), pady=(0, 4))
         cards = tk.Frame(area, bg=lane_bg)
         area.create_window(0, 0, window=cards, anchor="nw", width=LANE_WIDTH - 20)
         cards.bind("<Configure>", lambda e: area.configure(scrollregion=area.bbox("all")))
         for row in rows:
             self.make_card(cards, row, color, row[0] in overdue_ids)
+        empty = []
         if not rows:
-            tk.Label(cards, text="Перетащите сюда задачу", bg=lane_bg, fg=DONE,
-                     font=FONT_SMALL).pack(pady=24)
+            empty.append(tk.Label(cards, text="Перетащите сюда задачу", bg=lane_bg, fg=DONE,
+                                  font=FONT_SMALL))
+            empty[0].pack(pady=24)
 
-        for widget in (lane, area, cards):
+        for widget in (lane, area, cards, *empty):
             widget.bind("<Button-1>", lambda e: self.app.clear_selection())
+            # правая кнопка по пустому месту колонки — её меню, первым пунктом «Новая задача…»
+            widget.bind("<Button-3>", lambda e: self.app.lane_menu(status_id, e.x_root, e.y_root))
+        bind_tree(head, "<Button-3>", lambda e: self.app.lane_menu(status_id, e.x_root, e.y_root))
         bind_tree(lane, "<MouseWheel>",
                   lambda e: area.yview_scroll(-1 if e.delta > 0 else 1, "units")
                   if area.bbox("all") and area.bbox("all")[3] > area.winfo_height() else None)
@@ -5739,6 +5832,7 @@ class EisenhowerMatrix(KanbanBoard):
         self.drag = None
         self.lanes = []   # [(уровень приоритета, рамка четверти, цвет фона)]
         self.cards = {}
+        self.quick_adds = []  # «＋ Добавить задачу» в четвертях, по порядку QUADRANTS
         self.show_priority = False  # приоритет и так виден по четверти
         self.card_width = LANE_WIDTH  # переносы текста на карточке — как на доске
         self.shown = None           # что нарисовано — чтобы перерисовать при смене ширины
@@ -5820,7 +5914,7 @@ class EisenhowerMatrix(KanbanBoard):
         for grid_row, levels in ((1, (1, 2)), (2, (3, 4))):
             card_rows = max(-(-len(by_level.get(level, [])) // self.drawn_columns) for level in levels)
             self.rowconfigure(grid_row, weight=max(1, card_rows))
-        self.lanes, self.cards = [], {}
+        self.lanes, self.cards, self.quick_adds = [], {}, []
         for level, _, _, name, hint, color in self.QUADRANTS:
             self.make_quadrant(level, name, hint, color, by_level.get(level, []), colors, overdue_ids)
         if self.selected_id not in self.cards:
@@ -5831,6 +5925,9 @@ class EisenhowerMatrix(KanbanBoard):
         holder = self.quadrants[level]
         for child in holder.winfo_children():
             child.destroy()
+
+        def new_task(event):
+            self.app.new_task_menu(("level", level), event.x_root, event.y_root)
         bg = tint(color, 0.9)
         # толщина рамки всегда 2: при подсветке меняется только цвет
         box = tk.Frame(holder, bg=bg, highlightthickness=2, highlightbackground=BORDER)
@@ -5850,7 +5947,10 @@ class EisenhowerMatrix(KanbanBoard):
         area = tk.Canvas(box, bg=bg, highlightthickness=0)
         bar = ttk.Scrollbar(box, orient="vertical", command=area.yview, style=bar_style)
         area.configure(yscrollcommand=lambda first, last: self.update_bar(bar, area, first, last))
-        area.pack(fill="both", expand=True, padx=(10, 6), pady=(0, 10))
+        quick = QuickAdd(box, self.app, ("level", level), bg)  # внизу четверти, как в колонке доски
+        quick.pack(side="bottom", fill="x", padx=10, pady=(0, 8))
+        self.quick_adds.append(quick)
+        area.pack(fill="both", expand=True, padx=(10, 6), pady=(0, 4))
         cards = tk.Frame(area, bg=bg)
         area.create_window(0, 0, window=cards, anchor="nw")
         cards.bind("<Configure>", lambda e: area.configure(scrollregion=area.bbox("all")))
@@ -5862,12 +5962,19 @@ class EisenhowerMatrix(KanbanBoard):
             cell.grid(row=index // columns, column=index % columns, sticky="nsew",
                       padx=(0, self.GAP if index % columns < columns - 1 else 0))
             cell.bind("<Button-1>", lambda e: self.app.clear_selection())
+            cell.bind("<Button-3>", new_task)
             self.make_card(cell, row, colors.get(row[9], color), row[0] in overdue_ids)
+        empty = []
         if not rows:
-            tk.Label(cards, text="Перетащите сюда задачу", bg=bg, fg=DONE,
-                     font=FONT_SMALL).grid(row=0, column=0, columnspan=columns, pady=24)
-        for widget in (box, head, area, cards):
+            empty.append(tk.Label(cards, text="Перетащите сюда задачу", bg=bg, fg=DONE,
+                                  font=FONT_SMALL))
+            empty[0].grid(row=0, column=0, columnspan=columns, pady=24)
+        for widget in (box, head, area, cards, *empty):
             widget.bind("<Button-1>", lambda e: self.app.clear_selection())
+        # правая кнопка по пустому месту четверти — «Новая задача…» с её приоритетом
+        for widget in (box, area, cards, *empty):
+            widget.bind("<Button-3>", new_task)
+        bind_tree(head, "<Button-3>", new_task)
         bind_tree(box, "<MouseWheel>",
                   lambda e: area.yview_scroll(-1 if e.delta > 0 else 1, "units")
                   if area.bbox("all") and area.bbox("all")[3] > area.winfo_height() else None)
@@ -5919,8 +6026,10 @@ class CalendarView(tk.Frame):
     двойной щелчок — изменить, двойной щелчок по дню — новая задача с этим сроком. Задачу можно
     перетащить на другой день — срок переносится, время остаётся прежним."""
 
-    CHIP = 21  # высота строки с задачей в дне
+    CHIP = 27  # высота плашки с задачей в дне (25) вместе с промежутком под ней (2)
     MAX_PROJECTED = 45  # больше повторов одной задачи на экране не бывает (6 недель каждый день — 42)
+    # цвет полоски на плашке — цвет приоритета, как четверти матрицы; обычная задача — акцентный
+    LEVEL_COLORS = {level: color for level, *_, color in EisenhowerMatrix.QUADRANTS if level < 4}
 
     def __init__(self, parent, app):
         super().__init__(parent, bg=BG)
@@ -5931,7 +6040,8 @@ class CalendarView(tk.Frame):
         self.due_of = {}             # id задачи -> срок, как он показан (для переноса)
         self.month = date.today().replace(day=1)
         self.shown = None            # (статусы, задачи, просроченные) — для перерисовки
-        self.chips = {}              # id задачи -> [строки с ней в днях месяца]
+        self.chips = {}              # id задачи -> [плашки с ней в днях месяца]
+        self.quick_adds = []         # строки «＋ Добавить задачу» нет: новая задача — по дню
         self.drawn_fit = None        # сколько задач помещалось в день при последней отрисовке
         self.redraw_job = None
 
@@ -6097,25 +6207,34 @@ class CalendarView(tk.Frame):
             more.bind("<Button-1>", lambda e, i=items: self.day_menu(i, e.x_root, e.y_root))
         for widget in (cell, number):
             widget.bind("<Button-1>", lambda e: self.app.clear_selection())
-            widget.bind("<Double-Button-1>", lambda e, d=day: self.app.new_task_on(d))
+            widget.bind("<Double-Button-1>", lambda e, d=day: self.app.new_task_at(("day", d)))
+            widget.bind("<Button-3>", lambda e, d=day: self.app.new_task_menu(("day", d), e.x_root, e.y_root))
 
     def make_chip(self, cell, bg, time_text, level, task_id, title, done, overdue, projected):
+        """Задача в дне — плашка: светлый фон, рамка и полоска слева цвета приоритета
+        (просроченная — красная). Выполненные и будущие повторы — бледные, без заливки."""
         text = f"{REPEAT_MARK} {time_text}  {title}" if projected else f"{time_text}  {title}"
-        fg = DANGER if overdue else DONE if done or projected else TEXT
-        icon = IMAGES.get(f"priority_{level}", "") if level < 4 and not projected and not done else ""
+        pale = done or projected
+        color = DANGER if overdue else self.LEVEL_COLORS.get(level, ACCENT)
+        fill = bg if pale else tint(color, 0.86)
+        edge = BORDER if pale else tint(color, 0.55)
+        chip = tk.Frame(cell, bg=fill, highlightthickness=1, highlightbackground=edge,
+                        highlightcolor=edge, cursor="hand2")
+        chip.pack(fill="x", padx=3, pady=(0, 2))
+        tk.Frame(chip, bg=BORDER if pale else color, width=3, cursor="hand2").pack(side="left", fill="y")
         # width=1: длинный заголовок обрезается по ширине дня, а не раздвигает столбец
-        chip = tk.Label(cell, text=text, image=icon, compound="left", bg=bg, fg=fg, font=FONT_SMALL,
-                        anchor="w", width=1, cursor="hand2", padx=4)
-        chip.pack(fill="x", padx=2)
-        chip.bg = bg
-        chip.bind("<Double-Button-1>", lambda e: (self.app.select_task(task_id), self.app.edit()))
-        chip.bind("<Button-3>", lambda e: self.app.show_menu_for(task_id, e.x_root, e.y_root))
+        label = tk.Label(chip, text=text, bg=fill, fg=DANGER if overdue else DONE if pale else TEXT,
+                         font=FONT_SMALL, anchor="w", width=1, cursor="hand2", padx=4)
+        label.pack(side="left", fill="x", expand=True)
+        chip.bg, chip.edge, chip.label = fill, edge, label
+        bind_tree(chip, "<Double-Button-1>", lambda e: (self.app.select_task(task_id), self.app.edit()))
+        bind_tree(chip, "<Button-3>", lambda e: self.app.show_menu_for(task_id, e.x_root, e.y_root))
         if projected:  # будущий повтор — не отдельная задача, переносить нечего
-            chip.bind("<Button-1>", lambda e: self.app.select_task(task_id))
+            bind_tree(chip, "<Button-1>", lambda e: self.app.select_task(task_id))
             return
-        chip.bind("<Button-1>", lambda e: self.on_press(e, task_id, chip))
-        chip.bind("<B1-Motion>", self.on_motion)
-        chip.bind("<ButtonRelease-1>", self.on_release)
+        bind_tree(chip, "<Button-1>", lambda e: self.on_press(e, task_id, chip))
+        bind_tree(chip, "<B1-Motion>", self.on_motion)
+        bind_tree(chip, "<ButtonRelease-1>", self.on_release)
         self.chips.setdefault(task_id, []).append(chip)
 
     def day_menu(self, items, x, y):
@@ -6136,7 +6255,10 @@ class CalendarView(tk.Frame):
         for task_id, chips in self.chips.items():
             for chip in chips:
                 if chip.winfo_exists():
-                    chip.configure(bg=ACCENT_SOFT if task_id == self.selected_id else chip.bg)
+                    chosen = task_id == self.selected_id
+                    chip.configure(bg=ACCENT_SOFT if chosen else chip.bg,
+                                   highlightbackground=ACCENT if chosen else chip.edge)
+                    chip.label.configure(bg=ACCENT_SOFT if chosen else chip.bg)
 
     def set_mark(self, task_id, mark):
         """Значков 📎 💬 в календаре нет — места в дне мало."""
@@ -6179,7 +6301,7 @@ class CalendarView(tk.Frame):
                          width=max(chip.winfo_width(), 120), height=chip.winfo_height() + 6)
         frame.pack()
         frame.pack_propagate(False)
-        tk.Label(frame, text=chip.cget("text"), image=chip.cget("image"), compound="left",
+        tk.Label(frame, text=chip.label.cget("text"),
                  bg=SURFACE, fg=TEXT, font=FONT_SMALL, anchor="w", width=1, padx=4).pack(
             fill="both", expand=True)
         ox, oy = self.drag["offset"]
@@ -6334,34 +6456,24 @@ class TodoApp:
             self.chips[key] = chip
         self.menu_button = menu_button(header, "☰  Меню", self.build_main_menu)
         self.menu_button.pack(side="right")
-
-        # Поле ввода и кнопка «Добавить»
-        add_row = ttk.Frame(page)
-        add_row.pack(fill="x", pady=(16, 14))
-        self.add_row = add_row
-        # Полоса-уведомление над полем ввода (связь с общей папкой); обычно скрыта
-        self.banner = Banner(page, before=add_row)
-        self.entry = ttk.Entry(add_row, font=FONT)
-        self.entry.pack(side="left", fill="x", expand=True, ipady=2)
-        self.entry.bind("<Return>", lambda e: self.entry_enter())
-        self.entry.bind("<KeyPress>", self.on_entry_key)
-        self.entry.bind("<<Paste>>", lambda e: self.hide_placeholder())
-        self.entry.bind("<FocusIn>", lambda e: self.cursor_to_start())
-        self.entry.bind("<Button-1>", lambda e: self.root.after_idle(self.cursor_to_start))
-        self.entry.bind("<FocusOut>", lambda e: self.show_placeholder())
-        self.title_suggest = TitleSuggest(self.entry, self.entry_text, lambda: self.smart_rows() or [])
-        ttk.Button(add_row, text="＋  Добавить", style="Accent.TButton",
-                   command=self.add).pack(side="left", padx=(10, 0), ipady=2)
-        self.mail_button = ttk.Button(add_row, text="✉  Из письма", style="TButton",
-                                      command=self.from_outlook)
-        self.mail_button.pack(side="left", padx=(8, 0), ipady=2)
-        self.snip_button = ttk.Button(add_row, text="✂  Снимок", style="TButton",
-                                      command=self.from_screen)
-        self.snip_button.pack(side="left", padx=(8, 0), ipady=2)
+        # Задача из письма Outlook или со снимком экрана (сама задача добавляется строкой
+        # «＋ Добавить задачу» в колонке, четверти или над списком)
+        new_from = ttk.Frame(header)
+        new_from.pack(side="right", padx=(0, 10), pady=(4, 0))
+        self.new_from = new_from
+        self.mail_button = ttk.Button(new_from, text="✉  Из письма", style="TButton",
+                                      command=self.from_outlook, cursor="hand2")
+        self.mail_button.pack(side="left")
+        self.snip_button = ttk.Button(new_from, text="✂  Снимок", style="TButton",
+                                      command=self.from_screen, cursor="hand2")
+        self.snip_button.pack(side="left", padx=(8, 0))
+        self.quick_draft = None  # недописанная задача в «＋ Добавить задачу» (см. QuickAdd)
 
         # Вид (список, доска или матрица), фильтр и сортировка
         toolbar = ttk.Frame(page)
-        toolbar.pack(fill="x", pady=(0, 12))
+        toolbar.pack(fill="x", pady=(16, 12))
+        # Полоса-уведомление над видами (связь с общей папкой, умные подсказки); обычно скрыта
+        self.banner = Banner(page, before=toolbar)
         self.view = tk.StringVar(value=db.get_setting(self.prefs, "view", "list"))
         views = ttk.Frame(toolbar, style="Segments.TFrame", padding=3)
         views.pack(side="left")
@@ -6452,6 +6564,8 @@ class TodoApp:
         self.table_card = card
         inner = ttk.Frame(card, style="Card.TFrame", padding=(6, 4, 4, 6))
         inner.pack(fill="both", expand=True)
+        self.list_quick = QuickAdd(inner, self, None, SURFACE)
+        self.list_quick.pack(side="top", fill="x", padx=(2, 4), pady=(2, 4))
         self.scrollbar = ttk.Scrollbar(inner, orient="vertical")
         columns = {
             "num": ("№", 52, False),
@@ -6551,7 +6665,7 @@ class TodoApp:
         for key in ("<Control-f>", "<Control-F>"):
             root.bind(key, lambda e: (self.search.focus_set(), "break")[1])
         for key in ("<Control-n>", "<Control-N>"):
-            root.bind(key, lambda e: (self.entry.focus_set(), "break")[1])
+            root.bind(key, lambda e: (self.quick_add_here(), "break")[1])
         self.help_window = None
 
         root.protocol("WM_DELETE_WINDOW", self.close)
@@ -6587,8 +6701,6 @@ class TodoApp:
         root.after(150, self.raise_on_start)
         root.after(200, self.repaint)  # ещё раз, когда окно уже показано
         root.after(600, self.reset_cursor)  # и обычный курсор — на случай, если ⟷ «залип» при запуске
-        self.show_placeholder()
-        self.entry.focus()
         root.after(4000, self.auto_check_update)  # раз в день — нет ли новой версии
         if db.get_setting(self.prefs, "tour_show", "1") == "1":
             root.after(700, self.start_tour)  # первый запуск (или тур не отключили) — тур
@@ -6599,8 +6711,6 @@ class TodoApp:
             maximized = db.get_setting(self.prefs, "start_mode", "window") == "maximized"
             root.state("zoomed" if maximized else "normal")
         bring_to_front(root)
-        if self.entry.winfo_exists():
-            self.entry.focus()
 
     # --- список, доска или матрица ---
 
@@ -6940,10 +7050,14 @@ class TodoApp:
              "Привет! Я Тоторо и помогу не забывать о делах.\n\n"
              "За минуту покажу главное. Тур можно пропустить и открыть потом: "
              "«☰ Меню» → «Ознакомительный тур»."),
-            (lambda: self.add_row, "Новая задача",
-             "Впишите задачу и нажмите Enter или «Добавить». Срок и «срочно» можно написать прямо "
-             "в названии: «Сдать отчёт завтра в 10 срочно». Я подскажу похожие названия из ваших "
-             "прошлых задач. Остальное — потом, кнопкой «Изменить».\n\n"
+            (self.tour_quick_add, "Новая задача",
+             "Нажмите «＋ Добавить задачу» (или Ctrl+N), впишите название и нажмите Enter. "
+             "Такая строка есть над списком, в каждой колонке доски и в каждой четверти "
+             "матрицы — задача сразу попадает туда. Правая кнопка мыши по пустому месту "
+             "колонки, четверти или дня календаря — «Новая задача…» с полной формой.\n\n"
+             "Срок и «срочно» можно написать прямо в названии: «Сдать отчёт завтра в 10 "
+             "срочно». Я подскажу похожие названия из ваших прошлых задач."),
+            (lambda: self.new_from, "Из письма и со снимка",
              "Поручение пришло письмом? Выделите его в Outlook и нажмите Ctrl+Alt+T "
              "(или «Из письма» здесь) — задача заполнится по письму. Ctrl+Alt+S (или «Снимок») — "
              "задача со снимком выделенной области экрана."),
@@ -6995,7 +7109,6 @@ class TodoApp:
     def tour_closed(self, show_next_time):
         db.set_setting(self.prefs, "tour_show", "1" if show_next_time else "0")
         self.tour = None
-        self.entry.focus_set()
 
     def send_feedback(self, kind):
         """Открывает на GitHub форму сообщения об ошибке или идеи (раздел Issues)."""
@@ -7019,6 +7132,7 @@ class TodoApp:
 
     def switch_view(self):
         db.set_setting(self.prefs, "view", self.view.get())
+        self.quick_draft = None  # недописанное в колонке не переезжает в другой вид
         if self.view.get() == "matrix":
             self.filter.set("Активные")  # выполненным в матрице делать нечего
         task_id = self.current_id()
@@ -7395,6 +7509,8 @@ class TodoApp:
             colors.command(label, lambda v=value: self.set_lane_color(status_id, v),
                            icon=swatch(value), checked=value == color)
         (PopupMenu()
+         .command("＋  Новая задача…", lambda: self.new_task_at(("status", status_id)))
+         .separator()
          .command("Настроить колонку…", lambda: self.edit_lane(status_id))
          .submenu("Цвет", colors, icon=swatch(color))
          .separator()
@@ -7568,8 +7684,6 @@ class TodoApp:
     def show_whats_new(self):
         WhatsNewWindow(self.root)
 
-    # --- подсказка в пустом поле ввода ---
-
     # --- поиск задач ---
 
     def search_focus(self):
@@ -7619,40 +7733,23 @@ class TodoApp:
                              self.assignees.get(task_id, ""), self.unit_names.get(task_id, ""))).lower()
         return all(stem in haystack for stem in search_stems(self.search_query))
 
-    def placeholder_shown(self):
-        return self.entry.cget("style") == "Placeholder.TEntry"
+    def tour_quick_add(self):
+        """Что обвести в туре на шаге «Новая задача»: строку добавления в открытом виде."""
+        view = self.cards_view()
+        if view is None:
+            return self.list_quick
+        return view.quick_adds[0] if view.quick_adds else view
 
-    def show_placeholder(self):
-        if not self.entry.get():
-            self.entry.insert(0, PLACEHOLDER)
-            self.entry.configure(style="Placeholder.TEntry")
-            self.cursor_to_start()
-
-    def hide_placeholder(self):
-        if self.placeholder_shown():
-            self.entry.delete(0, "end")
-            self.entry.configure(style="TEntry")
-
-    def cursor_to_start(self):
-        if self.placeholder_shown():
-            self.entry.selection_clear()
-            self.entry.icursor(0)
-
-    def on_entry_key(self, event):
-        """Подсказка исчезает, как только пользователь начинает печатать."""
-        if not self.placeholder_shown():
-            return None
-        if event.char and event.char.isprintable():
-            self.hide_placeholder()
-            return None
-        if event.keysym in ("BackSpace", "Delete", "Left", "Right", "Home", "End"):
-            return "break"  # не даём стирать или двигаться по тексту подсказки
-        return None
-
-    def entry_text(self):
-        if self.placeholder_shown():
-            return ""
-        return self.entry.get().strip()
+    def quick_add_here(self):
+        """Ctrl+N: раскрыть «＋ Добавить задачу» в том виде, что открыт (в доске — первая
+        колонка, в матрице — «Сделать сейчас»); в календаре — окно новой задачи на сегодня."""
+        if self.view.get() == "calendar":
+            self.new_task_at(("day", date.today()))
+            return
+        view = self.cards_view()
+        quick_adds = view.quick_adds if view else [self.list_quick]
+        if quick_adds:
+            quick_adds[0].open()
 
     # --- таблица и доска ---
 
@@ -7869,19 +7966,19 @@ class TodoApp:
             return None
         return task_id, info["done"]
 
-    def entry_enter(self):
-        if not self.title_suggest.accept():  # Enter подставил вариант названия — не добавляем
-            self.add()
-
     def banner_busy(self):
         """На полосе важное: связь с общей папкой или кнопка «Открыть список» — не перекрываем."""
         return self.banner.kind in ("alert", "wait") or (self.banner.kind == "good"
                                                           and self.banner.has_action)
 
-    def add(self):
-        title = self.entry_text()
+    def add(self, title, place=None):
+        """Быстрое добавление задачи по названию (строка «＋ Добавить задачу»). place — куда:
+        ("status", id) колонка доски, ("level", n) четверть матрицы, None — над списком."""
+        title = title.strip()
         if not title:
             return
+        status_id, urgent, important = self.place_flags(place)
+        base = (urgent, important)  # приоритет четверти — его не отменяет «Отменить» на полосе
         history = self.smart_rows()
         # Что поняли из названия, применяем, только если можем сказать об этом на полосе
         # (с кнопкой «Отменить»); иначе задача добавляется как написана
@@ -7892,22 +7989,29 @@ class TodoApp:
         prio = smart.suggest_priority(name, history) if history is not None else None
         # «срочно/важно» сказали в названии
         told = prio if prio and prio[3] and not self.banner_busy() else None
-        task_id = db.add_task(self.conn, title, created_by=self.created_by())
+        if told and (urgent or not told[0]) and (important or not told[1]):
+            told = None  # четверть уже такая — «Отменить» на полосе было бы не о чем
+        task_id = db.add_task(self.conn, title, status_id=status_id, created_by=self.created_by())
         # Срок из названия и «срочно/важно» из его слов ставим сразу — их сказали явно;
-        # приоритет и шаги похожих задач — только предлагаем в полосе над полем ввода
-        if when or told:
+        # приоритет и шаги похожих задач — только предлагаем в полосе над окном
+        urgent, important = urgent or bool(told and told[0]), important or bool(told and told[1])
+        if told:  # на полосе — итоговый приоритет (вместе с приоритетом четверти)
+            told = (urgent, important, *told[2:])
+        if when or urgent or important:
             due_at, remind = apply_when(when) if when else (None, None)
-            db.update_task(self.conn, task_id, title, due_at, remind, bool(told and told[0]),
-                           bool(told and told[1]), by=self.created_by())
-        self.entry.delete(0, "end")
-        self.show_placeholder()
-        if FILTERS[self.filter.get()] not in (None, False):
-            self.filter.set("Все")  # иначе новую задачу (без срока) не будет видно
+            db.update_task(self.conn, task_id, title, due_at, remind, urgent, important,
+                           by=self.created_by())
+        wanted = FILTERS[self.filter.get()]
+        done = bool(status_id and self.statuses[status_id][2])  # добавили в колонку «Готово»
+        if wanted is not None and wanted is not done:
+            self.filter.set("Все")  # иначе новую задачу не будет видно
         self.refresh(select_id=task_id)
         if history is not None:
-            self.smart_banner(task_id, title, when, told, None if told else prio, history)
+            # в четверти матрицы приоритет уже выбран — советовать его незачем
+            advice = None if told or any(base) else prio
+            self.smart_banner(task_id, title, when, told, advice, history, base)
 
-    def smart_banner(self, task_id, title, when, told, prio, history):
+    def smart_banner(self, task_id, title, when, told, prio, history, base=(False, False)):
         """После быстрого добавления: что умные подсказки поняли из названия (с «Отменить»)
         или совет по похожим задачам. Сообщение о связи с общей папкой не перекрываем."""
         if self.banner_busy():
@@ -7935,7 +8039,7 @@ class TodoApp:
                 self.banner.hide()
                 self.finish_editing()
                 # задачу с тех пор меняли (вы или другой участник) — не трогаем
-                if db.update_task(self.conn, task_id, title, None, None, False, False,
+                if db.update_task(self.conn, task_id, title, None, None, *base,
                                   by=self.created_by(), version=version):
                     self.refresh(select_id=task_id)
                 else:
@@ -8873,6 +8977,7 @@ class TodoApp:
             ui.showerror(APP_NAME, text, parent=self.root)
             return
         self.list_id, self.conn = list_id, conn
+        self.quick_draft = None  # колонки другого списка — другие
         self.list_counter = None
         db.set_setting(self.prefs, "current_list", list_id)
         self.show_list_name()
@@ -9323,21 +9428,45 @@ class TodoApp:
         outlook.mark_added(mail["entry_id"], mail["store_id"])  # категория «В ToDoro» в Outlook
         return task_id
 
-    def new_task_on(self, day):
-        """Двойной щелчок по дню в календаре: новая задача со сроком в этот день."""
+    def place_flags(self, place):
+        """Что задаёт место, куда добавляют задачу: (статус или None, срочно, важно).
+        place — ("status", id) колонка доски, ("level", n) четверть матрицы, иначе None."""
+        if place and place[0] == "level":
+            _, urgent, important, *_ = next(q for q in EisenhowerMatrix.QUADRANTS if q[0] == place[1])
+            return None, urgent, important
+        if place and place[0] == "status" and place[1] in self.statuses:
+            return place[1], False, False
+        return None, False, False
+
+    def new_task_menu(self, place, x, y):
+        """Правая кнопка по пустому месту колонки, четверти или дня календаря."""
+        if place[0] == "status":
+            self.lane_menu(place[1], x, y)
+            return
+        PopupMenu().command("＋  Новая задача…", lambda: self.new_task_at(place)).popup(self.root, x, y)
+
+    def new_task_at(self, place):
+        """Окно новой задачи, уже заполненное по месту: день календаря (двойной щелчок или
+        правая кнопка) — срок в этот день; колонка доски — её статус; четверть — приоритет."""
         if self.root.grab_current() is not None:
             return  # открыто другое окно
         self.finish_editing()
         members = self.members()
         statuses = db.list_statuses(self.conn)
-        due = datetime.combine(day, time(int(DEFAULT_TIME[0]), int(DEFAULT_TIME[1])))
-        task = dict(title="", body="", due_at=due.strftime("%Y-%m-%d %H:%M"), remind_before=None,
-                    urgent=False, important=False, status_id=statuses[0][0],
+        status_id, urgent, important = self.place_flags(place)
+        due_at, where = None, f"В список «{self.current_list()['name']}»."
+        if place and place[0] == "day":
+            day = place[1]
+            due_at = datetime.combine(day, time(int(DEFAULT_TIME[0]), int(DEFAULT_TIME[1])))
+            due_at = due_at.strftime("%Y-%m-%d %H:%M")
+            where = f"Срок — {day:%d.%m.%Y}, в список «{self.current_list()['name']}»."
+        task = dict(title="", body="", due_at=due_at, remind_before=None,
+                    urgent=urgent, important=important, status_id=status_id or statuses[0][0],
                     assignee=self.user_name() if members is not None else None,
                     initiator=self.user_name() if members is not None else None, version=None)
         dialog = TaskDialog(self.root, task, statuses, members=members, title="Новая задача",
-                            note=f"Срок — {day:%d.%m.%Y}, в список «{self.current_list()['name']}».",
-                            history=self.smart_rows(), hints=True, units=db.list_units(self.conn))
+                            note=where, history=self.smart_rows(), hints=True,
+                            units=db.list_units(self.conn))
         self.root.wait_window(dialog)
         if dialog.result:
             task_id = db.add_task(self.conn, dialog.result["title"],

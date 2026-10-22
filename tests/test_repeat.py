@@ -1166,7 +1166,8 @@ class CalendarViewTests(unittest.TestCase):
         app = SimpleNamespace(repeats={}, root=self.root)
         app.select_task = lambda tid: self.calls.append(("select", tid))
         app.clear_selection = lambda: self.calls.append(("clear",))
-        app.new_task_on = lambda day: self.calls.append(("new", day))
+        app.new_task_at = lambda place: self.calls.append(("new", place))
+        app.new_task_menu = lambda place, x, y: self.calls.append(("new menu", place))
         app.edit = lambda: self.calls.append(("edit",))
         app.show_menu_for = lambda *a: self.calls.append(("menu",))
         self.app = app

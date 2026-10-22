@@ -410,11 +410,6 @@ class FakeBanner:
         self.hidden = getattr(self, "hidden", 0) + 1
 
 
-class FakeEntry:
-    def delete(self, *args):
-        pass
-
-
 class AddTests(TempDir):
     """TodoApp.add и smart_banner на временной базе — без окна: методы берём у TodoApp,
     всё, что рисует, — заглушки."""
@@ -433,10 +428,7 @@ class AddTests(TempDir):
             smart_banner = T.TodoApp.smart_banner
             smart_rows = T.TodoApp.smart_rows
             banner_busy = T.TodoApp.banner_busy
-            entry_enter = T.TodoApp.entry_enter
-
-            def entry_text(self):
-                return text
+            place_flags = T.TodoApp.place_flags
 
             def created_by(self):
                 return None
@@ -444,15 +436,12 @@ class AddTests(TempDir):
             def refresh(self, select_id=None):
                 self.all_rows = db.list_tasks(self.conn)
 
-            def show_placeholder(self):
-                pass
-
             def finish_editing(self):
                 pass
 
         app = App()
-        app.conn, app.smart_on, app.entry = conn, smart_on, FakeEntry()
-        app.title_suggest = mock.Mock(accept=mock.Mock(return_value=False))
+        app.conn, app.smart_on, app.title = conn, smart_on, text  # title — что вписали в строку
+        app.statuses = {sid: (name, color, bool(done)) for sid, name, color, done in db.list_statuses(conn)}
         app.filter = mock.Mock(get=mock.Mock(return_value="Все"))
         app.banner = FakeBanner(banner_kind, has_action)
         app.quick_priority = mock.Mock()
@@ -474,7 +463,7 @@ class AddTests(TempDir):
 
     def test_when_and_told_applied_then_undo(self):
         app = self.make_app("Срочно сдать отчёт завтра в 10:30")
-        app.add()
+        app.add(app.title)
         task = self.last_task(app)
         tomorrow = (date.today() + timedelta(1)).strftime("%Y-%m-%d")
         self.assertEqual(task[1], "Срочно сдать отчёт завтра в 10:30")  # название — как написали
@@ -490,19 +479,19 @@ class AddTests(TempDir):
     def test_banner_text_priority_only(self):
         """Приоритет на полосе подписан словом «приоритет» — иначе «Срочно» похоже на название."""
         app = self.make_app("Срочно позвонить")
-        app.add()
+        app.add(app.title)
         self.assertEqual(app.banner.shown[-1][1], "Понял из названия: приоритет «Срочно».")
 
     def test_banner_text_when_and_priority(self):
         app = self.make_app("Срочно позвонить завтра в 10:00")
-        app.add()
+        app.add(app.title)
         day = smart.describe_when(date.today() + timedelta(1), time(10, 0))
         self.assertEqual(app.banner.shown[-1][1],
                          f"Понял из названия: срок {day}, напомню за 15 минут; приоритет «Срочно».")
 
     def test_day_only_no_reminder(self):
         app = self.make_app("Оплатить счёт послезавтра")
-        app.add()
+        app.add(app.title)
         task = self.last_task(app)
         day = (date.today() + timedelta(2)).strftime("%Y-%m-%d")
         self.assertEqual((task[1], task[4], task[5]), ("Оплатить счёт послезавтра", day + " 09:00", None))
@@ -511,7 +500,7 @@ class AddTests(TempDir):
     def test_undo_skipped_if_task_changed(self):
         """Задачу после добавления изменили — «Отменить» её не трогает (проверка version)."""
         app = self.make_app("Сдать отчёт завтра")
-        app.add()
+        app.add(app.title)
         task_id = self.last_task(app)[0]
         db.update_task(app.conn, task_id, "Новое название", None, None)
         app.banner.shown[-1][3]()
@@ -540,7 +529,7 @@ class AddTests(TempDir):
     def test_undo_after_list_switch(self):
         """Переключили список — «Отменить» не трогает задачу с тем же номером в другом списке."""
         app = self.make_app("Сдать отчёт завтра")
-        app.add()
+        app.add(app.title)
         conn_b, task_id, rows, meta = self.other_list(app, "Чужая задача")
         db.update_task(conn_b, task_id, "Чужая задача", "2030-01-01 09:00", 15, True, True)
         rows, meta = db.list_tasks(conn_b), db.task_meta(conn_b, task_id)
@@ -556,7 +545,7 @@ class AddTests(TempDir):
             task_id = db.add_task(app.conn, title)
             db.update_task(app.conn, task_id, title, None, None, True, True)
         app.refresh()
-        app.add()
+        app.add(app.title)
         conn_b, task_id, rows, meta = self.other_list(app, "Чужая задача")
         app.banner.shown[-1][3]()
         app.quick_priority.assert_not_called()
@@ -568,7 +557,7 @@ class AddTests(TempDir):
         old = db.add_task(app.conn, "Командировка в Казань")
         db.update_task(app.conn, old, "Командировка в Казань", None, None, body="Билеты\nГостиница")
         app.refresh()
-        app.add()
+        app.add(app.title)
         self.assertEqual(app.banner.shown[-1][2], "Вставить шаги")
         conn_b, task_id, rows, meta = self.other_list(app, "Чужая задача")
         app.banner.shown[-1][3]()
@@ -579,7 +568,7 @@ class AddTests(TempDir):
     def test_buttons_work_after_switch_back(self):
         """Вернулись в тот же список (тот же conn) — «Отменить» снова работает."""
         app = self.make_app("Сдать отчёт завтра")
-        app.add()
+        app.add(app.title)
         conn_a = app.conn
         self.other_list(app, "Чужая задача")
         app.conn = conn_a
@@ -588,14 +577,14 @@ class AddTests(TempDir):
 
     def test_undo_after_delete(self):
         app = self.make_app("Сдать отчёт завтра")
-        app.add()
+        app.add(app.title)
         db.delete_task(app.conn, self.last_task(app)[0])
         app.banner.shown[-1][3]()  # не падает
         self.assertEqual(db.list_tasks(app.conn), [])
 
     def test_smart_off(self):
         app = self.make_app("Срочно сдать отчёт завтра", smart_on=False)
-        app.add()
+        app.add(app.title)
         task = self.last_task(app)
         self.assertEqual((task[1], task[4], task[6]), ("Срочно сдать отчёт завтра", None, 0))
         self.assertEqual(app.banner.shown, [])
@@ -606,7 +595,7 @@ class AddTests(TempDir):
             with self.subTest(kind=kind):
                 app = self.make_app("Срочно сдать отчёт завтра", banner_kind=kind, has_action=action)
                 self.assertTrue(app.banner_busy())
-                app.add()
+                app.add(app.title)
                 task = self.last_task(app)
                 self.assertEqual((task[1], task[4], task[6]), ("Срочно сдать отчёт завтра", None, 0))
                 self.assertEqual(app.banner.shown, [])
@@ -616,13 +605,13 @@ class AddTests(TempDir):
             with self.subTest(kind=kind):
                 app = self.make_app("Сдать отчёт завтра", banner_kind=kind, has_action=action)
                 self.assertFalse(app.banner_busy())
-                app.add()
+                app.add(app.title)
                 self.assertEqual(self.last_task(app)[1], "Сдать отчёт завтра")  # название — как написали
                 self.assertEqual(app.banner.shown[-1][2], "Отменить")
 
     def test_plain_title_nothing_shown(self):
         app = self.make_app("Купить 2 билета в 3 кассе")
-        app.add()
+        app.add(app.title)
         self.assertEqual(self.last_task(app)[1], "Купить 2 билета в 3 кассе")
         self.assertEqual(app.banner.shown, [])
 
@@ -632,7 +621,7 @@ class AddTests(TempDir):
             task_id = db.add_task(app.conn, title)
             db.update_task(app.conn, task_id, title, None, None, True, True)
         app.refresh()
-        app.add()
+        app.add(app.title)
         task = self.last_task(app)
         self.assertEqual((task[6], task[7]), (0, 0))  # только советуем, не ставим
         kind, text, button, mark = app.banner.shown[-1]
@@ -646,7 +635,7 @@ class AddTests(TempDir):
         old = db.add_task(app.conn, "Командировка в Казань")
         db.update_task(app.conn, old, "Командировка в Казань", None, None, body="Билеты\nГостиница")
         app.refresh()
-        app.add()
+        app.add(app.title)
         kind, text, button, insert = app.banner.shown[-1]
         self.assertEqual(button, "Вставить шаги")
         insert()
@@ -657,7 +646,7 @@ class AddTests(TempDir):
         old = db.add_task(app.conn, "Командировка в Казань")
         db.update_task(app.conn, old, "Командировка в Казань", None, None, body="Билеты\nГостиница")
         app.refresh()
-        app.add()
+        app.add(app.title)
         new = self.last_task(app)[0]
         db.update_task(app.conn, new, "Командировка в Казань снова", None, None, body="своё")
         app.banner.shown[-1][3]()
@@ -666,7 +655,7 @@ class AddTests(TempDir):
     def test_word_form_priority_only_advice(self):
         """«Обязательные платежи» — приоритет не ставим сами, только предлагаем «Отметить»."""
         app = self.make_app("Обязательные платежи оплатить")
-        app.add()
+        app.add(app.title)
         task = self.last_task(app)
         self.assertEqual((task[6], task[7]), (0, 0))
         kind, text, button, mark = app.banner.shown[-1]
@@ -677,33 +666,30 @@ class AddTests(TempDir):
     def test_word_form_urgent_marked_at_once(self):
         """«срочный тест 22» в быстром добавлении — «Срочно» отмечено сразу."""
         app = self.make_app("срочный тест 22")
-        app.add()
+        app.add(app.title)
         task = self.last_task(app)
         self.assertEqual((task[1], task[6], task[7]), ("срочный тест 22", 1, 0))
         app.quick_priority.assert_not_called()
 
     def test_not_urgent_word_not_marked(self):
         app = self.make_app("Несрочно позвонить")
-        app.add()
+        app.add(app.title)
         task = self.last_task(app)
         self.assertEqual((task[6], task[7]), (0, 0))
 
-    def test_enter_with_suggestion_does_not_add(self):
-        app = self.make_app("Позвонить")
-        app.title_suggest.accept.return_value = True
-        app.entry_enter()
-        self.assertEqual(db.list_tasks(app.conn), [])
-        app.title_suggest.accept.return_value = False
-        app.entry_enter()
-        self.assertEqual(len(db.list_tasks(app.conn)), 1)
+    def test_empty_title_not_added(self):
+        """Пустое название или одни пробелы — задачи нет, полоса молчит."""
+        for text in ("", "   ", "\t\n"):
+            with self.subTest(text=text):
+                app = self.make_app(text)
+                app.add(app.title)
+                self.assertEqual(db.list_tasks(app.conn), [])
+                self.assertEqual(app.banner.shown, [])
 
-    def test_add_button_ignores_suggestion(self):
-        """Кнопка «Добавить» вызывает add напрямую — открытый список вариантов не мешает."""
-        app = self.make_app("Позвонить")
-        app.title_suggest.accept.return_value = True
-        app.add()
-        app.title_suggest.accept.assert_not_called()
-        self.assertEqual(len(db.list_tasks(app.conn)), 1)
+    def test_title_stripped(self):
+        app = self.make_app("  Позвонить маме  ")
+        app.add(app.title)
+        self.assertEqual(self.last_task(app)[1], "Позвонить маме")
 
     def test_smart_rows(self):
         app = self.make_app("x")

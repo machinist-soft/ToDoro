@@ -172,7 +172,8 @@ class CalendarDragTests(unittest.TestCase):
         app = SimpleNamespace(repeats={}, root=self.root)
         app.select_task = lambda tid: self.calls.append(("select", tid))
         app.clear_selection = lambda: self.calls.append(("clear",))
-        app.new_task_on = lambda day: self.calls.append(("new", day))
+        app.new_task_at = lambda place: self.calls.append(("new", place))
+        app.new_task_menu = lambda place, x, y: self.calls.append(("new menu", place))
         app.edit = lambda: self.calls.append(("edit",))
         app.show_menu_for = lambda *a: self.calls.append(("menu",))
         app.move_due = lambda tid, old, day: self.calls.append(("move", tid, old, day))
@@ -294,15 +295,19 @@ class CalendarDragTests(unittest.TestCase):
         self.view.render(STATUSES, [row(1, "2030-03-10 09:30")], set())
         self.root.update()
         own = set(map(str, self.view.chips[1]))
+        # плашка — рамка с надписью внутри (chip.label); повтор узнаём по значку в надписи
         projected = [w for _, cell in self.view.cells for w in cell.winfo_children()
-                     if isinstance(w, tk.Label) and self.T.REPEAT_MARK in str(w.cget("text"))]
+                     if hasattr(w, "label") and self.T.REPEAT_MARK in str(w.label.cget("text"))]
         self.assertTrue(projected)
         for chip in projected:
             self.assertNotIn(str(chip), own)
-            self.assertEqual(chip.bind("<B1-Motion>"), "")
-            self.assertEqual(chip.bind("<ButtonRelease-1>"), "")
+            for part in (chip, *chip.winfo_children()):  # ни рамка, ни полоска, ни надпись
+                self.assertEqual(part.bind("<B1-Motion>"), "")
+                self.assertEqual(part.bind("<ButtonRelease-1>"), "")
+                self.assertNotEqual(part.bind("<Button-1>"), "")  # щелчок — выбрать
         for chip in self.view.chips[1]:
-            self.assertNotEqual(chip.bind("<B1-Motion>"), "")
+            for part in (chip, *chip.winfo_children()):
+                self.assertNotEqual(part.bind("<B1-Motion>"), "")
 
     def test_drop_on_day_of_other_month(self):
         """День соседнего месяца, видный в сетке (бледный), — тоже цель переноса."""

@@ -392,19 +392,18 @@ def shoot_snip():
 
 
 def shoot_smart():
-    """4д. Умные подсказки: варианты названия из прошлых задач под полем ввода."""
-    app.entry.focus_force()
-    app.hide_placeholder()
-    app.entry.insert(0, "По")
-    app.title_suggest.update()
-    app.title_suggest.move(1)
-    popup = app.title_suggest.popup
+    """4д. Умные подсказки: варианты названия из прошлых задач под строкой «＋ Добавить задачу»."""
+    quick = app.list_quick
+    quick.open()
+    quick.entry.focus_force()
+    quick.entry.insert(0, "По")
+    quick.suggest.update()
+    quick.suggest.move(1)
+    popup = quick.suggest.popup
     popup.update()
     left, top, right, _ = frame_box()
     grab("smart.png", (left, top, right, popup.winfo_rooty() + popup.winfo_height() + 16))
-    app.title_suggest.close()
-    app.entry.delete(0, "end")
-    app.show_placeholder()
+    quick.close()
 
 
 def shoot_tour():
