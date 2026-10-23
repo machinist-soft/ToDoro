@@ -119,6 +119,13 @@ CSV export / import, e-mail a task, built-in help · one-click updates and an in
 
 ![Календарь / Calendar](docs/screenshots/calendar.png)
 
+### Оформление описания / Formatted description
+
+Жирный, курсив, зачёркнутый, списки и таблицы — кнопками над полем описания или Ctrl+B / Ctrl+I; ячейки из Excel вставляются таблицей, задача из письма Outlook сохраняет его оформление.
+*Bold, italic, strikethrough, lists and tables — with the buttons above the description or Ctrl+B / Ctrl+I; cells pasted from Excel become a table, and a task from an Outlook e-mail keeps its formatting.*
+
+![Оформленное описание / Formatted description](docs/screenshots/rich.png)
+
 ### Умные подсказки / Smart hints
 
 Начните писать задачу — ToDoro предложит похожие названия из ваших прошлых задач; «Сдать отчёт завтра в 10» сам поставит срок и напоминание. Без интернета.
@@ -369,8 +376,8 @@ flowchart TB
 
 ## Лицензия / License
 
-Код — MIT, © 2026 Machinist. См. [LICENSE](LICENSE).
-Code is MIT-licensed, © 2026 Machinist. See [LICENSE](LICENSE).
+Код — MIT, © 2026 Machinist Soft. См. [LICENSE](LICENSE).
+Code is MIT-licensed, © 2026 Machinist Soft. See [LICENSE](LICENSE).
 
 ## Конфиденциальность и безопасность / Privacy and security
 

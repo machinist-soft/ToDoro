@@ -30,7 +30,7 @@ import db  # noqa: E402
 
 DARK = "dark" in sys.argv[1:]  # python tools/make_screenshots.py dark — только снимок тёмной темы
 # снимки светлой темы (имена файлов без .png); catbus — анимация catbus.gif
-SHOTS = ("list", "lists", "card", "form", "files", "comments", "outlook", "snip", "smart", "board",
+SHOTS = ("list", "lists", "card", "form", "rich", "files", "comments", "outlook", "snip", "smart", "board",
          "matrix", "calendar", "tour", "settings", "about", "whatsnew", "reminders", "phone", "update", "catbus")
 # python tools/make_screenshots.py card files — только эти снимки; без имён — все
 WANTED = {name.removesuffix(".png").removesuffix(".gif") for name in sys.argv[1:]}
@@ -264,6 +264,8 @@ def run():
         grab("form.png")
         app.cancel_edit()
         app.paned.paneconfigure(app.side, width=app.panel_width)
+    if wanted("rich"):  # 4а. Оформленное описание: жирный, списки, таблица — в карточке справа
+        shoot_rich()
     if wanted("files") or wanted("comments"):  # 4б. Вкладки «Файлы» и «Комментарии» в карточке
         shoot_card_tabs()
     app.clear_selection()  # после card/form — дальше снимки без выделенной задачи, как при полной съёмке
@@ -326,6 +328,29 @@ def shoot_lists():
     left, top, _, _ = frame_box()
     grab("lists.png", (left, top, left + 620, menu.winfo_rooty() + menu.winfo_height() + 16))
     menu.close()
+
+
+RICH_BODY = """**Черновик — к четвергу**, *финал* — к понедельнику.
+- 10–12 слайдов, ~~старый прайс~~ — новые цены
+| Тариф | Цена | Срок |
+|---|---|---|
+| **Расширенный** | 90 000 ₽ | 1 месяц |"""
+
+
+def shoot_rich():
+    """Оформленное описание в карточке (описание примера подменяется на время снимка)."""
+    title = "Подготовить презентацию для клиента"
+    task_id = ids[title]
+    old = T.db.get_task(app.conn, task_id)  # (заголовок, срок, напоминание, срочно, важно, описание)
+    T.db.update_task(app.conn, task_id, old[0], old[1], old[2], old[3], old[4], RICH_BODY)
+    app.paned.paneconfigure(app.side, width=520)
+    app.refresh(select_id=task_id)
+    root.update()
+    grab("rich.png")
+    T.db.update_task(app.conn, task_id, *old)
+    app.paned.paneconfigure(app.side, width=app.panel_width)
+    app.refresh(select_id=task_id)
+    app.clear_selection()
 
 
 def shoot_card_tabs():

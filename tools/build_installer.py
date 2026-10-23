@@ -28,8 +28,8 @@ def version_info(version):
     """Описание файла ToDoro.exe (Свойства → Подробно). FileDescription Windows показывает
     как название программы — например, в списке значков в трее, — иначе там «ToDoro.exe»."""
     numbers = tuple((list(map(int, version.split("."))) + [0, 0, 0, 0])[:4])
-    fields = dict(CompanyName="Machinist", FileDescription="ToDoro", FileVersion=version,
-                  InternalName="ToDoro", LegalCopyright="© 2026 Machinist",
+    fields = dict(CompanyName="Machinist Soft", FileDescription="ToDoro", FileVersion=version,
+                  InternalName="ToDoro", LegalCopyright="© 2026 Machinist Soft",
                   OriginalFilename="ToDoro.exe", ProductName="ToDoro", ProductVersion=version)
     strings = ", ".join(f"StringStruct({key!r}, {value!r})" for key, value in fields.items())
     return (f"VSVersionInfo(ffi=FixedFileInfo(filevers={numbers}, prodvers={numbers}, mask=0x3f, "

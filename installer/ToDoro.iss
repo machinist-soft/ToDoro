@@ -13,10 +13,10 @@ AppId={{704F1583-0095-4838-9767-724E7112B147}
 AppName=ToDoro
 AppVersion={#AppVersion}
 AppVerName=ToDoro {#AppVersion}
-AppPublisher=Machinist
+AppPublisher=Machinist Soft
 AppPublisherURL=https://github.com/machinist-soft/ToDoro
 AppSupportURL=https://github.com/machinist-soft/ToDoro
-AppCopyright=© 2026 Machinist
+AppCopyright=© 2026 Machinist Soft
 ; Установка только для текущего пользователя: права администратора не нужны,
 ; программа ставится в %LOCALAPPDATA%\Programs\ToDoro
 PrivilegesRequired=lowest
