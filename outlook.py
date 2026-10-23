@@ -11,9 +11,12 @@ from datetime import datetime
 from email.utils import formataddr
 from pathlib import Path
 
+import richtext
+
 CATEGORY = "В ToDoro"     # категория письма в Outlook: «по нему уже есть задача»
 CATEGORY_COLOR = 6         # olCategoryColorTeal — как значок ToDoro
 MAX_BODY = 6000            # длиннее описание обрезаем — полный текст есть в приложенном письме
+MAX_HTML = 2_000_000       # письмо больше — берём обычный текст (Body), без оформления
 SMALL_INLINE = 30 * 1024   # картинки внутри текста меньше этого — обычно логотипы из подписей
 
 # Классы элементов Outlook (OlObjectClass)
@@ -51,9 +54,10 @@ def clean_subject(subject):
 def clean_body(text):
     """Текст письма для описания задачи: без цитаты прошлых писем и лишних пустых строк."""
     lines = (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    for i, line in enumerate(lines):
+    bare = [re.sub(r"\*\*|~~", "", line) for line in lines]  # «**От:** …» из HTML-письма — тоже цитата
+    for i, line in enumerate(bare):
         if QUOTE_MARK.match(line) or (
-                QUOTE_FROM.match(line) and any(QUOTE_SENT.match(l) for l in lines[i + 1:i + 4])):
+                QUOTE_FROM.match(line) and any(QUOTE_SENT.match(l) for l in bare[i + 1:i + 4])):
             if any(l.strip() for l in lines[:i]):  # письмо, где всё — цитата (пересылка), не режем
                 lines = lines[:i]
             break
@@ -112,6 +116,17 @@ def selected_items():
         raise OutlookError("В Outlook не выделено ни одного письма.\n\n"
                            "Выделите письмо в списке и попробуйте ещё раз.")
     return items
+
+
+def mail_text(item):
+    """Текст HTML-письма со значками оформления (жирный, списки, таблицы) или "" —
+    у простого текстового письма HTML нет, тогда берут обычный текст (Body)."""
+    if get(item, "BodyFormat") != 2:  # olFormatHTML; у простых и RTF-писем — обычный текст
+        return ""
+    html = get(item, "HTMLBody") or ""
+    if len(html) > MAX_HTML:  # огромное письмо разбиралось бы секунды — окно бы подвисло
+        return ""
+    return richtext.html_to_markup(html)
 
 
 def get(item, name, default=None):
@@ -212,7 +227,8 @@ def read_item(item, folder):
         header.append(f"От: {sender}" + (when.strftime(", %d.%m.%Y %H:%M") if when else ""))
     elif when:
         header.append(when.strftime("Письмо от %d.%m.%Y %H:%M"))
-    text = clean_body(get(item, "Body") or get(task, "Body") or "")
+    # Оформленное письмо (HTML) — с жирным, списками и таблицами (richtext); иначе — обычный текст
+    text = clean_body(mail_text(item) or get(item, "Body") or get(task, "Body") or "")
     body = "\n".join(header) + ("\n\n" + text if text else "")
 
     try:

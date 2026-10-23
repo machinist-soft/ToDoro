@@ -42,6 +42,9 @@
   задачи; щелчок по задаче открывает её. Окно можно открыть и самому из меню.
 - **Файлы, картинки и комментарии** в каждой задаче: приложите документ или снимок экрана
   (Ctrl+V), обсудите задачу с командой прямо в её карточке.
+- **Оформление описания**: жирный, курсив, зачёркнутый, списки и таблицы — кнопками над
+  полем или Ctrl+B / Ctrl+I; таблица из Excel вставляется таблицей, а задача из письма Outlook
+  сохраняет его жирный текст, списки и таблицы.
 - **Список, канбан-доска, матрица Эйзенхауэра и календарь**: свои колонки-статусы с цветами, перетаскивание
   карточек и колонок; в матрице карточку переносят в другую четверть — меняется приоритет;
   календарь показывает задачи цветными плашками по срокам на месяц, с будущими повторами, — задачу можно
@@ -77,7 +80,7 @@ monthly, quarterly, half-yearly, yearly, optionally until a date): finish one an
 title suggestions from your past tasks, due dates understood from the text (“завтра в 10”),
 priority and checklist suggestions from similar tasks · a reminders window with every
 overdue task, one click opens a task · file attachments, pasted
-screenshots and comments in every task · list, kanban board with
+screenshots and comments in every task · formatted descriptions (bold, italic, lists, tables — pasted from Excel or kept from an Outlook mail) · list, kanban board with
 custom columns and Eisenhower matrix (drag a card to another quadrant to change its priority),
 a month calendar with colour-coded task chips and upcoming repeats (drag a task to another day to move its due date),
 filters, search, column sorting and drag-to-reorder columns · an optional business unit per task,

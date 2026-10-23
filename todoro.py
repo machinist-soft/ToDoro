@@ -28,6 +28,7 @@ from tkinter import colorchooser, filedialog, font as tkfont, ttk
 import db
 import outlook
 import phone
+import richtext
 import smart
 import snip
 import team
@@ -870,7 +871,7 @@ def build_email(number, title, status, priority, due, remind, created, urgent, b
     level_hint = next((PRIORITY_HINTS[k] for k, v in PRIORITY_NAMES.items() if v and v == priority), "")
     lines = [f"Задача #{number}: {title}", ""]
     if body.strip():
-        lines += ["Описание:", *body.strip().splitlines(), ""]
+        lines += ["Описание:", *richtext.plain(body).strip().splitlines(), ""]
     lines += [
         f"Статус: {status}",
         f"Приоритет: {priority} — {level_hint}" if priority else "Приоритет: обычный",
@@ -1553,6 +1554,274 @@ class TitleSuggest:
         self.popup, self.items, self.index = None, [], -1
 
 
+RICH_STYLES = ("bold", "italic", "strike")
+RICH_TABLE_ROWS, RICH_TABLE_COLUMNS = 60, 10  # таблица больше — в карточке простым текстом
+
+
+def rich_tags(widget, font=FONT):
+    """Теги оформления описания в поле tk.Text: «rich_bold», «rich_bold_italic» и т. д. —
+    у Tk шрифты тегов не складываются, поэтому на каждое сочетание свой тег."""
+    family, size = font[0], font[1]
+    for mask in range(1, 8):
+        styles = [s for i, s in enumerate(RICH_STYLES) if mask & (1 << i)]
+        extra = [{"bold": "bold", "italic": "italic", "strike": "overstrike"}[s] for s in styles]
+        widget.tag_configure("rich_" + "_".join(styles), font=(family, size, *extra))
+
+
+def rich_tag(styles):
+    return "rich_" + "_".join(s for s in RICH_STYLES if s in styles) if styles else ()
+
+
+def render_rich(widget, text, wheel=None):
+    """Показывает описание оформленным (без значков): жирный, курсив, зачёркнутый, списки
+    с отступом, таблицы — сеткой с линиями. Поле должно быть в состоянии «normal».
+    wheel — что делать с колёсиком над таблицей (сама сетка его не прокручивает)."""
+    if "rich_bold" not in widget.tag_names():  # теги оформления — при первом показе
+        rich_tags(widget)
+        for level in range(4):
+            indent = 6 + level * 18
+            widget.tag_configure(f"rich_list{level}", lmargin1=indent, lmargin2=indent + 18,
+                                 tabs=(indent + 18,))
+    for index, block in enumerate(richtext.blocks(text)):
+        if index:
+            widget.insert("end", "\n")
+        kind = block[0]
+        if kind == "table":
+            widget.window_create("end", window=rich_table(widget, block[1], block[2], wheel), pady=4)
+            continue
+        if kind == "text":
+            line, prefix, level = block[1], "", None
+        elif kind == "bullet":
+            line, prefix, level = block[1], "•\t", min(block[2], 3)
+        else:
+            line, prefix, level = block[2], f"{block[1]}.\t", min(block[3], 3)
+        start = widget.index("end-1c")
+        widget.insert("end", prefix)
+        for part, styles in richtext.inline(line):
+            widget.insert("end", part, rich_tag(styles))
+        if level is not None:
+            widget.tag_add(f"rich_list{level}", start, "end-1c")
+
+
+def rich_table(widget, rows, header, wheel=None):
+    """Таблица описания — сетка подписей с тонкими линиями между ячейками. Ширина ячеек — по
+    ширине поля; очень большая таблица (много строк или столбцов) — строками текста."""
+    columns = max(len(row) for row in rows)
+    if len(rows) > RICH_TABLE_ROWS or columns > RICH_TABLE_COLUMNS:
+        text = "\n".join("   ".join("".join(t for t, _ in richtext.inline(c)) for c in row) for row in rows)
+        label = tk.Label(widget, text=text, bg=SURFACE, fg=TEXT, font=FONT_SMALL, justify="left",
+                         anchor="nw")
+        if wheel:
+            label.bind("<MouseWheel>", wheel)
+        return label
+    room = widget.winfo_width() - 2 * int(widget.cget("padx")) - 8
+    wrap = max(60, min(220, room // columns - 14)) if room > 100 else 220
+    grid = tk.Frame(widget, bg=BORDER, padx=1, pady=1)
+    for r, row in enumerate(rows):
+        for c, cell in enumerate(row):
+            head = header and r == 0
+            text = "".join(t for t, _ in richtext.inline(cell))
+            bold = head or any("bold" in s for _, s in richtext.inline(cell))
+            tk.Label(grid, text=text, bg=ACCENT_SOFT if head else SURFACE, fg=TEXT, anchor="nw",
+                     justify="left", wraplength=wrap, padx=6, pady=2,
+                     font=FONT_SMALL_BOLD if bold else FONT_SMALL).grid(
+                row=r, column=c, sticky="nsew", padx=(0, 1 if c < len(row) - 1 else 0),
+                pady=(0, 1 if r < len(rows) - 1 else 0))
+    if wheel:
+        bind_tree(grid, "<MouseWheel>", wheel)
+    return grid
+
+
+class RichEditor:
+    """Оформление в поле описания (tk.Text): кнопки и Ctrl+B / Ctrl+I ставят и снимают
+    значки **жирный**, *курсив*, ~~зачёркнутый~~, «- » и «1. » у строк; значки видны бледно,
+    а текст между ними — уже оформленным. Вставка ячеек из Excel — таблицей (richtext)."""
+
+    MARKERS = {"bold": "**", "italic": "*", "strike": "~~"}
+
+    def __init__(self, text):
+        self.text, self.job = text, None
+        rich_tags(text)
+        text.tag_configure("rich_mark", foreground=DONE)
+        text.tag_configure("rich_table", font=("Consolas", 10))
+        text.bind("<KeyRelease>", lambda e: self.later(), add="+")
+        text.bind("<<Paste>>", self.paste)
+        # Ctrl+B / Ctrl+I — по физической клавише, при любой раскладке; «break» — чтобы Ctrl+B
+        # не свернул правую панель
+        text.bind("<Control-KeyPress>", self.key)
+
+    def key(self, event):
+        style = {66: "bold", 73: "italic"}.get(event.keycode)
+        if style is None or event.state & 0x1:  # с Shift — не наше
+            return None
+        self.toggle(style)
+        return "break"
+
+    def later(self):
+        if self.job is None:
+            self.job = self.text.after_idle(self.highlight)
+
+    def highlight(self):
+        """Подсветка: значки — бледно, текст между ними — жирным/курсивом/зачёркнутым,
+        строки таблицы — моноширинным шрифтом (столбцы ровнее)."""
+        self.job = None
+        text = self.text
+        if not text.winfo_exists():
+            return
+        for tag in text.tag_names():
+            if tag.startswith("rich_"):
+                text.tag_remove(tag, "1.0", "end")
+        for number, line in enumerate(text.get("1.0", "end-1c").split("\n"), start=1):
+            if richtext.TABLE_LINE.match(line):
+                text.tag_add("rich_table", f"{number}.0", f"{number}.end")
+                continue
+            styles = [set() for _ in line]
+            for start, end, kind in richtext.marks(line):
+                for i in range(start, end):
+                    styles[i].add("mark" if kind == "mark" else kind)
+            i = 0
+            while i < len(line):
+                j = i
+                while j < len(line) and styles[j] == styles[i]:
+                    j += 1
+                if "mark" in styles[i]:
+                    text.tag_add("rich_mark", f"{number}.{i}", f"{number}.{j}")
+                elif styles[i]:
+                    text.tag_add(rich_tag(styles[i]), f"{number}.{i}", f"{number}.{j}")
+                i = j
+
+    def toggle(self, style):
+        """Кнопка «Ж»/«К»/«З»: выделенный текст — в значки (или из значков, если уже в них);
+        без выделения — пара значков, курсор между ними."""
+        text, marker = self.text, self.MARKERS[style]
+        size = len(marker)
+        text.edit_separator()
+        try:
+            start, end = text.index("sel.first"), text.index("sel.last")
+        except tk.TclError:
+            text.insert("insert", marker * 2)
+            text.mark_set("insert", f"insert-{size}c")
+        else:
+            chosen = text.get(start, end)
+            if len(chosen) > 2 * size and chosen.startswith(marker) and chosen.endswith(marker):
+                text.delete(f"{end}-{size}c", end)
+                text.delete(start, f"{start}+{size}c")
+                end = f"{end}-{2 * size}c"
+            elif (text.get(f"{start}-{size}c", start) == marker
+                  and text.get(end, f"{end}+{size}c") == marker):
+                text.delete(end, f"{end}+{size}c")
+                text.delete(f"{start}-{size}c", start)
+                start, end = f"{start}-{size}c", f"{end}-{size}c"
+            else:
+                text.insert(end, marker)
+                text.insert(start, marker)
+                start, end = f"{start}+{size}c", f"{end}+{size}c"
+            text.tag_remove("sel", "1.0", "end")
+            text.tag_add("sel", start, end)
+            text.mark_set("insert", end)
+        text.edit_separator()
+        text.focus_set()
+        self.highlight()
+
+    def toggle_list(self, numbered):
+        """Кнопки «•» и «1.»: строки с выделением (или строка с курсором) — пунктами списка;
+        если они уже такие — снова обычными строками."""
+        text = self.text
+        try:
+            first, last = text.index("sel.first"), text.index("sel.last")
+        except tk.TclError:
+            first = last = text.index("insert")
+        top, bottom = int(first.split(".")[0]), int(last.split(".")[0])
+        if bottom > top and last.endswith(".0"):
+            bottom -= 1  # выделение до начала следующей строки — её не трогаем
+        lines = [text.get(f"{n}.0", f"{n}.end") for n in range(top, bottom + 1)]
+        mine = richtext.NUMBER if numbered else richtext.BULLET
+        remove = all(mine.match(line) for line in lines if line.strip())
+        text.edit_separator()
+        number = 0  # номер пункта — только по непустым строкам
+        for i, n in enumerate(range(top, bottom + 1)):
+            line = lines[i]
+            m = richtext.BULLET.match(line) or richtext.NUMBER.match(line)
+            body = line[m.end():] if m else line.lstrip()
+            indent = m.group(1) if m else line[:len(line) - len(line.lstrip())]
+            if remove:
+                new = indent + body
+            elif not line.strip():
+                continue
+            else:
+                number += 1
+                new = indent + (f"{number}. " if numbered else "- ") + body
+            text.delete(f"{n}.0", f"{n}.end")
+            text.insert(f"{n}.0", new)
+        text.edit_separator()
+        text.focus_set()
+        self.highlight()
+
+    def enter(self):
+        """Enter в пункте списка начинает следующий пункт («- » или номер +1); Enter в пустом
+        пункте убирает значок списка — список закончен."""
+        text = self.text
+        try:
+            text.delete("sel.first", "sel.last")
+        except tk.TclError:
+            pass
+        line = text.get("insert linestart", "insert lineend")
+        m = richtext.BULLET.match(line) or richtext.NUMBER.match(line)
+        empty = re.match(r"(\s*)([-•–*]|\d{1,3}[.)])\s+$", line)  # пункт без текста: «- », «2. »
+        if empty:
+            text.delete("insert linestart", "insert lineend")
+            text.insert("insert", empty.group(1))
+        elif m and text.compare("insert", ">=", f"insert linestart+{m.end()}c"):
+            prefix = (f"{m.group(1)}{int(m.group(2)) + 1}. " if m.re is richtext.NUMBER
+                      else line[:m.end()])
+            text.insert("insert", "\n" + prefix)
+        else:
+            text.insert("insert", "\n")
+        text.see("insert")
+        self.later()
+
+    def paste(self, event=None):
+        """Ячейки из Excel (столбцы через табуляцию) вставляются таблицей на отдельных строках."""
+        try:
+            table = richtext.tsv_to_table(self.text.clipboard_get())
+        except tk.TclError:
+            table = None
+        if table is None:
+            self.later()
+            return None  # обычная вставка
+        text = self.text
+        text.edit_separator()
+        try:
+            text.delete("sel.first", "sel.last")
+        except tk.TclError:
+            pass
+        before = "" if text.compare("insert", "==", "insert linestart") else "\n"
+        after = "" if text.compare("insert", "==", "insert lineend") and text.compare(
+            "insert", "==", "end-1c") else "\n"
+        text.insert("insert", before + table + after)
+        text.edit_separator()
+        self.highlight()
+        return "break"
+
+    def toolbar(self, parent, bg):
+        """Кнопки оформления: Ж, К, З, • список, 1. список. Это надписи, а не кнопки Tk —
+        щелчок по ним не забирает фокус и выделение у поля."""
+        bar = tk.Frame(parent, bg=bg)
+        items = (("Ж", (FONT[0], 10, "bold"), lambda: self.toggle("bold")),        # Ctrl+B
+                 ("К", (FONT[0], 10, "italic"), lambda: self.toggle("italic")),    # Ctrl+I
+                 ("З", (FONT[0], 10, "overstrike"), lambda: self.toggle("strike")),
+                 ("•", FONT_SMALL_BOLD, lambda: self.toggle_list(False)),
+                 ("1.", FONT_SMALL, lambda: self.toggle_list(True)))
+        for text, font, command in items:
+            button = tk.Label(bar, text=text, bg=bg, fg=MUTED, font=font, width=2, cursor="hand2",
+                              padx=2)
+            button.pack(side="left", padx=(0, 2))
+            button.bind("<Button-1>", lambda e, c=command: c())
+            button.bind("<Enter>", lambda e, b=button: b.configure(fg=ACCENT, bg=HOVER))
+            button.bind("<Leave>", lambda e, b=button: b.configure(fg=MUTED, bg=bg))
+        return bar
+
+
 def apply_when(when):
     """Срок, найденный в названии (smart.parse_when), — в значения формы: due_at и напоминание.
     Время сказано явно — напоминаем за 15 минут; только день — срок в 9:00 без напоминания."""
@@ -1606,7 +1875,10 @@ class TaskForm(ttk.Frame):
         self.refused = [False, False]      # нашу галочку сняли руками — её больше не ставим
         self.hint_bg, self.hint_wrap = style_bg, 250 if compact else 380
 
-        label("Описание")
+        # «Описание» и справа — кнопки оформления (Ж, К, З, списки; RichEditor)
+        desc_head = ttk.Frame(self, style=self["style"])
+        desc_head.pack(fill="x", pady=(12, 4))
+        ttk.Label(desc_head, text="Описание", style=label_style).pack(side="left", anchor="s")
         desc_box = tk.Frame(self, bg=SURFACE, highlightthickness=1,
                             highlightbackground=BORDER, highlightcolor=ACCENT)
         desc_box.pack(fill="x")
@@ -1620,8 +1892,11 @@ class TaskForm(ttk.Frame):
         desc_scroll.pack(side="right", fill="y")
         self.desc.pack(side="left", fill="both", expand=True)
         self.desc.insert("1.0", task["body"])
-        # В описании Enter — новая строка; сохранить — Ctrl+Enter
-        self.desc.bind("<Return>", lambda e: (self.desc.insert("insert", "\n"), "break")[1])
+        self.rich = RichEditor(self.desc)
+        self.rich.toolbar(desc_head, style_bg).pack(side="right")
+        self.rich.highlight()
+        # В описании Enter — новая строка (в списке — следующий пункт); сохранить — Ctrl+Enter
+        self.desc.bind("<Return>", lambda e: (self.rich.enter(), "break")[1])
         # Ручка под описанием: потянуть вниз — поле выше, вверх — ниже; высота запоминается
         self.on_desc_resize = None  # TaskDialog подменяет: окну нужно не уйти за край экрана
         grip = tk.Canvas(self, bg=style_bg, height=9, highlightthickness=0, cursor="sb_v_double_arrow")
@@ -1987,6 +2262,7 @@ class TaskForm(ttk.Frame):
     def use_steps(self, body):
         self.desc.delete("1.0", "end")
         self.desc.insert("1.0", body)
+        self.rich.highlight()
 
     def set_date(self, days):
         self.date.set(date.today() + timedelta(days=days))
@@ -3267,9 +3543,13 @@ class TaskCard(tk.Frame):
         self.title.configure(text=title, fg=color)
         self.status.configure(text=status, fg=status_color)
         self.body.configure(state="normal")
+        for table in self.body.winfo_children():  # таблицы прошлого описания (render_rich)
+            table.destroy()
         self.body.delete("1.0", "end")
         if body.strip():
-            self.body.insert("1.0", body)
+            # оформленным: жирный, списки, таблицы (значки **, «- », «| |» не видны)
+            render_rich(self.body, body, wheel=lambda e: (
+                self.body.yview_scroll(-2 if e.delta > 0 else 2, "units"), "break")[1])
         else:
             self.body.insert("1.0", "Описания нет.\nНажмите «Изменить», чтобы его добавить.",
                              "empty")
@@ -3767,7 +4047,10 @@ class _MenuWindow(tk.Toplevel):
 # Буфер обмена в полях ввода. В Tk сочетания Ctrl+C/V/X/A работают только в английской
 # раскладке, а меню по правой кнопке у полей ввода нет вовсе — добавляем и то и другое.
 EDIT_CLASSES = ("TEntry", "Entry", "Text")
-EDIT_KEYCODES = {86: "<<Paste>>", 67: "<<Copy>>", 88: "<<Cut>>", 65: "select_all"}  # V C X A
+EDIT_KEYCODES = {86: "<<Paste>>", 67: "<<Copy>>", 88: "<<Cut>>", 65: "select_all",  # V C X A
+                 90: "<<Undo>>", 89: "<<Redo>>"}                                     # Z Y
+ENTRY_HISTORY = {}  # однострочное поле -> [значения, номер текущего]: в Tk у полей нет отмены
+ENTRY_HISTORY_SIZE = 100
 
 
 def select_all(widget):
@@ -3807,9 +4090,79 @@ def edit_shortcut(event):
     if action == "select_all":  # в Tk Ctrl+A — «в начало строки»; в Windows привычнее «выделить всё»
         select_all(event.widget)
         return "break"
+    if action in ("<<Undo>>", "<<Redo>>"):
+        # отмена — сами при любой раскладке; Ctrl+Shift+Z — как Ctrl+Y, вернуть отменённое
+        event.widget.event_generate("<<Redo>>" if event.state & 0x1 else action)
+        return "break"
     if event.keysym.lower() in ("v", "c", "x"):
         return None  # английская раскладка — Tk справляется сам
     event.widget.event_generate(action)
+    return "break"
+
+
+def entry_remember(widget):
+    """Запомнить значение однострочного поля для отмены (после набора, вставки, вырезания)."""
+    try:
+        value = widget.get()
+    except tk.TclError:  # поле уже закрыто
+        return
+    states, pos = ENTRY_HISTORY.setdefault(str(widget), [[value], 0])
+    if states[pos] == value:
+        return
+    del states[pos + 1:]  # после отмены набрали новое — «вернуть» больше нечего
+    states.append(value)
+    del states[:-ENTRY_HISTORY_SIZE]
+    ENTRY_HISTORY[str(widget)][1] = len(states) - 1
+
+
+def entry_focus(event):
+    """Поле получило фокус: его значение (в том числе вписанное программой) — начало истории."""
+    entry_remember(event.widget)
+
+
+def entry_undo(event, step=-1):
+    """Ctrl+Z / Ctrl+Y в однострочном поле: прошлое или отменённое значение."""
+    widget = event.widget
+    if not editable(widget):
+        return "break"
+    entry_remember(widget)  # набранное перед Ctrl+Z тоже можно вернуть
+    states, pos = ENTRY_HISTORY[str(widget)]
+    if 0 <= pos + step < len(states):
+        ENTRY_HISTORY[str(widget)][1] = pos + step
+        widget.delete(0, "end")
+        widget.insert(0, states[pos + step])
+        widget.icursor("end")
+    return "break"
+
+
+def word_size(text, forward):
+    """Сколько знаков стирает Ctrl+Backspace (назад) или Ctrl+Delete (вперёд): пробелы
+    и слово целиком — или подряд идущие знаки препинания."""
+    text = text if forward else text[::-1]
+    size = re.match(r"\s*(\w+|[^\w\s]+)?", text).end()
+    return size or min(len(text), 1)
+
+
+def delete_word(event, forward=False):
+    widget = event.widget
+    if not editable(widget):
+        return "break"
+    if has_selection(widget):
+        widget.delete("sel.first", "sel.last")
+    elif isinstance(widget, tk.Text):
+        if forward:
+            size = word_size(widget.get("insert", "insert lineend"), True) or 1  # в конце строки — склеить
+            widget.delete("insert", f"insert+{size}c")
+        else:
+            size = word_size(widget.get("insert linestart", "insert"), False) or 1
+            widget.delete(f"insert-{size}c", "insert")
+    else:
+        pos, value = widget.index("insert"), widget.get()
+        if forward:
+            widget.delete(pos, pos + word_size(value[pos:], True))
+        else:
+            size = word_size(value[:pos], False)
+            widget.delete(pos - size, pos)
     return "break"
 
 
@@ -3819,6 +4172,8 @@ def edit_menu(event):
     w.focus_set()
     can_edit = editable(w)
     (PopupMenu()
+     .command("Отменить", lambda: w.event_generate("<<Undo>>"), accel="Ctrl+Z", enabled=can_edit)
+     .separator()
      .command("Вырезать", lambda: w.event_generate("<<Cut>>"), accel="Ctrl+X",
               enabled=can_edit and has_selection(w))
      .command("Копировать", lambda: w.event_generate("<<Copy>>"), accel="Ctrl+C",
@@ -3835,6 +4190,17 @@ def setup_text_editing(root):
     for cls in EDIT_CLASSES:
         root.bind_class(cls, "<Control-KeyPress>", edit_shortcut, add="+")
         root.bind_class(cls, "<Button-3>", edit_menu, add="+")
+        # Ctrl+Backspace / Ctrl+Delete — стереть слово (Tk стирал бы один знак)
+        root.bind_class(cls, "<Control-BackSpace>", delete_word)
+        root.bind_class(cls, "<Control-Delete>", lambda e: delete_word(e, forward=True))
+    for cls in ("TEntry", "Entry"):  # у многострочных полей (Text) отмена своя, undo=True
+        root.bind_class(cls, "<<Undo>>", entry_undo)
+        root.bind_class(cls, "<<Redo>>", lambda e: entry_undo(e, step=1))
+        root.bind_class(cls, "<FocusIn>", entry_focus, add="+")
+        for sequence in ("<KeyRelease>", "<<Paste>>", "<<Cut>>"):
+            root.bind_class(cls, sequence, lambda e: root.after_idle(entry_remember, e.widget),
+                            add="+")
+        root.bind_class(cls, "<Destroy>", lambda e: ENTRY_HISTORY.pop(str(e.widget), None), add="+")
 
 
 def menu_button(parent, text, build_menu):
@@ -5601,7 +5967,7 @@ class KanbanBoard(tk.Frame):
         tk.Label(top, text=title, bg=SURFACE, fg=color, font=FONT_BOLD, justify="left",
                  anchor="w", wraplength=self.card_width - 95).pack(side="left", fill="x")
         if "body" in fields and body.strip():
-            tk.Label(content, text=short_text(body, 90), bg=SURFACE, fg=MUTED, font=FONT_SMALL,
+            tk.Label(content, text=short_text(richtext.plain(body), 90), bg=SURFACE, fg=MUTED, font=FONT_SMALL,
                      justify="left", anchor="w", wraplength=self.card_width - 60).pack(fill="x", pady=(4, 0))
         if "due" in fields and due_at:
             due_text = datetime.fromisoformat(due_at).strftime("%d.%m %H:%M")
