@@ -819,7 +819,7 @@ class RepeatFormTests(unittest.TestCase):
             self.assertNotEqual(int(form.until.grid_info()["column"]), int(form.repeat.grid_info()["column"]))
             self.assertEqual(int(form.until.grid_info()["row"]), int(form.repeat.grid_info()["row"]))
             self.assertEqual([w for w in form.until.winfo_children() if isinstance(w, tk.ttk.Button)], [])
-            self.assertEqual(int(form.until.entry.cget("width")), 9)
+            self.assertEqual(int(form.until.entry.cget("width")), 11)  # дата целиком и зазор до 📅
             self.assertEqual(str(form.until.entry.cget("style")), "Date.TEntry")
             self.assertEqual([w.cget("text") for w in form.until.entry.winfo_children()], ["📅"])
             form.destroy()

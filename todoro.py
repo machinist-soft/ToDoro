@@ -1282,6 +1282,7 @@ class DatePicker(ttk.Frame):
         super().__init__(parent)
         self.value = value
         self.on_change = on_change
+        self.on_enter = None  # что сделать по Enter после понятной даты (форма — сохранить)
         self.empty, self.clear = empty, clear
         self.popup = None
         self.text = tk.StringVar()
@@ -1292,8 +1293,8 @@ class DatePicker(ttk.Frame):
         # щелчок по полю — печатать дату; календарь открывается значком 📅
         self.entry.bind("<FocusIn>", lambda e: self.start_typing(), add="+")
         self.entry.bind("<FocusOut>", lambda e: self.commit(), add="+")
-        self.entry.bind("<Return>", lambda e: self.commit(), add="+")
-        self.entry.bind("<KP_Enter>", lambda e: self.commit(), add="+")
+        self.entry.bind("<Return>", lambda e: self.enter(), add="+")
+        self.entry.bind("<KP_Enter>", lambda e: self.enter(), add="+")
         if button:
             ttk.Button(self, text="📅", style="Icon.TButton", width=3, cursor="hand2",
                        command=self.toggle_popup).pack(side="left", padx=(4, 0))
@@ -1322,18 +1323,29 @@ class DatePicker(ttk.Frame):
             self.entry.icursor("end")
 
     def commit(self):
-        """Применяет напечатанную дату. Пусто — даты нет; непонятно — возвращаем прежнюю."""
+        """Применяет напечатанную дату. Пусто — даты нет; непонятно — возвращаем прежнюю
+        (тогда False)."""
         text = self.text.get().strip()
         if self.value and text == self.value.strftime("%d.%m.%Y"):
-            return
+            return True
         value = None if not text or text == self.empty else parse_date(text)
         if value is None and text and text != self.empty:
             self.bell()
             self.show()
-        elif value != self.value:
+            return False
+        if value != self.value:
             self.set(value)
         else:
             self.show()
+        return True
+
+    def enter(self):
+        """Enter: применить дату, а если она понятная — то, что задал хозяин поля (on_enter:
+        форма задачи сохраняется, как по Enter в названии)."""
+        if self.commit() and self.on_enter:
+            self.on_enter()
+            return "break"
+        return None
 
     # --- выпадающий календарь ---
 
@@ -2100,7 +2112,7 @@ class TaskForm(ttk.Frame):
             until = None
         self.until_label = ttk.Label(repeat_row, text="До", style=label_style)
         self.until = DatePicker(repeat_row, until, empty="без конца", clear="Без конца", button=False,
-                                width=9)  # дата целиком; значок 📅 — в отступе справа (Date.TEntry)
+                                width=11)  # дата целиком и зазор до значка 📅 (он в отступе справа, Date.TEntry)
         self.until.configure(style=self["style"])
         self.until_parts = ((self.until_label, dict(row=0, column=1, sticky="w", pady=(0, 4))),
                             (self.until, dict(row=1, column=1, sticky="w")))
@@ -2127,6 +2139,7 @@ class TaskForm(ttk.Frame):
                   if not (self.suggest and self.suggest.shown()) else "break")
         self.title_entry.bind("<Return>", lambda e: None if self.suggest and self.suggest.accept()
                               else self.save())
+        self.date.on_enter = self.until.on_enter = self.save  # Enter в поле даты — как в названии
         if self.hints_on:
             self.title_entry.bind("<KeyRelease>", lambda e: self.hints_later(), add="+")
             self.update_hints()
