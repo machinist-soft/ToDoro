@@ -72,6 +72,9 @@
   и снимок приложится к новой задаче.
 - **Тёмная тема**, правая панель сворачивается в полоску (Ctrl+B), экспорт и импорт
   **CSV (Excel)**, письмо по задаче, подробная справка (F1).
+- **Резервные копии**: личные списки копируются сами раз в день (копии за 14 дней); из меню
+  можно сохранить копию выбранных списков в любое место и восстановить списки из копии —
+  перед этим программа запомнит текущее состояние, так что восстановление можно отменить.
 - **Обновления в один клик**: программа сама сообщает о новой версии и ставит её — задачи
   сохраняются; «Что нового» во всех версиях — прямо в программе.
 
@@ -92,7 +95,8 @@ tour on first launch · create a task from an Outlook e-mail (Ctrl+Alt+T): subje
 attachments and the message itself, replies go to the sender; a tray icon started with Windows
 keeps Ctrl+Alt+T working even when ToDoro is closed · create a task from a screen area
 snapshot (Ctrl+Alt+S) · dark theme, collapsible side panel (Ctrl+B),
-CSV export / import, e-mail a task, built-in help · one-click updates and an in-app “What’s new”.*
+CSV export / import, e-mail a task, built-in help · backups: personal lists are copied daily
+(kept 14 days), save chosen lists to a file anywhere and restore them from it · one-click updates and an in-app “What’s new”.*
 
 ### Котобус увозит выполненную задачу / The Catbus carries away a finished task
 
@@ -345,6 +349,7 @@ flowchart TB
 | `todoro.py` | окно и всё, что в нём видно / the window and everything in it |
 | `db.py` | чтение и запись задач, комментариев и файлов в SQLite / tasks, comments and files in SQLite |
 | `team.py` | общие списки, участники, резервные копии / shared lists, members, backups |
+| `backup.py` | резервные копии личных списков, сохранение и восстановление / personal backups, save and restore |
 | `outlook.py` | задача из письма Outlook / task from an Outlook e-mail |
 | `snip.py` | снимок области экрана / screen-area snapshot |
 | `tray.py` | значок в трее и горячие клавиши / tray icon and hotkeys |

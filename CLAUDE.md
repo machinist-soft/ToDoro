@@ -46,6 +46,10 @@ No server: each task list is its own SQLite file. The personal list is `%APPDATA
   (overwrite protection between team members). `SharedConnection` batches reads for network files.
 - `team.py` — shared lists: `Probe` polls SQLite change counters in a background thread; `Team`
   manages the shared folder, members and daily backups.
+- `backup.py` — backups: daily zip of personal lists into `%APPDATA%\ToDoro\backups` (14 days),
+  «☰ Меню → Резервная копия» save/restore (zip with a `todoro-backup.json` manifest, or a single
+  list `.db`). Restore replaces only list tables (`LIST_TABLES`), never `settings`, bumps task
+  versions above the old ones and first writes a «перед восстановлением» safety zip.
 - `tray.py` — tray icon process (autostarts with Windows), global hotkeys Ctrl+Alt+T / Ctrl+Alt+S.
 - `phone.py` — HTTP+JSON server for the Android app, run inside the tray process; enabled only when a
   `phone_token` setting exists (bearer token delivered by QR code). Endpoint list is in its

@@ -25,6 +25,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from tkinter import colorchooser, filedialog, font as tkfont, ttk
 
+import backup
 import db
 import outlook
 import phone
@@ -4861,6 +4862,65 @@ class NewListDialog(NameDialog):
             self.result = (self.result, self.shared.get())
 
 
+class ChecklistDialog(ModernDialog):
+    """Выбор нескольких пунктов галочками (например, списков для резервной копии).
+    choices — [(ключ, текст, можно ли выбрать)]; result — список выбранных ключей или None."""
+
+    def __init__(self, parent, title, heading, choices, ok_text, hint=""):
+        super().__init__(parent, title, heading, ok_text)
+        if hint:
+            tk.Label(self.content, text=hint, bg=SURFACE, fg=MUTED, font=FONT_SMALL, justify="left",
+                     wraplength=440).pack(anchor="w", pady=(0, 10))
+        self.marks = []
+        for key, text, enabled in choices:
+            var = tk.BooleanVar(value=enabled)
+            box = ttk.Checkbutton(self.content, text=text, variable=var, style="Card.TCheckbutton")
+            box.pack(anchor="w", pady=2)
+            if not enabled:
+                box.state(["disabled"])
+            self.marks.append((key, var))
+
+    def ok(self):
+        picked = [key for key, var in self.marks if var.get()]
+        if not picked:
+            ui.showwarning(self.title(), "Отметьте хотя бы один список.", parent=self)
+            return
+        self.result = picked
+        self.destroy()
+
+
+class WaitDialog(tk.Toplevel):
+    """Окно «Подождите…» с бегущей полосой. Пока в фоне идёт долгая работа (копия, восстановление),
+    главное окно не принимает правок; закрывает окно тот, кто его открыл (close)."""
+
+    def __init__(self, parent, title, text):
+        super().__init__(parent)
+        self.title(title)
+        self.configure(bg=SURFACE)
+        self.resizable(False, False)
+        self.transient(parent)
+        body = tk.Frame(self, bg=SURFACE, padx=26, pady=20)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, text=text, bg=SURFACE, fg=TEXT, font=FONT_BOLD).pack(anchor="w")
+        tk.Label(body, text="Большой список с файлами или медленная сеть — это может занять "
+                            "несколько минут.", bg=SURFACE, fg=MUTED, font=FONT_SMALL).pack(
+            anchor="w", pady=(2, 10))
+        self.bar = ttk.Progressbar(body, mode="indeterminate", length=320)
+        self.bar.pack(fill="x")
+        self.bar.start(15)
+        self.protocol("WM_DELETE_WINDOW", lambda: None)  # прервать нельзя — дождёмся конца
+        center_on_screen(self)
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+
+    def close(self):
+        if self.winfo_exists():
+            self.bar.stop()
+            self.destroy()
+
+
 def close_quietly(conns):
     """Закрывает соединения с базами (вызывается в фоновом потоке)."""
     for conn in conns:
@@ -7121,6 +7181,7 @@ class TodoApp:
                             (SNIP_HOTKEY, lambda: self.from_screen(quiet=True))])     # Ctrl+Alt+S
         self.start_tray()
         threading.Thread(target=clean_temp_files, daemon=True).start()  # старые черновики и копии файлов
+        self.daily_backup()
         root.after(WATCH_EVERY_MS, self.watch_changes)  # изменения других участников в общих списках
         if self.team is None and db.get_setting(self.prefs, "shared_folder", ""):
             self.show_offline_banner()  # запустились без связи с общей папкой
@@ -7452,6 +7513,9 @@ class TodoApp:
                 .command("Экспорт задач в CSV…", self.export_csv)
                 .command("Импорт задач из CSV…", self.import_csv)
                 .command("Шаблон для импорта…", self.save_template))
+        backups = (PopupMenu()
+                   .command("Сохранить резервную копию…", self.save_backup)
+                   .command("Восстановить из копии…", self.restore_backup))
         feedback = (PopupMenu()
                     .command("Сообщить об ошибке…", lambda: self.send_feedback("bug"))
                     .command("Предложить улучшение…", lambda: self.send_feedback("idea"))
@@ -7471,6 +7535,7 @@ class TodoApp:
                 .command("Развернуть правую панель" if self.side_collapsed else "Свернуть правую панель",
                          self.toggle_side_panel, accel="Ctrl+B", enabled=self.side_room)
                 .submenu("Экспорт и импорт", data)
+                .submenu("Резервная копия", backups)
                 .submenu("Примеры задач", examples)
                 .separator()
                 .command("Настройки…", self.show_settings)
@@ -8090,6 +8155,192 @@ class TodoApp:
         self.filter.set("Все")
         self.refresh()
         ui.showinfo(APP_NAME, f"Добавлено задач: {len(tasks)}.", parent=self.root)
+
+    # --- резервные копии ---
+
+    BACKUP_CHECK_MS = 60 * 60 * 1000  # раз в час: не пора ли сделать ежедневную копию
+    # Идёт восстановление из копии: файлы списков заблокированы записью — таймеры окна их не читают
+    restoring = False
+
+    def daily_backup(self):
+        """Раз в день — копия личных списков в %APPDATA%\\ToDoro\\backups (в фоне). Проверяем
+        раз в час, а не только при запуске: окно бывает открыто неделями."""
+        if not self.restoring:
+            sources = backup.personal_sources(self.prefs)
+            in_background(self.root, lambda: backup.daily_personal(sources), lambda result, error: None)
+        self.root.after(self.BACKUP_CHECK_MS, self.daily_backup)
+
+    def list_file(self, item):
+        return self.team.path(item) if item["shared"] else db.list_path(item)
+
+    def save_backup(self):
+        """☰ Меню → Резервная копия → Сохранить: выбранные списки — в один файл, куда скажут."""
+        self.finish_editing()
+        online = self.share_online()
+        if online:
+            self.load_lists()  # вдруг кто-то добавил общий список
+        choices = [(item["id"], item["name"] + ("  · общий" if item["shared"] else ""),
+                    online or not item["shared"]) for item in self.lists]
+        hint = ("В копию попадут задачи, колонки доски, бизнес-единицы, комментарии и вложенные "
+                "файлы. Восстановить: ☰ Меню → Резервная копия → Восстановить из копии.")
+        if any(item["shared"] for item in self.lists) and not online:
+            hint += "\n\nОбщие списки сейчас недоступны — нет связи с общей папкой."
+        picked = ChecklistDialog(self.root, "Резервная копия", "Какие списки сохранить", choices,
+                                 "Сохранить…", hint).show()
+        if not picked:
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self.root, title="Сохранить резервную копию",
+            initialfile=f"{APP_NAME} копия {date.today():%d.%m.%Y}.zip", defaultextension=".zip",
+            filetypes=[("Резервная копия ToDoro", "*.zip"), ("Все файлы", "*.*")])
+        if not path:
+            return
+        sources = [(item, self.list_file(item)) for item in self.lists if item["id"] in picked]
+        wait = WaitDialog(self.root, "Резервная копия", "Сохраняю резервную копию…")
+
+        def finished(count, error):
+            wait.close()
+            if error:
+                ui.showerror(APP_NAME, f"Не удалось сохранить резервную копию:\n{error_text(error)}",
+                             parent=self.root)
+            else:
+                ui.showinfo(APP_NAME, f"Резервная копия сохранена (списков: {count}).\n\n{path}",
+                            parent=self.root)
+        in_background(self.root, lambda: backup.write_zip(path, sources), finished)
+
+    def restore_backup(self):
+        """☰ Меню → Резервная копия → Восстановить: выбрать файл копии и списки из него.
+        Копию открываем в фоне: она может лежать в сетевой папке."""
+        self.finish_editing()
+        folder = backup.backups_dir()
+        path = filedialog.askopenfilename(
+            parent=self.root, title="Восстановить из резервной копии",
+            initialdir=str(folder) if folder.exists() else None,
+            filetypes=[("Резервная копия ToDoro", "*.zip *.db"), ("Все файлы", "*.*")])
+        if not path:
+            return
+        wait = WaitDialog(self.root, "Восстановить из копии", "Открываю резервную копию…")
+
+        def opened(result, error):
+            wait.close()
+            if isinstance(error, backup.BackupError):
+                ui.showerror(APP_NAME, str(error), parent=self.root)
+            elif error:
+                ui.showerror(APP_NAME, f"Не удалось открыть копию:\n{error_text(error)}", parent=self.root)
+            else:
+                work, created, entries = result
+                self.restore_entries(created, entries, lambda: shutil.rmtree(work, ignore_errors=True))
+        in_background(self.root, lambda: backup.open_backup(path), opened)
+
+    def restore_entries(self, created, entries, cleanup=lambda: None):
+        """Выбор списков из открытой копии и восстановление (в фоне). cleanup() — когда всё
+        закончилось (или отменено): убрать временную папку с копией."""
+        online = self.share_online()
+        if online:
+            self.load_lists()
+        # общая папка задана, но связи нет — общих списков сейчас просто нет в self.lists
+        offline = self.team is None and bool(db.get_setting(self.prefs, "shared_folder", ""))
+        by_id = {item["id"]: item for item in self.lists}
+        choices = []
+        for n, entry in enumerate(entries):
+            target = by_id.get(entry["id"])
+            if (target is None and entry["shared"] and offline) or (target and target["shared"] and not online):
+                what, enabled = "общий список — сейчас нет связи с общей папкой", False
+            elif target is None:
+                what, enabled = "станет новым личным списком", True
+            else:
+                what, enabled = f"заменит задачи списка «{target['name']}»", True
+            choices.append((n, f"{entry['name']} (задач: {entry['tasks']}) — {what}", enabled))
+        when = ""
+        if created:
+            try:
+                when = f"Копия сделана {datetime.strptime(created, '%Y-%m-%d %H:%M'):%d.%m.%Y в %H:%M}.\n"
+            except ValueError:
+                pass
+        picked = ChecklistDialog(
+            self.root, "Восстановить из копии", "Какие списки восстановить", choices, "Восстановить",
+            when + "Настройки программы не меняются.").show()
+        if not picked:
+            cleanup()
+            return
+        chosen = [entries[n] for n in picked]
+        replaced = [by_id[e["id"]] for e in chosen if e["id"] in by_id]
+        if replaced:
+            names = ", ".join(f"«{item['name']}»" for item in replaced)
+            text = (f"Задачи в списках {names} заменятся задачами из копии.\n\nТекущее состояние этих "
+                    "списков программа сначала сохранит в папку резервных копий — восстановление "
+                    "можно будет отменить.")
+            if any(item["shared"] for item in replaced):
+                text += "\n\nОбщий список изменится у всех участников."
+            if not ui.askyesno("Восстановить из копии?", text, icon="warning", default="no",
+                               parent=self.root):
+                cleanup()
+                return
+        # что делать с каждым списком: (список из копии, файл заменяемого списка или None, название)
+        jobs, names = [], {item["name"] for item in self.lists}
+        for entry in chosen:
+            target = by_id.get(entry["id"])
+            if target:
+                jobs.append((entry, self.list_file(target), target["name"]))
+                continue
+            name, n = entry["name"], 1
+            while name in names:  # имя занято — «(из копии)», «(из копии 2)», …
+                name = f"{entry['name']} (из копии{f' {n}' if n > 1 else ''})"
+                n += 1
+            names.add(name)
+            jobs.append((entry, None, name))
+        sources = [(item, self.list_file(item)) for item in replaced]
+
+        def work():
+            """В фоне: файлы общих списков — в сетевой папке. Своё соединение у каждого файла."""
+            try:
+                safety = backup.safety_copy(sources) if sources else None
+            except (OSError, sqlite3.Error) as error:
+                raise backup.BackupError("Не удалось сохранить текущее состояние списков — "
+                                         f"восстановление отменено.\n\n{error_text(error)}") from error
+            results = []  # (название, файл нового списка или None, текст ошибки или None)
+            for entry, path, name in jobs:
+                try:
+                    if path:
+                        backup.restore_file(path, entry["path"])
+                        results.append((name, None, None))
+                    else:
+                        results.append((name, backup.copy_as_new_list(entry), None))
+                except (OSError, sqlite3.Error) as error:
+                    results.append((name, None, error_text(error)))
+            return safety, results
+
+        wait = WaitDialog(self.root, "Восстановить из копии", "Восстанавливаю списки…")
+        self.restoring = True
+
+        def finished(result, error):
+            self.restoring = False
+            wait.close()
+            cleanup()
+            if error:
+                text = str(error) if isinstance(error, backup.BackupError) else \
+                    f"Не удалось восстановить:\n{error_text(error)}"
+                ui.showerror(APP_NAME, text, parent=self.root)
+                return
+            safety, results = result
+            new = [backup.new_list_item(file, name) for name, file, problem in results if file]
+            if new:
+                db.save_registry(self.prefs, db.list_registry(self.prefs) + new)
+            self.load_lists()
+            self.clear_selection()
+            self.fresh_ids = []
+            self.list_counter = None
+            self.show_list_name()
+            self.refresh()
+            done = [name for name, file, problem in results if not problem]
+            failed = [f"«{name}»: {problem}" for name, file, problem in results if problem]
+            text = "Восстановлено: " + ", ".join(f"«{n}»" for n in done) + "." if done else ""
+            if failed:
+                text += "\n\nНе удалось восстановить:\n" + "\n".join(failed)
+            if safety:
+                text += f"\n\nПрежнее состояние сохранено в копии:\n{safety}"
+            (ui.showwarning if failed else ui.showinfo)(APP_NAME, text.strip(), parent=self.root)
+        in_background(self.root, work, finished)
 
     def delete_examples(self):
         count = db.count_examples(self.conn)
@@ -9002,7 +9253,7 @@ class TodoApp:
         обрыв сети в этот момент «повесил» бы окно."""
         if self.team:
             self.reminders_due = True
-        else:
+        elif not self.restoring:
             self.do_check_reminders()
         self.root.after(CHECK_EVERY_MS, self.check_reminders)
 
@@ -9589,6 +9840,9 @@ class TodoApp:
         Заодно следит за связью с общей папкой: пропала — убираем общие списки,
         вернулась — подключаемся снова."""
         probe = self.probe
+        if self.restoring:  # файлы списков сейчас переписываются — читать их нельзя (заблокированы)
+            self.root.after(WATCH_EVERY_MS, self.watch_changes)
+            return
         if self.team and not self.share_online():
             self.go_offline()
         elif self.team is None:
