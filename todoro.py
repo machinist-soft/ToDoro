@@ -1248,8 +1248,32 @@ class ui:
                         True, False, parent)
 
 
+def parse_date(text, today=None):
+    """Дата, напечатанная в поле: «28.10.2026», «28.10.26», «28.10» (год — текущий); вместо точек
+    можно «/», «-», «,» или пробел; ещё «2026-10-28». Непонятный текст — None."""
+    today = today or date.today()
+    text = text.strip().strip(".,/- ")
+    try:
+        if re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}", text):
+            year, month, day = map(int, text.split("-"))
+        else:
+            parts = re.split(r"[.,/\- ]+", text)
+            if len(parts) not in (2, 3) or not all(p.isdecimal() for p in parts):
+                return None
+            if len(parts) == 3 and len(parts[2]) not in (2, 4):
+                return None
+            day, month = int(parts[0]), int(parts[1])
+            year = today.year if len(parts) == 2 else int(parts[2]) + (2000 if len(parts[2]) == 2 else 0)
+        if abs(year - today.year) > 100:  # «28.10.0026» — опечатка, а не срок 2000 лет назад
+            return None
+        return date(year, month, day)
+    except (ValueError, OverflowError):  # 31.02, огромные числа и т. п.
+        return None
+
+
 class DatePicker(ttk.Frame):
-    """Поле даты с выпадающим календарём."""
+    """Поле даты с выпадающим календарём. Дату можно и напечатать (GitHub #13): применяется по
+    Enter или когда поле теряет фокус; непонятный текст — поле возвращает прежнюю дату."""
 
     def __init__(self, parent, value=None, on_change=None, empty="Не задан", clear="Без срока",
                  button=True, width=11):
@@ -1263,10 +1287,13 @@ class DatePicker(ttk.Frame):
         self.text = tk.StringVar()
 
         self.entry = ttk.Entry(self, textvariable=self.text, font=FONT, width=width,
-                               state="readonly", cursor="hand2", style="TEntry" if button else "Date.TEntry")
+                               style="TEntry" if button else "Date.TEntry")
         self.entry.pack(side="left")
-        # "break": иначе поле после щелчка забирает фокус у календаря, и тот сразу закрывается
-        self.entry.bind("<Button-1>", lambda e: (self.toggle_popup(), "break")[1])
+        # щелчок по полю — печатать дату; календарь открывается значком 📅
+        self.entry.bind("<FocusIn>", lambda e: self.start_typing(), add="+")
+        self.entry.bind("<FocusOut>", lambda e: self.commit(), add="+")
+        self.entry.bind("<Return>", lambda e: self.commit(), add="+")
+        self.entry.bind("<KP_Enter>", lambda e: self.commit(), add="+")
         if button:
             ttk.Button(self, text="📅", style="Icon.TButton", width=3, cursor="hand2",
                        command=self.toggle_popup).pack(side="left", padx=(4, 0))
@@ -1286,12 +1313,35 @@ class DatePicker(ttk.Frame):
     def show(self):
         self.text.set(self.value.strftime("%d.%m.%Y") if self.value else self.empty)
 
+    def start_typing(self):
+        """Фокус в поле: надпись «Не задан» убираем, дату выделяем — печатать поверх."""
+        if self.value is None:
+            self.text.set("")
+        else:
+            self.entry.select_range(0, "end")
+            self.entry.icursor("end")
+
+    def commit(self):
+        """Применяет напечатанную дату. Пусто — даты нет; непонятно — возвращаем прежнюю."""
+        text = self.text.get().strip()
+        if self.value and text == self.value.strftime("%d.%m.%Y"):
+            return
+        value = None if not text or text == self.empty else parse_date(text)
+        if value is None and text and text != self.empty:
+            self.bell()
+            self.show()
+        elif value != self.value:
+            self.set(value)
+        else:
+            self.show()
+
     # --- выпадающий календарь ---
 
     def toggle_popup(self):
         if self.popup:
             self.close_popup()
             return
+        self.commit()  # иначе напечатанное применилось бы позже и закрыло бы календарь
         self.month = (self.value or date.today()).replace(day=1)
         self.popup = tk.Toplevel(self)
         self.popup.overrideredirect(True)  # окно без рамки и заголовка
@@ -1343,17 +1393,23 @@ class DatePicker(ttk.Frame):
         header.grid(row=0, column=0, columnspan=7, sticky="we", pady=(0, 6))
         self.clickable(header, "‹", lambda: self.shift_month(-1), fg=MUTED,
                        font=("Segoe UI", 14), width=2).pack(side="left")
-        tk.Label(header, text=f"{MONTHS[self.month.month - 1]} {self.month.year}",
+        # ширина надписи и число недель — всегда одни, чтобы календарь не «прыгал» (GitHub #13)
+        tk.Label(header, text=f"{MONTHS[self.month.month - 1]} {self.month.year}", width=14,
                  bg=SURFACE, fg=TEXT, font=FONT_BOLD).pack(side="left", expand=True)
         self.clickable(header, "›", lambda: self.shift_month(1), fg=MUTED,
                        font=("Segoe UI", 14), width=2).pack(side="right")
 
+        day_width = tkfont.Font(font=FONT_BOLD).measure("000") + 12  # жирное число не раздвигает колонку
         for col, name in enumerate(WEEKDAYS):
+            frame.columnconfigure(col, minsize=day_width)
             tk.Label(frame, text=name, bg=SURFACE, width=3, font=("Segoe UI", 9),
                      fg=DANGER if col >= 5 else MUTED).grid(row=1, column=col, pady=(0, 2))
 
         today = date.today()
         weeks = calendar.Calendar(firstweekday=0).monthdatescalendar(self.month.year, self.month.month)
+        while len(weeks) < 6:  # недостающие недели — днями следующего месяца
+            start = weeks[-1][-1] + timedelta(days=1)
+            weeks.append([start + timedelta(days=i) for i in range(7)])
         for row, week in enumerate(weeks, start=2):
             for col, day in enumerate(week):
                 style = {"font": FONT, "width": 3, "pady": 3, "fg": TEXT}
@@ -2302,6 +2358,8 @@ class TaskForm(ttk.Frame):
 
     def values(self):
         """Текущие значения формы (без проверки)."""
+        self.date.commit()  # дата, напечатанная в поле, но ещё не применённая (курсор в поле)
+        self.until.commit()
         due_at = None
         if self.date.value:
             due = datetime.combine(self.date.value, time(int(self.hour.get()), int(self.minute.get())))
@@ -6228,7 +6286,9 @@ class EisenhowerMatrix(KanbanBoard):
         self.bind("<Button-1>", lambda e: self.app.clear_selection())
         self.bind("<Configure>", self.resized)
 
-    CARD = LANE_WIDTH - 20  # ширина карточки — как на доске
+    # наименьшая ширина карточки — уже, чем на доске: на экране 1920 точек в четверть встают
+    # три колонки и при широкой боковой панели (GitHub #15); места больше — карточки растягиваются
+    CARD = 190
     GAP = 8                 # промежуток между карточками
     MIN_ROW = 140           # высота строки четвертей, даже если в ней нет задач
 
@@ -6762,6 +6822,7 @@ class TodoApp:
         self.list_id = db.get_setting(self.prefs, "current_list", db.PERSONAL)
         self.all_rows = []   # все задачи открытого списка (читаются в refresh)
         self.done_today = 0
+        self.buddy_note_job = None  # таймер разового сообщения Тоторо (say_for_a_while)
         self.authors = {}    # id задачи -> инициатор (в общих списках)
         self.units, self.unit_names = {}, {}  # справочник бизнес-единиц; id задачи -> её единица
         self.extra_counts = {}  # id задачи -> (файлов, комментариев)
@@ -9444,7 +9505,21 @@ class TodoApp:
         db.move_task_to(self.conn, task_id, self.list_conn(list_id))
         self.clear_selection()
         self.refresh()
-        self.side.totoro.show(f"Задача перенесена в список «{target['name']}».", mood="done")
+        self.say_for_a_while(f"Задача перенесена в список «{target['name']}».", mood="done")
+
+    BUDDY_NOTE_MS = 5000  # сколько держится разовое сообщение Тоторо
+
+    def say_for_a_while(self, text, mood="normal"):
+        """Разовое сообщение Тоторо: через несколько секунд он возвращается к обычной подсказке
+        (иначе фраза висела до следующего обновления окна — GitHub #14)."""
+        self.side.totoro.show(text, mood=mood)
+        if self.buddy_note_job:
+            self.root.after_cancel(self.buddy_note_job)
+        self.buddy_note_job = self.root.after(self.BUDDY_NOTE_MS, self.end_buddy_note)
+
+    def end_buddy_note(self):
+        self.buddy_note_job = None
+        self.update_buddy()
 
     def check_assigned(self):
         """Кто-то назначил на меня задачу в общем списке — сообщаем (один раз на задачу).
@@ -9549,8 +9624,8 @@ class TodoApp:
                     self.forget_list(self.list_id)
                     self.list_id = None
                     self.switch_list(db.PERSONAL)
-                    self.side.totoro.show("Общий список, который был открыт, удалил другой "
-                                          "участник.", mood="alert")
+                    self.say_for_a_while("Общий список, который был открыт, удалил другой "
+                                         "участник.", mood="alert")
                 else:
                     self.show_list_name()
         self.check_list_changed(probe)
