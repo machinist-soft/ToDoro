@@ -929,6 +929,12 @@ def list_attachments(conn, task_id):
     return [_attachment_info[(path, i)] for i in ids if (path, i) in _attachment_info]
 
 
+def forget_attachment_info():
+    """Забыть запомненные сведения о вложениях: после восстановления из чужой копии (другой
+    компьютер) те же номера вложений означают другие файлы."""
+    _attachment_info.clear()
+
+
 def attachment_data(conn, attachment_id):
     row = conn.execute("SELECT data FROM attachments WHERE id = ?", (attachment_id,)).fetchone()
     return bytes(row[0]) if row else None
@@ -977,6 +983,11 @@ def extras_counts(conn):
             pair = counts.setdefault(task_id, [0, 0])
             pair[index] = n
     return {task_id: tuple(pair) for task_id, pair in counts.items()}
+
+
+def done_times(conn):
+    """{id: когда выполнена} выполненных задач (у задач из старых версий — None)."""
+    return dict(conn.execute("SELECT id, done_at FROM tasks WHERE done = 1"))
 
 
 def mail_task_ids(conn):
