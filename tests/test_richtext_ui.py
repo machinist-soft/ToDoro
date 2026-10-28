@@ -746,7 +746,7 @@ class PlainOutsideTests(unittest.TestCase):
             app=SimpleNamespace(card_fields={"body"}, task_mark=lambda task_id: "",
                                 assignees={}, unit_names={}, authors={}),
             show_priority=False, card_width=300, cards={}, set_mark=noop,
-            on_press=noop, on_motion=noop, on_release=noop)
+            on_press=noop, on_motion=noop, on_release=noop, card_tag="CardTest")
         row = (7, "Отчёт", 0, "01.10.2026", None, None, 0, 0, "**Важно:** ~~не~~ сдать\n- пункт", None)
         T.KanbanBoard.make_card(board, parent, row, "#3b82f6", False)
         texts = []

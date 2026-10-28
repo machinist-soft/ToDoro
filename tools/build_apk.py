@@ -21,7 +21,40 @@ VERSION_FILE = "ToDoro-android.json"  # то же имя — в Updates.kt (VERS
 TOOLS = Path(r"D:\Claude\android-tools")
 
 
+def property_value(text, key):
+    """Значение ключа из файла .properties («ключ=значение» или «ключ: значение»), «» — нет.
+    Только в пределах своей строки: пустое значение не «захватывает» следующую строку (а с ней,
+    например, пароль). «\\» в .properties экранирует: D\\:\\\\keys\\\\x.properties."""
+    found = re.search(rf"^[ \t]*{re.escape(key)}[ \t]*[=:][ \t]*(.*?)[ \t]*$", text, re.MULTILINE)
+    return re.sub(r"\\(.)", r"\1", found.group(1)) if found else ""
+
+
+def signing_problem(local_properties=ANDROID / "local.properties"):
+    """Почему выпуск подписать нечем (или None, если всё на месте). Без ключа Gradle молча
+    подпишет APK отладочным ключом — а такой APK не встанет поверх установленного приложения."""
+    path = Path(local_properties)
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    signing = property_value(text, "signing.file")
+    if not signing:
+        return f"В {path} не указан signing.file — путь к signing.properties (см. android/README.md)"
+    signing = Path(signing)
+    if not signing.exists():
+        return f"Нет файла с ключом подписи: {signing}"
+    props = signing.read_text(encoding="utf-8")
+    missing = [key for key in ("storeFile", "storePassword", "keyAlias", "keyPassword")
+               if not property_value(props, key)]
+    if missing:
+        return f"В {signing} не заполнено: {', '.join(missing)}"
+    store = Path(property_value(props, "storeFile"))
+    if not store.exists():
+        return f"Нет файла ключа (storeFile): {store}"
+    return None
+
+
 def main():
+    problem = signing_problem()
+    if problem:
+        sys.exit(f"Выпуск не собран: нечем подписать APK.\n{problem}")
     env = dict(os.environ)
     if not env.get("JAVA_HOME"):
         jdks = sorted(TOOLS.glob("jdk-*"))

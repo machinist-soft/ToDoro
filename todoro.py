@@ -5871,6 +5871,15 @@ def bind_tree(widget, sequence, func):
         bind_tree(child, sequence, func)
 
 
+def tag_tree(widget, tag):
+    """Ставит виджету и всем вложенным элементам метку событий tag (первой). События метки
+    задаются один раз (bind_class) — для сотен карточек это намного быстрее, чем bind_tree:
+    там у каждой части каждой карточки — свои подписки."""
+    widget.bindtags((tag, *widget.bindtags()))
+    for child in widget.winfo_children():
+        tag_tree(child, tag)
+
+
 class QuickAdd(tk.Frame):
     """Строка «＋ Добавить задачу» над списком, в колонке доски и в четверти матрицы.
     Щелчок — раскрывается поле для названия; Enter добавляет задачу сюда (статус колонки,
@@ -5969,6 +5978,7 @@ class KanbanBoard(tk.Frame):
         self.quick_adds = []  # «＋ Добавить задачу» в колонках, слева направо
         self.card_width = LANE_WIDTH
         self.show_priority = True
+        self.setup_card_events(horizontal=True)
 
         self.hbar = ttk.Scrollbar(self, orient="horizontal")
         self.canvas = tk.Canvas(self, bg=BG, highlightthickness=0, xscrollcommand=self.update_hbar)
@@ -5994,6 +6004,69 @@ class KanbanBoard(tk.Frame):
 
     def scroll_x(self, event):
         self.canvas.xview_scroll(-1 if event.delta > 0 else 1, "units")
+
+    # --- события карточек: одна подписка на все (см. tag_tree) ---
+
+    DONE_SHOWN = 30  # выполненных карточек в колонке (четверти); остальные — по «Показать ещё»
+
+    def setup_card_events(self, horizontal=False):
+        """horizontal — Shift+колесо листает доску вбок (у матрицы такого нет)."""
+        self.card_tag, self.wheel_tag = f"Card{id(self)}", f"Wheel{id(self)}"
+        self.expanded, self.expanded_list = set(), None  # где показаны все выполненные
+        tag = self.card_tag
+        self.bind_class(tag, "<ButtonPress-1>", lambda e: self.on_press(e, self.card_id(e)))
+        self.bind_class(tag, "<B1-Motion>", self.on_motion)
+        self.bind_class(tag, "<ButtonRelease-1>", self.on_release)
+        self.bind_class(tag, "<Double-Button-1>", lambda e: self.app.edit())
+        self.bind_class(tag, "<Button-3>",
+                        lambda e: self.app.show_menu_for(self.card_id(e), e.x_root, e.y_root))
+        self.bind_class(self.wheel_tag, "<MouseWheel>", self.wheel)
+        if horizontal:
+            self.bind_class(self.wheel_tag, "<Shift-MouseWheel>", self.scroll_x)
+
+    @staticmethod
+    def owner(event, attribute):
+        """Ближайший к месту события виджет с этим атрибутом (карточка, колонка) или None."""
+        widget = event.widget
+        while widget is not None and not hasattr(widget, attribute):
+            widget = widget.master
+        return widget
+
+    def card_id(self, event):
+        return self.owner(event, "task_id").task_id
+
+    def wheel(self, event):
+        """Колесо над колонкой (четвертью) листает её карточки, если они не помещаются."""
+        holder = self.owner(event, "scroll_area")
+        area = holder.scroll_area if holder is not None else None
+        if area is not None and area.bbox("all") and area.bbox("all")[3] > area.winfo_height():
+            area.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+    def visible_rows(self, key, rows):
+        """Выполненных задач в колонке (четверти) показываем не больше DONE_SHOWN — самые свежие:
+        они копятся, и доска из сотен карточек строилась бы секундами. Остальные — по «Показать
+        ещё» (до смены списка). Возвращает (что показать, сколько скрыто)."""
+        if self.expanded_list != self.app.list_id:
+            self.expanded, self.expanded_list = set(), self.app.list_id
+        done = [row for row in rows if row[2]]
+        # при поиске показываем всё найденное — иначе нашлось бы, но спряталось
+        if key in self.expanded or len(done) <= self.DONE_SHOWN or self.app.search_query:
+            return rows, 0
+        times = self.app.done_times
+        fresh = sorted(done, key=lambda row: (times.get(row[0]) or "", row[0]), reverse=True)
+        keep = {row[0] for row in fresh[:self.DONE_SHOWN]} | {self.selected_id}  # выбранную — всегда
+        shown = [row for row in rows if not row[2] or row[0] in keep]
+        return shown, len(rows) - len(shown)
+
+    def more_link(self, parent, key, hidden, bg):
+        link = tk.Label(parent, text=f"Показать остальные выполненные ({hidden})", bg=bg, fg=ACCENT,
+                        font=FONT_SMALL, cursor="hand2")
+        link.bind("<Button-1>", lambda e: self.expand(key))
+        return link
+
+    def expand(self, key):
+        self.expanded.add(key)
+        self.after_idle(lambda: self.app.refresh(select_id=self.app.current_id()))
 
     # --- построение доски ---
 
@@ -6056,8 +6129,11 @@ class KanbanBoard(tk.Frame):
         cards = tk.Frame(area, bg=lane_bg)
         area.create_window(0, 0, window=cards, anchor="nw", width=LANE_WIDTH - 20)
         cards.bind("<Configure>", lambda e: area.configure(scrollregion=area.bbox("all")))
-        for row in rows:
+        shown, hidden = self.visible_rows(status_id, rows)
+        for row in shown:
             self.make_card(cards, row, color, row[0] in overdue_ids)
+        if hidden:
+            self.more_link(cards, status_id, hidden, lane_bg).pack(anchor="w", pady=(0, 8))
         empty = []
         if not rows:
             empty.append(tk.Label(cards, text="Перетащите сюда задачу", bg=lane_bg, fg=DONE,
@@ -6069,10 +6145,8 @@ class KanbanBoard(tk.Frame):
             # правая кнопка по пустому месту колонки — её меню, первым пунктом «Новая задача…»
             widget.bind("<Button-3>", lambda e: self.app.lane_menu(status_id, e.x_root, e.y_root))
         bind_tree(head, "<Button-3>", lambda e: self.app.lane_menu(status_id, e.x_root, e.y_root))
-        bind_tree(lane, "<MouseWheel>",
-                  lambda e: area.yview_scroll(-1 if e.delta > 0 else 1, "units")
-                  if area.bbox("all") and area.bbox("all")[3] > area.winfo_height() else None)
-        bind_tree(lane, "<Shift-MouseWheel>", self.scroll_x)
+        lane.scroll_area = area
+        tag_tree(lane, self.wheel_tag)  # колесо и Shift+колесо — см. wheel и scroll_x
         self.lanes.append((status_id, lane, lane_bg))
 
     def make_card(self, parent, row, lane_color, overdue):
@@ -6125,12 +6199,8 @@ class KanbanBoard(tk.Frame):
         card.mark = tk.Label(content, bg=SURFACE, fg=MUTED, font=FONT_SMALL, anchor="w")
         self.cards[task_id] = card
         self.set_mark(task_id, self.app.task_mark(task_id))
-
-        bind_tree(card, "<ButtonPress-1>", lambda e: self.on_press(e, task_id))
-        bind_tree(card, "<B1-Motion>", self.on_motion)
-        bind_tree(card, "<ButtonRelease-1>", self.on_release)
-        bind_tree(card, "<Double-Button-1>", lambda e: self.app.edit())
-        bind_tree(card, "<Button-3>", lambda e: self.app.show_menu_for(task_id, e.x_root, e.y_root))
+        card.task_id = task_id
+        tag_tree(card, self.card_tag)  # щелчки, перетаскивание, меню — см. setup_card_events
 
     def set_mark(self, task_id, mark):
         label = getattr(self.cards.get(task_id), "mark", None)
@@ -6334,6 +6404,7 @@ class EisenhowerMatrix(KanbanBoard):
         self.shown = None           # что нарисовано — чтобы перерисовать при смене ширины
         self.drawn_columns = None
         self.redraw_job = None
+        self.setup_card_events()
 
         self.columnconfigure(1, weight=1, uniform="q")
         self.columnconfigure(2, weight=1, uniform="q")
@@ -6407,19 +6478,23 @@ class EisenhowerMatrix(KanbanBoard):
         by_level = {}
         for row in rows:
             by_level.setdefault(self.level(row[0], row[6], row[7]), []).append(row)
+        visible = {level: self.visible_rows(level, by_level.get(level, [])) for level in range(1, 5)}
         # Высота строк — по числу рядов карточек: где задач больше, там больше места
         # (на небольшом экране пустые четверти не отнимают его у заполненных)
         for grid_row, levels in ((1, (1, 2)), (2, (3, 4))):
-            card_rows = max(-(-len(by_level.get(level, [])) // self.drawn_columns) for level in levels)
+            card_rows = max(-(-len(visible[level][0]) // self.drawn_columns) for level in levels)
             self.rowconfigure(grid_row, weight=max(1, card_rows))
         self.lanes, self.cards, self.quick_adds = [], {}, []
         for level, _, _, name, hint, color in self.QUADRANTS:
-            self.make_quadrant(level, name, hint, color, by_level.get(level, []), colors, overdue_ids)
+            self.make_quadrant(level, name, hint, color, by_level.get(level, []), colors, overdue_ids,
+                               *visible[level])
         if self.selected_id not in self.cards:
             self.selected_id = None
         self.highlight_selected()
 
-    def make_quadrant(self, level, name, hint, color, rows, colors, overdue_ids):
+    def make_quadrant(self, level, name, hint, color, rows, colors, overdue_ids, shown, hidden):
+        """rows — все задачи четверти (их число — в заголовке), shown — те, что рисуем,
+        hidden — сколько выполненных спрятано за «Показать остальные» (см. visible_rows)."""
         holder = self.quadrants[level]
         for child in holder.winfo_children():
             child.destroy()
@@ -6455,13 +6530,16 @@ class EisenhowerMatrix(KanbanBoard):
         columns = self.drawn_columns
         for column in range(columns):
             cards.columnconfigure(column, minsize=self.card_width - 20, uniform="card")
-        for index, row in enumerate(rows):
+        for index, row in enumerate(shown):
             cell = tk.Frame(cards, bg=bg)
             cell.grid(row=index // columns, column=index % columns, sticky="nsew",
                       padx=(0, self.GAP if index % columns < columns - 1 else 0))
             cell.bind("<Button-1>", lambda e: self.app.clear_selection())
             cell.bind("<Button-3>", new_task)
             self.make_card(cell, row, colors.get(row[9], color), row[0] in overdue_ids)
+        if hidden:
+            self.more_link(cards, level, hidden, bg).grid(
+                row=-(-len(shown) // columns), column=0, columnspan=columns, sticky="w", pady=(0, 8))
         empty = []
         if not rows:
             empty.append(tk.Label(cards, text="Перетащите сюда задачу", bg=bg, fg=DONE,
@@ -6473,9 +6551,8 @@ class EisenhowerMatrix(KanbanBoard):
         for widget in (box, area, cards, *empty):
             widget.bind("<Button-3>", new_task)
         bind_tree(head, "<Button-3>", new_task)
-        bind_tree(box, "<MouseWheel>",
-                  lambda e: area.yview_scroll(-1 if e.delta > 0 else 1, "units")
-                  if area.bbox("all") and area.bbox("all")[3] > area.winfo_height() else None)
+        box.scroll_area = area
+        tag_tree(box, self.wheel_tag)  # колесо листает четверть — см. wheel
         self.lanes.append((level, box, bg))
 
     @staticmethod
@@ -8317,13 +8394,14 @@ class TodoApp:
             self.restoring = False
             wait.close()
             cleanup()
+            db.forget_attachment_info()  # номера вложений в восстановленных списках — из копии
             if error:
                 text = str(error) if isinstance(error, backup.BackupError) else \
                     f"Не удалось восстановить:\n{error_text(error)}"
                 ui.showerror(APP_NAME, text, parent=self.root)
                 return
             safety, results = result
-            new = [backup.new_list_item(file, name) for name, file, problem in results if file]
+            new =[backup.new_list_item(file, name) for name, file, problem in results if file]
             if new:
                 db.save_registry(self.prefs, db.list_registry(self.prefs) + new)
             self.load_lists()
@@ -8485,6 +8563,7 @@ class TodoApp:
         self.extra_counts = db.extras_counts(self.conn)  # id задачи -> (файлов, комментариев)
         self.mail_ids = db.mail_task_ids(self.conn)
         self.repeats = db.repeat_infos(self.conn)  # id задачи -> (повтор, до, есть следующая)
+        self.done_times = db.done_times(self.conn)  # на доске и в матрице — самые свежие выполненные
         shared = bool(self.list_id and self.current_list()["shared"])
         # столбцы «Исполнитель» и «Инициатор» — только в общих списках (в личном всё ваше)
         columns = [c for c in self.column_order if shared or c not in ("assignee", "author")]
@@ -8546,6 +8625,8 @@ class TodoApp:
             self.empty.place(relx=0.5, rely=0.5, anchor="center")
 
         if self.cards_view():
+            if select_id is not None:  # выбранная задача видна, даже если она из старых выполненных
+                self.cards_view().selected_id = select_id
             self.cards_view().render(statuses, rows, overdue_ids)
 
         if select_id is not None:

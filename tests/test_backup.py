@@ -905,6 +905,34 @@ class RestoreEntriesTests(BackupCase):
         self.assertEqual(names, ["Личный", "Работа", "Работа (из копии)", "Работа (из копии 2)",
                                  "Работа (из копии 3)"])
 
+    def test_attachment_names_from_copy_after_restore(self):
+        """Копия с другого компьютера: те же номера задачи и вложения, но другой файл.
+        После восстановления list_attachments берёт имена из копии, а не запомненные прежние."""
+        tid = db.add_task(self.prefs, "здесь")
+        db.add_attachment(self.prefs, tid, "старое.txt", b"old")
+        self.assertEqual([a[1] for a in db.list_attachments(self.prefs, tid)], ["старое.txt"])  # запомнено
+        (self.dir / "другой").mkdir()
+        other = self.connect(self.dir / "другой" / "todoro.db")
+        other_tid = db.add_task(other, "там")
+        db.add_attachment(other, other_tid, "из копии.txt", b"new")
+        self.assertEqual(other_tid, tid)
+        path = self.dir / "копия.zip"
+        backup.write_zip(path, [({"id": db.PERSONAL, "name": "Личный", "shared": False},
+                                 self.dir / "другой" / "todoro.db")])
+        self.restore(path, None)
+        self.assertEqual(self.titles(self.prefs), ["там"])
+        self.assertEqual([a[1:3] for a in db.list_attachments(self.prefs, tid)], [("из копии.txt", 3)])
+        self.assertEqual(db.attachment_data(self.prefs, 1), b"new")
+
+    def test_attachment_cache_forgotten_on_restore(self):
+        """restore_entries вызывает db.forget_attachment_info после восстановления."""
+        db.add_task(self.prefs, "задача")
+        path = self.dir / "копия.zip"
+        backup.write_zip(path, backup.personal_sources(self.prefs))
+        with mock.patch.object(db, "forget_attachment_info", wraps=db.forget_attachment_info) as forget:
+            self.restore(path, None)
+        forget.assert_called_once_with()
+
 
 class DailyBackupWindowTests(BackupCase):
     def test_daily_backup_runs_in_background_and_repeats_hourly(self):
