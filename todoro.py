@@ -39,7 +39,7 @@ from examples import make_examples
 from help_text import HELP
 
 APP_NAME = "ToDoro"  # ToDo + Totoro
-APP_VERSION = "2.27.1"  # номер версии — меняется здесь (установщик берёт его отсюда)
+APP_VERSION = "2.28"  # номер версии — меняется здесь (установщик берёт его отсюда)
 APP_YEAR = 2026
 COPYRIGHT_HOLDER = "Machinist Soft"  # автор — имя меняется здесь и в файле LICENSE
 COPYRIGHT = f"© {APP_YEAR} {COPYRIGHT_HOLDER}"
@@ -7671,6 +7671,7 @@ class TodoApp:
              "Общие списки для команды подключаются в настройках."),
             (lambda: self.menu_button, "Меню",
              "Напоминания и просроченные задачи, настройки, задачи на телефоне, экспорт и импорт, "
+             "резервные копии, "
              "примеры задач, "
              "справка (F1), обновления и "
              "«Что нового» в каждой версии. "
