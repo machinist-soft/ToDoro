@@ -1,6 +1,6 @@
 # ToDoro
 
-[![License: MIT](https://img.shields.io/github/license/machinist-soft/ToDoro)](LICENSE)
+[![License: MIT](https://img.shields.io/github/license/machinist-soft/ToDoro?v=2)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/machinist-soft/ToDoro)](https://github.com/machinist-soft/ToDoro/releases/latest)
 ![Platform: Windows · Android](https://img.shields.io/badge/platform-Windows%20%C2%B7%20Android-blue)
 
