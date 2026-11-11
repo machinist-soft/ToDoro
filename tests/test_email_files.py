@@ -3,8 +3,10 @@
 Временные файлы; окна Tk не открываются; os.startfile, ui.* и in_background подменены;
 данные пользователя не трогаются."""
 
+import base64
 import email
 import email.policy
+import re
 import sqlite3
 import sys
 import time
@@ -52,8 +54,9 @@ class WriteDraftFilesTests(DraftsDir):
         self.assertEqual(attachments_of(message), files)
         for part in message.iter_attachments():
             self.assertEqual(part.get_content_type(), "application/octet-stream")
-        self.assertEqual(message.get_body(("plain",)).get_content().replace("\r\n", "\n"),
-                         "строка 1\nстрока 2\n")
+        # конечный перевод строки не важен: старый EmailMessage его добавлял, email.mime — нет
+        self.assertEqual(message.get_body(("plain",)).get_content().replace("\r\n", "\n").rstrip("\n"),
+                         "строка 1\nстрока 2")
 
     def test_without_files_as_before(self):
         """Без файлов — простое письмо из одной части, как до изменения."""
@@ -71,6 +74,132 @@ class WriteDraftFilesTests(DraftsDir):
         data = bytes(range(256)) * (8 * 1024)  # 2 МБ
         self.assertEqual(attachments_of(parse(T.write_draft(8, "Т", "т", files=[("big.bin", data)]))),
                          [("big.bin", data)])
+
+
+def raw_headers(raw):
+    """Все заголовки письма и его частей одной строкой на заголовок (перенос строк убран)."""
+    return re.sub(rb"\r\n[ \t]+", b" ", raw)
+
+
+ENCODED = re.compile(rb'\b(file)?name="=\?utf-8\?B\?([A-Za-z0-9+/=]+)\?="')
+
+
+class WriteDraftRawTests(DraftsDir):
+    """Байты .eml такие, как понимает Outlook (GitHub #16: иначе вложения называются ATT00001.dat):
+    имя файла и в name=, и в filename=, русское — одним кодированным словом в кавычках, без RFC 2231."""
+
+    def raw(self, files=(), subject="Т", to="", body="т"):
+        return Path(T.write_draft(9, subject, body, to, files)).read_bytes()
+
+    def encoded_names(self, raw):
+        """[(name|filename, имя)] из закодированных параметров, base64 раскодирован."""
+        return [(b"filename" if m.group(1) else b"name",
+                 base64.b64decode(m.group(2)).decode("utf-8"))
+                for m in ENCODED.finditer(raw_headers(raw))]
+
+    def test_cyrillic_name_not_rfc2231(self):
+        raw = self.raw([("отчёт за май.pdf", b"1")])
+        self.assertNotIn(b"filename*=", raw)
+        self.assertNotIn(b"name*=", raw)
+        self.assertNotIn(b"utf-8''", raw)
+        self.assertEqual(self.encoded_names(raw),
+                         [(b"name", "отчёт за май.pdf"), (b"filename", "отчёт за май.pdf")])
+        headers = raw_headers(raw)
+        self.assertRegex(headers, rb'Content-Type: application/octet-stream; name="=\?utf-8\?B\?')
+        self.assertRegex(headers, rb'Content-Disposition: attachment; filename="=\?utf-8\?B\?')
+
+    def test_ascii_name_as_is(self):
+        raw = self.raw([("report.docx", b"PK")])
+        headers = raw_headers(raw)
+        self.assertIn(b'Content-Type: application/octet-stream; name="report.docx"', headers)
+        self.assertIn(b'Content-Disposition: attachment; filename="report.docx"', headers)
+        self.assertNotIn(b"=?utf-8?", headers.split(b"X-Unsent")[1])  # у вложения — без кодирования
+        self.assertNotIn(b"name*=", raw)
+
+    def test_long_cyrillic_name_one_encoded_word(self):
+        """Длинное имя не режется на несколько кодированных слов (Outlook склеивает их не всегда)."""
+        name = "Протокол совещания по итогам квартала и планы на следующий год (финал).docx"
+        self.assertGreater(len(name), 60)
+        raw = self.raw([(name, b"data")])
+        self.assertEqual(self.encoded_names(raw), [(b"name", name), (b"filename", name)])
+        self.assertEqual(raw_headers(raw).count(b"=?utf-8?B?"), 2)
+        self.assertNotIn(b"name*", raw)
+        self.assertEqual(attachments_of(email.message_from_bytes(raw, policy=email.policy.default)),
+                         [(name, b"data")])
+
+    def test_crlf_line_endings(self):
+        for raw in (self.raw(), self.raw([("отчёт.pdf", bytes(range(256)) * 50), ("a.txt", b"x\ny\n")],
+                                         body="строка 1\nстрока 2\r\nстрока 3")):
+            self.assertIn(b"\r\n\r\n", raw)
+            self.assertNotRegex(raw, rb"(?<!\r)\n", "перевод строки без \\r")
+            self.assertNotIn(b"\r\r", raw)
+
+    def test_parsed_back_names_and_content(self):
+        files = [("отчёт за май.pdf", b"%PDF\x00\xff"), ("report.docx", b"PK\x03\x04"),
+                 ("Смета (итог) — версия 2.xlsx", bytes(range(256)) * 4)]
+        message = email.message_from_bytes(self.raw(files), policy=email.policy.default)
+        self.assertTrue(message.is_multipart())
+        self.assertEqual(message.get_content_type(), "multipart/mixed")
+        self.assertEqual(attachments_of(message), files)
+        for part in message.iter_attachments():
+            self.assertEqual(part.get_content_disposition(), "attachment")
+            self.assertEqual(part.get_param("name"), part.get_filename())
+
+    def test_newline_and_empty_names(self):
+        raw = self.raw([("отчёт\r\nмай.pdf", b"1"), ("a\nb.txt", b"2"), ("", b"3")])
+        message = email.message_from_bytes(raw, policy=email.policy.default)
+        self.assertEqual([n for n, _ in attachments_of(message)], ["отчёт май.pdf", "a b.txt", "файл"])
+
+    def test_subject_and_named_address(self):
+        subject = "СРОЧНО! Задача 9: сдать отчёт «за май»"
+        raw = self.raw(subject=subject, to="Иван Петров <ivan@example.com>")
+        self.assertTrue(raw.split(b"\r\n\r\n")[0].isascii(), "заголовки — только ASCII")
+        message = email.message_from_bytes(raw, policy=email.policy.default)
+        self.assertEqual(message["Subject"], subject)
+        address = message["To"].addresses
+        self.assertEqual(len(address), 1)
+        self.assertEqual(address[0].display_name, "Иван Петров")
+        self.assertEqual(address[0].addr_spec, "ivan@example.com")
+        self.assertEqual(message["X-Unsent"], "1")
+
+    def test_long_subject_parsed_back(self):
+        subject = "СРОЧНО! " + "очень длинная тема письма по задаче, " * 5 + "конец"
+        message = email.message_from_bytes(self.raw(subject=subject), policy=email.policy.default)
+        self.assertEqual(message["Subject"], subject)
+
+    def test_bare_address(self):
+        raw = self.raw(to="ivan@example.com")
+        self.assertIn(b"\r\nTo: ivan@example.com\r\n", raw)
+        message = email.message_from_bytes(raw, policy=email.policy.default)
+        self.assertEqual(message["To"].addresses[0].addr_spec, "ivan@example.com")
+        self.assertEqual(message["To"].addresses[0].display_name, "")
+
+    def test_no_or_bad_address_no_to(self):
+        """Пусто или из строки не выходит адрес — письмо без «Кому», а не ошибка."""
+        for to in ("", "<<>>", "a, b", "Иван <>", "@"):
+            with self.subTest(to=to):
+                message = email.message_from_bytes(self.raw(to=to), policy=email.policy.default)
+                self.assertIsNone(message["To"])
+                self.assertEqual(message["X-Unsent"], "1")
+
+    def test_non_ascii_address_does_not_fail(self):
+        """Адрес с русскими буквами (непонятная строка, домен .рф, старая запись в общем списке):
+        черновик всё равно создаётся (раньше падал UnicodeEncodeError — не OSError, open_email
+        её не ловил, и письмо не открывалось вовсе). Домен .рф — в виде xn--, адресат остаётся."""
+        expected = {"не адрес": None, "Иван <иван@пример.рф>": None,
+                    "info@почта.рф": ("", "info@xn--80a1acny.xn--p1ai"),
+                    "Почта <info@почта.рф>": ("Почта", "info@xn--80a1acny.xn--p1ai")}
+        for to, want in expected.items():
+            with self.subTest(to=to):
+                raw = self.raw(to=to, files=[("a.txt", b"1")])
+                self.assertTrue(raw.split(b"\r\n\r\n")[0].isascii())
+                message = email.message_from_bytes(raw, policy=email.policy.default)
+                self.assertEqual(attachments_of(message), [("a.txt", b"1")])
+                if want is None:
+                    self.assertIsNone(message["To"])
+                else:
+                    address = message["To"].addresses[0]
+                    self.assertEqual((address.display_name, address.addr_spec), want)
 
 
 # ---------- db.read_attachments ----------

@@ -1,4 +1,5 @@
 """ToDoro — список дел с Тоторо."""
+import base64
 import calendar
 import csv
 import ctypes
@@ -17,8 +18,11 @@ import time as time_module
 import tkinter as tk
 import webbrowser
 from email import policy as email_policy
-from email.message import EmailMessage
-from email.utils import parseaddr
+from email.header import Header
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import formataddr, parseaddr
 from urllib.parse import quote
 from ctypes import wintypes
 from datetime import date, datetime, time, timedelta, timezone
@@ -896,21 +900,42 @@ def write_draft(number, subject, body, to="", files=()):
     """Сохраняет черновик письма в файл .eml и возвращает путь к нему.
     Заголовок X-Unsent: 1 говорит почтовой программе открыть его как новое письмо.
     to — адресат (у задачи из письма Outlook — отправитель того письма);
-    files — [(имя, содержимое в байтах)]: вложения письма (файлы задачи)."""
-    message = EmailMessage(policy=email_policy.SMTP)
-    if to:
-        message["To"] = to
-    message["Subject"] = subject
+    files — [(имя, содержимое в байтах)]: вложения письма (файлы задачи).
+
+    Письмо собирается старым набором email.mime: новый (EmailMessage) пишет русские имена
+    файлов по RFC 2231 (filename*=utf-8''…), а Outlook такие имена не понимает и называет
+    вложения ATT00001.dat (GitHub #16). Здесь имя — как его пишет сам Outlook:
+    name="=?utf-8?B?…?=" и filename="=?utf-8?B?…?="."""
+    text = MIMEText(body.replace("\r\n", "\n"), "plain", "utf-8")
+    message = MIMEMultipart() if files else text
+    if files:
+        message.attach(text)
+    name, address = parseaddr(to)
+    if not address.isascii():
+        # Адрес на кириллическом домене (info@почта.рф) — домен в виде xn--…; русские буквы
+        # до «@» в заголовок письма не записать — адресата впишут сами
+        local, _, domain = address.rpartition("@")
+        try:
+            address = f"{local}@{domain.encode('idna').decode('ascii')}" if local.isascii() and local else ""
+        except UnicodeError:
+            address = ""
+    if address:
+        message["To"] = formataddr((name, address), charset="utf-8")
+    message["Subject"] = Header(subject, "utf-8")
     message["X-Unsent"] = "1"
-    message.set_content(body.replace("\r\n", "\n"))
     for name, data in files:
-        # Тип файла почтовая программа определит по расширению имени
         # (перевод строки в имени, пришедшем от участника общего списка, письмо не принимает)
-        message.add_attachment(data, maintype="application", subtype="octet-stream",
-                               filename=" ".join(name.splitlines()) or "файл")
+        name = " ".join(name.splitlines()) or "файл"
+        if not name.isascii():
+            name = f"=?utf-8?B?{base64.b64encode(name.encode('utf-8')).decode('ascii')}?="
+        # Тип файла почтовая программа определит по расширению имени
+        part = MIMEApplication(data)
+        part.set_param("name", name)
+        part.add_header("Content-Disposition", "attachment", filename=name)
+        message.attach(part)
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
     path = DRAFTS_DIR / f"Задача {number}.eml"
-    path.write_bytes(message.as_bytes())
+    path.write_bytes(message.as_bytes(policy=email_policy.compat32.clone(linesep="\r\n")))
     return str(path)
 
 
