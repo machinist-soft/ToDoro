@@ -320,5 +320,6 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).*
     </picture>
   </a>
   <br>
-  <sub>Сделано в / Made by <a href="https://github.com/machinist-soft"><b>machinist-soft</b></a></sub>
+  <sub>Сделано в / Made by <a href="https://github.com/machinist-soft"><b>machinist-soft</b></a></sub><br>
+  <sub><a href="http://machinistsoft.ru/">machinistsoft.ru</a> · <a href="mailto:info@machinistsoft.ru">info@machinistsoft.ru</a></sub>
 </p>
