@@ -24,6 +24,8 @@ DefaultDirName={autopf}\ToDoro
 DisableProgramGroupPage=yes
 DisableDirPage=auto
 LicenseFile=..\LICENSE
+; Примечание о персонажах Ghibli — отдельным шагом (в LICENSE только чистый текст MIT, иначе GitHub не опознаёт лицензию)
+InfoBeforeFile=..\NOTICE.md
 SetupIconFile=..\icon.ico
 UninstallDisplayIcon={app}\ToDoro.exe
 UninstallDisplayName=ToDoro

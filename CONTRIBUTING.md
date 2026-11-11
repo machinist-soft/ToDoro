@@ -47,5 +47,5 @@ python -m unittest discover tests     # все тесты / all tests
 
 *Fork, branch from `main`, make sure all tests pass, and describe what and why in the PR.*
 
-Код распространяется по лицензии MIT, картинки Тоторо и Catbus — исключение (см. README).
-*Code is MIT-licensed; the Totoro/Catbus images are excluded (see README).*
+Код распространяется по лицензии MIT, картинки Тоторо и Catbus — исключение (см. [NOTICE.md](NOTICE.md)).
+*Code is MIT-licensed; the Totoro/Catbus images are excluded (see [NOTICE.md](NOTICE.md)).*

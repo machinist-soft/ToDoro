@@ -300,8 +300,8 @@ and sends the changes once the PC is reachable again. Task files are never sent 
 
 ## Лицензия / License
 
-Код — MIT, © 2026 Machinist Soft. См. [LICENSE](LICENSE).
-Code is MIT-licensed, © 2026 Machinist Soft. See [LICENSE](LICENSE).
+Код — MIT, © 2026 Machinist Soft. См. [LICENSE](LICENSE). Тоторо и Котобус — исключение: см. [NOTICE.md](NOTICE.md).
+Code is MIT-licensed, © 2026 Machinist Soft. See [LICENSE](LICENSE). The Totoro/Catbus images are excluded: see [NOTICE.md](NOTICE.md).
 
 ## Конфиденциальность и безопасность / Privacy and security
 
