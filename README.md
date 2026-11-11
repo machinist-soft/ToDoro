@@ -75,7 +75,7 @@
 - **Задача со снимка экрана**: **Ctrl+Alt+S** в любой программе — выделите мышью область экрана,
   и снимок приложится к новой задаче.
 - **Тёмная тема**, правая панель сворачивается в полоску (Ctrl+B), экспорт и импорт
-  **CSV (Excel)**, письмо по задаче, подробная справка (F1).
+  **CSV (Excel)**, письмо по задаче (с её файлами), подробная справка (F1).
 - **Резервные копии**: личные списки копируются сами раз в день (копии за 14 дней); из меню
   можно сохранить копию выбранных списков в любое место и восстановить списки из копии —
   перед этим программа запомнит текущее состояние, так что восстановление можно отменить.
@@ -99,7 +99,7 @@ tour on first launch · create a task from an Outlook e-mail (Ctrl+Alt+T): subje
 attachments and the message itself, replies go to the sender; a tray icon started with Windows
 keeps Ctrl+Alt+T working even when ToDoro is closed · create a task from a screen area
 snapshot (Ctrl+Alt+S) · dark theme, collapsible side panel (Ctrl+B),
-CSV export / import, e-mail a task, built-in help · backups: personal lists are copied daily
+CSV export / import, e-mail a task (with its files), built-in help · backups: personal lists are copied daily
 (kept 14 days), save chosen lists to a file anywhere and restore them from it · one-click updates and an in-app “What’s new”.*
 
 ### Котобус увозит выполненную задачу / The Catbus carries away a finished task

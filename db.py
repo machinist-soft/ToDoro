@@ -953,6 +953,19 @@ def read_attachment(path, attachment_id, timeout=5):
         conn.close()
 
 
+def read_attachments(path, attachment_ids, timeout=5):
+    """Содержимое нескольких вложений одним соединением — для фонового потока (письмо по задаче
+    с её файлами). [байты или None — вложения уже нет, ...] в порядке attachment_ids;
+    None вместо списка — нет файла списка."""
+    if not Path(path).exists():
+        return None
+    conn = sqlite3.connect(path, timeout=timeout)
+    try:
+        return [attachment_data(conn, i) for i in attachment_ids]
+    finally:
+        conn.close()
+
+
 def delete_attachment(conn, attachment_id):
     with conn:
         conn.execute("DELETE FROM attachments WHERE id = ?", (attachment_id,))

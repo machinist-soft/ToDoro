@@ -250,6 +250,8 @@ SEARCH_HINT = "Поиск задач  (Ctrl+F)"
 # Длиннее ссылку «создать письмо» (mailto:) почтовые программы могут не принять:
 # Outlook ломался уже на ~1700 символах (русская буква в ссылке занимает 6 символов).
 MAILTO_LIMIT = 1000
+# Письма больше ~20–25 МБ почта часто не пропускает: о таких вложениях предупреждаем
+MAIL_FILES_WARN = 20 * 1024 * 1024
 # временные черновики писем (.eml) и копии открытых файлов задач; старше недели — удаляются при запуске
 DRAFTS_DIR = Path(tempfile.gettempdir()) / APP_NAME
 TEMP_MAX_AGE = 7 * 24 * 3600  # секунд: неделя — копию файла могут держать открытой несколько дней
@@ -890,16 +892,22 @@ def build_email(number, title, status, priority, due, remind, created, urgent, b
     return subject, "\r\n".join(lines)
 
 
-def write_draft(number, subject, body, to=""):
+def write_draft(number, subject, body, to="", files=()):
     """Сохраняет черновик письма в файл .eml и возвращает путь к нему.
     Заголовок X-Unsent: 1 говорит почтовой программе открыть его как новое письмо.
-    to — адресат (у задачи из письма Outlook — отправитель того письма)."""
+    to — адресат (у задачи из письма Outlook — отправитель того письма);
+    files — [(имя, содержимое в байтах)]: вложения письма (файлы задачи)."""
     message = EmailMessage(policy=email_policy.SMTP)
     if to:
         message["To"] = to
     message["Subject"] = subject
     message["X-Unsent"] = "1"
     message.set_content(body.replace("\r\n", "\n"))
+    for name, data in files:
+        # Тип файла почтовая программа определит по расширению имени
+        # (перевод строки в имени, пришедшем от участника общего списка, письмо не принимает)
+        message.add_attachment(data, maintype="application", subtype="octet-stream",
+                               filename=" ".join(name.splitlines()) or "файл")
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
     path = DRAFTS_DIR / f"Задача {number}.eml"
     path.write_bytes(message.as_bytes())
@@ -9083,13 +9091,72 @@ class TodoApp:
                                     info["urgent"], info["body"], info["author"], info["assignee"],
                                     info["unit"], info["repeat"])
         to = db.mail_from(self.conn, task[0])  # задача из письма — отвечаем его отправителю
-        # Основной способ — черновик письма в файле .eml: Outlook открывает его как новое
-        # письмо, и длина текста не ограничена (в отличие от ссылки mailto:).
         try:
-            os.startfile(write_draft(task[0], subject, body, to))
+            files = db.list_attachments(self.conn, task[0])
+        except sqlite3.Error:
+            files = []  # сведения о файлах не прочитались — письмо всё равно откроем, без них
+        if not files:
+            self.open_email(task[0], subject, body, to)
+            return
+        attach = self.ask_email_files(files)
+        if attach is None:
+            return  # закрыли вопрос — письмо не нужно
+        if not attach:
+            self.open_email(task[0], subject, body, to)
+            return
+        # Файлы читаются в фоне: в общем списке через VPN большой файл читается секундами
+        source = self.preview_source()
+        if source is None:
+            if ui.askyesno(APP_NAME, "Нет связи с общей папкой — файлы задачи сейчас не прочитать.\n\n"
+                                     "Открыть письмо без файлов?", parent=self.root):
+                self.open_email(task[0], subject, body, to)
+            return
+        path, timeout = source
+        ids = [f[0] for f in files]
+        # Через VPN большие файлы читаются долго: окно «Подождите…» показывает, что дело идёт,
+        # и не даёт нажать «Письмо» второй раз
+        wait = WaitDialog(self.root, "Письмо по задаче", "Читаю файлы задачи…")
+
+        def done(data, error):
+            wait.close()
+            missing = error is not None or data is None or any(d is None for d in data)
+            if missing:
+                reason = f"\n{error_text(error)}" if error is not None else ""
+                if ui.askyesno(APP_NAME, f"Не удалось прочитать файлы задачи.{reason}\n\n"
+                                         "Открыть письмо без файлов?", parent=self.root):
+                    self.open_email(task[0], subject, body, to)
+                return
+            self.open_email(task[0], subject, body, to, [(f[1], d) for f, d in zip(files, data)])
+        in_background(self.root, lambda: db.read_attachments(path, ids, timeout), done)
+
+    def ask_email_files(self, files):
+        """Спрашивает, приложить ли к письму файлы задачи. True — приложить, False — письмо без
+        файлов, None — вопрос закрыли (письмо не открывать). files — db.list_attachments."""
+        total = sum(f[2] for f in files)
+        names = [f"• {f[1]}" for f in files[:5]] + ([f"… и ещё {len(files) - 5}"] if len(files) > 5 else [])
+        message = (f"У задачи есть файлы: {len(files)} шт., {format_size(total)}.\n\n"
+                   + "\n".join(names))
+        if total > MAIL_FILES_WARN:
+            message += ("\n\nПисьмо может не уйти — почта часто не пропускает письма больше "
+                        f"{MAIL_FILES_WARN // (1024 * 1024)} МБ.")
+        return ui._show("Приложить файлы к письму?", message,
+                        "warning" if total > MAIL_FILES_WARN else "question",
+                        [("Приложить", True, "Accent.TButton"), ("Без файлов", False, "TButton")],
+                        True, None, self.root)
+
+    def open_email(self, number, subject, body, to, files=()):
+        """Открывает новое письмо в почтовой программе. files — [(имя, байты)]: вложения."""
+        # Основной способ — черновик письма в файле .eml: Outlook открывает его как новое
+        # письмо, длина текста не ограничена и можно приложить файлы (в отличие от ссылки mailto:).
+        try:
+            os.startfile(write_draft(number, subject, body, to, files))
             return
         except OSError:
             pass  # .eml открыть нечем — пробуем ссылку mailto:
+        # к ссылке mailto: файлы не приложить
+        files_hint = ("\n\nФайлы задачи к такому письму приложить не получилось — добавьте их "
+                      "вручную: сохраните их из вкладки «Файлы» (правый щелчок → Сохранить как…)."
+                      if files else "")
         address = quote(parseaddr(to)[1], safe="@")
         url = f"mailto:{address}?subject={quote(subject, safe='')}&body={quote(body, safe='')}"
         too_long = len(url) > MAILTO_LIMIT
@@ -9104,9 +9171,11 @@ class TodoApp:
                 ui.showinfo(
                     APP_NAME,
                     "Описание задачи длинное, поэтому текст письма скопирован.\n\n"
-                    "Щёлкните в тексте письма и нажмите Ctrl+V.",
+                    "Щёлкните в тексте письма и нажмите Ctrl+V." + files_hint,
                     parent=self.root,
                 )
+            elif files:
+                ui.showinfo(APP_NAME, files_hint.strip(), parent=self.root)
         except OSError:
             self.copy_text(f"{subject}\n\n{body}")
             ui.showwarning(
