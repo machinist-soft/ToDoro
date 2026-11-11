@@ -65,6 +65,12 @@ description: Выпуск новой версии ToDoro — номер верс
   упомянута в подходящем шаге (или в отдельном шаге, если она — новая часть окна), описания
   шагов не должны устареть. Длинный текст проверь снимком шага — подсказка не обрезана
   (снимать на временных данных, как в `tools/make_screenshots.py`, шаг 5в).
+- `docs/architecture.md`: таблицы файлов программы и приложения для Android (и схема) — не
+  устарели ли: новый модуль, переименованный или удалённый файл, новая папка. Правь вместе
+  с README: вводный абзац «Как устроена программа» остался в README, всё остальное — там.
+- `LICENSE` — только чистый текст MIT (иначе GitHub не опознаёт лицензию и бейдж в README
+  серый); примечание о персонажах Ghibli живёт в `NOTICE.md` (сохранять с BOM, без разметки —
+  его показывает установщик). Если менялось — не смешивай их снова.
 - Описание репозитория на GitHub (`gh repo view machinist-soft/ToDoro --json description`)
   совпадает с первой строкой README; если README поменялся — `gh repo edit --description "..."`.
 
@@ -124,7 +130,8 @@ description: Выпуск новой версии ToDoro — номер верс
 ## 7. Коммит
 
 - `git add` изменённые файлы (todoro.py, RELEASE_NOTES.md, README.md, help_text.py,
-  .github/ISSUE_TEMPLATE/*, docs/screenshots/*, tools/*) — никогда не добавляй `*.db`,
+  .github/ISSUE_TEMPLATE/*, docs/screenshots/*, docs/architecture.md, CONTRIBUTING.md,
+  SECURITY.md, NOTICE.md, LICENSE, tools/*), если они менялись — никогда не добавляй `*.db`,
   `*.lnk`, `build/`, `dist/`.
 - Сообщение: `Версия <версия>` (без строки Co-Authored-By — см. CLAUDE.md), `git push`.
 
