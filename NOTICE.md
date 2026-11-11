@@ -1,4 +1,4 @@
-Примечание о персонажах / Note on characters
+﻿Примечание о персонажах / Note on characters
 
 Totoro and the Catbus are characters owned by Studio Ghibli. The drawings of
 these characters in this program (the images folder and icon.ico) are
