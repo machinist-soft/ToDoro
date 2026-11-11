@@ -9,12 +9,14 @@
 2. Нажмите **Report a vulnerability** и опишите проблему: что происходит, как это повторить,
    версию ToDoro и Windows.
 
+Если GitHub недоступен — напишите на info@machinistsoft.ru (в теме укажите «ToDoro: безопасность»).
+
 Сообщение увидит только автор. Я постараюсь ответить в течение недели; серьёзные уязвимости разбираю в первую очередь,
 обычно в течение нескольких дней. После исправления выпущу новую версию и, если хотите, упомяну вас в списке изменений.
 
 *Please **do not open a public issue** for security problems. Use the
 [Security](https://github.com/machinist-soft/ToDoro/security) tab → **Report a vulnerability**
-instead — only the maintainer will see it. Include what happens, how to reproduce it, and your
+instead — only the maintainer will see it. If GitHub is not an option, e-mail info@machinistsoft.ru with the subject “ToDoro: security”. Include what happens, how to reproduce it, and your
 ToDoro and Windows versions. I aim to reply within a week; serious vulnerabilities come first, usually within a few days. This is a one-person hobby project, so these are intentions, not guarantees. I will publish a fixed release.*
 
 ## Поддерживаемые версии / Supported versions
